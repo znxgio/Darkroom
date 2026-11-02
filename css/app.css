@@ -12,7 +12,7 @@
   --film-base: #3a2a1c;      /* negative-strip orange-brown */
   --edge-print: #e8a33d;     /* amber edge markings */
   --frame-select: #ebe4d2;   /* the TV Set paper border */
-  --sheet: rgba(214, 213, 209, 0.98);
+  --sheet: #d6d5d1;
   --danger: #9a2a1a;
 }
 @media (prefers-color-scheme: dark) {
@@ -27,7 +27,7 @@
     --muted: #9a968c;
     --accent: #ebe4d2;
     --line: rgba(255, 255, 255, 0.12);
-    --sheet: rgba(28, 28, 27, 0.98);
+    --sheet: #1c1c1b;
     --danger: #ff8a70;
   }
 }

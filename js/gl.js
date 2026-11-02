@@ -345,7 +345,7 @@ void main(){
     float n = s > 1.01 ? (vnoise(gp) - 0.5) * 1.7 + 0.5 : hash(gp);
     float l = lum(c);
     float w = 0.55 + 0.45 * (1.0 - abs(2.0 * l - 1.0));
-    c = overlay(clamp(c, 0.0, 1.0), vec3(0.5 + (n - 0.5) * grain * 0.7 * w));
+    c = overlay(clamp(c, 0.0, 1.0), vec3(0.5 + (n - 0.5) * grain * 0.55 * w));
   }
   gl_FragColor = vec4(clamp(c, 0.0, 1.0), 1.0);
 }`;
