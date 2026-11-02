@@ -314,10 +314,21 @@ App.exportBlob = async function (img, st, opts = App.exportOpts) {
     kk = Math.min(kk, Math.sqrt(srcArea / (iw * ih)));
     const frameRoom = Math.max(ow1 / g1.w, oh1 / g1.h);
     kk = Math.min(kk, maxTex / Math.max(iw, ih), maxTex / (Math.max(g1.w, g1.h) * frameRoom));
+    let cw = Math.max(1, Math.round(iw * kk)), ch = Math.max(1, Math.round(ih * kk));
+    if (opts.size === 'ig' && attempt === 0) {
+      // nudge the source size so rounding lands on exactly 1080 px wide
+      for (let n = 0; n < 6; n++) {
+        const g = R.geometry(cw, ch, st.crop, false), pd = R.framePads(st.frame, p, g.w, g.h);
+        const ow = g.w + pd.l + pd.r;
+        if (ow === want) break;
+        const k2 = kk * (1 + (want - ow) / ow) + (want - ow) * 0.25 / iw;
+        kk = k2; cw = Math.max(1, Math.round(iw * kk)); ch = Math.max(1, Math.round(ih * kk));
+      }
+    }
     let src = null;
     try {
       const c = document.createElement('canvas');
-      c.width = Math.max(1, Math.round(iw * kk)); c.height = Math.max(1, Math.round(ih * kk));
+      c.width = cw; c.height = ch;
       const ctx = c.getContext('2d'); ctx.imageSmoothingQuality = 'high';
       ctx.drawImage(img, 0, 0, c.width, c.height);
       src = R.makeSource(c, true);

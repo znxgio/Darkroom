@@ -95,7 +95,7 @@ function pickPhoto2() {
     const f = inp.files[0]; if (!f) return;
     App.busy(true);
     try {
-      await setPhoto2(f);
+      await App.setPhoto2(f);
       if (!App.state.fx.double.amount) App.state.fx.double.amount = 0.6;
       App.commit(); App.sync();
       for (const m of App.modules) if (m.committed) m.committed();
