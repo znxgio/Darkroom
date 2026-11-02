@@ -16,11 +16,10 @@ const pickFiles = (multiple) => new Promise(resolve => {
 });
 
 /* ---------- Feed preview ---------- */
-async function addToFeed(blob, kind = 'export') {
+async function addToFeed(blob, kind = 'export', thumb = null) {
   try {
-    const img = await U.decodeFile(blob);
-    const c = U.scaledCanvas(img, 600, 0, false);
-    U.releaseImg(img);
+    let c = thumb;
+    if (!c) { const img = await U.decodeFile(blob); c = U.scaledCanvas(img, 600, 0, false); U.releaseImg(img); }
     const t = await U.canvasBlob(c, 'image/jpeg', 0.82);
     await U.feedAdd({ id: Date.now() + Math.random(), blob: t, kind });
     const all = await U.feedAll();
@@ -451,7 +450,7 @@ App.modules.push({
   afterRender: placeTextSel,
   enter(tab) { if (tab === 'text' && textSel < 0 && App.state.texts.length) textSel = 0; syncText(); },
   leave(tab) { if (tab === 'text') $('textsel').hidden = true; },
-  exported(blob) { addToFeed(blob); },
+  exported(blob, thumb) { addToFeed(blob, 'export', thumb); },
   photoLoaded() { textSel = -1; }
 });
 })();

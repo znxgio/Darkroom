@@ -334,6 +334,7 @@ App.exportBlob = async function (img, st, opts = App.exportOpts) {
       src = R.makeSource(c, true);
       if (App.renderTo(src, st, { lean: true, export: true })) {
         blob = await new Promise(r => view.toBlob(r, 'image/jpeg', (opts.quality || 92) / 100));
+        if (blob) App.lastThumb = U.scaledCanvas(view, 600, 0, false);
       }
     } catch (e) { /* retry smaller */ }
     R.freeSource(src);
@@ -350,7 +351,7 @@ App.save = async function () {
   App.renderPreview();
   App.busy(false);
   if (!blob) { App.notify('The full-size render failed. Close other tabs and try again.'); return; }
-  for (const m of App.modules) if (m.exported) m.exported(blob);
+  for (const m of App.modules) if (m.exported) m.exported(blob, App.lastThumb);
   App.deliver([new File([blob], `darkroom-${App.state.preset}-${Date.now()}.jpg`, { type: 'image/jpeg' })]);
 };
 

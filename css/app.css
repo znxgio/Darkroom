@@ -63,7 +63,7 @@ input[type=text], textarea, select {
 .tb.primary { background: var(--accent); color: var(--workspace); padding: 8px 16px; }
 
 /* ---------- Stage ---------- */
-.stage { flex: 1; min-height: 0; position: relative; display: grid; place-items: center; padding: 6px 12px; overflow: hidden; }
+.stage { flex: 1; min-height: 0; position: relative; display: grid; grid-template-rows: minmax(0, 1fr); grid-template-columns: minmax(0, 1fr); place-items: center; padding: 6px 12px; overflow: hidden; }
 .stage canvas { grid-area: 1 / 1; max-width: 100%; max-height: 100%; -webkit-touch-callout: none; touch-action: none; }
 .tag { position: absolute; top: 12px; left: 18px; font-size: 13px; font-weight: 600; padding: 4px 10px; border-radius: 999px;
   background: rgba(0,0,0,.6); color: #ebe4d2; pointer-events: none; }
@@ -112,9 +112,10 @@ input[type=text], textarea, select {
 
 /* ---------- Bottom panel ---------- */
 .panel { background: var(--panel); border-top: 1px solid var(--line); }
-.pane { height: 222px; display: flex; flex-direction: column; overflow: hidden; }
+.pane { min-height: 258px; display: flex; flex-direction: column; }
+.pane > * { flex: none; }
 .pane.padded { padding-top: 10px; }
-.pane.scroll { overflow-y: auto; -webkit-overflow-scrolling: touch; }
+.pane.scroll { max-height: 258px; overflow-y: auto; -webkit-overflow-scrolling: touch; }
 .pane .row input[type=range] { flex: 1; width: auto; }
 .swatches::-webkit-scrollbar { display: none; }
 .readout { display: flex; justify-content: space-between; align-items: center; padding: 10px 16px 0; gap: 8px; min-height: 40px; }
@@ -234,11 +235,13 @@ input[type=range] { width: calc(100% - 32px); margin: 6px 16px 8px; accent-color
 .seg { display: flex; gap: 6px; flex-wrap: wrap; }
 
 @media (min-width: 700px) {
-  .pane { height: 210px; }
   .panel, .tabbar { max-width: 720px; width: 100%; margin: 0 auto; border-left: 1px solid var(--line); border-right: 1px solid var(--line); }
 }
-@media (max-height: 640px) {
-  .pane { height: 196px; }
-  .strip { min-height: 112px; }
+@media (max-height: 700px) {
+  .pane { min-height: 236px; }
+  .pane.scroll { max-height: 236px; }
+  .readout { padding-top: 6px; min-height: 34px; }
+  input[type=range] { margin-top: 2px; margin-bottom: 4px; }
+  .strip { min-height: 108px; }
   .frame canvas { width: 62px; height: 62px; }
 }

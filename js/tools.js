@@ -186,7 +186,7 @@ async function runBatch(draw) {
       const blob = await App.exportBlob(img, st);
       if (blob) {
         out.push(new File([blob], `darkroom-${st.preset}-${Date.now()}-${i + 1}.jpg`, { type: 'image/jpeg' }));
-        for (const m of App.modules) if (m.exported) m.exported(blob);
+        for (const m of App.modules) if (m.exported) m.exported(blob, App.lastThumb);
       }
     } catch (e) { App.notify(`Photo ${i + 1} couldn’t be developed: ${e.message}`); }
     U.releaseImg(img);
