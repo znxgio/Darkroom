@@ -588,7 +588,7 @@ R.render = function (src, st, p, o = {}) {
   use(progLook, {
     u_size: [w, h], u_soft: p.softness, u_grain: p.grain, u_grainSize: p.grainSize, u_chroma: p.chroma || 0,
     u_vignette: p.vignette, u_leakPos: LEAK_POS[p.leak] || [1, 1], u_leakStrength: p.leak ? p.leakStrength : 0,
-    u_intensity: strength, u_fisheye: original ? p.fisheye : fish, u_halation: p.halation, u_unit: unit,
+    u_intensity: strength, u_fisheye: original ? 0 : fish, u_halation: p.halation, u_unit: unit,
     u_adj: adjOn ? 1 : 0,
     u_adjA: [a('exposure'), a('contrast'), a('highlights'), a('shadows')],
     u_adjB: [a('whites'), a('blacks'), a('temp'), a('tint')],
