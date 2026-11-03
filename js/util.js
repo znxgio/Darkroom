@@ -237,6 +237,18 @@ U.drawEdgeText = function (text, height, length) {
   return c;
 };
 
+/* Breadcrumb that survives a tab reload: localStorage, plus window.name for sandboxes without storage */
+U.crumb = function (s, info) {
+  const v = s ? JSON.stringify({ s, info: info || '', t: Date.now() }) : '';
+  try { if (v) localStorage.setItem('darkroom.crumb', v); else localStorage.removeItem('darkroom.crumb'); } catch (e) { /* no storage */ }
+  try { window.name = v ? 'darkroom-crumb:' + v : ''; } catch (e) { /* ignore */ }
+};
+U.crumb.read = function () {
+  let v = null;
+  try { v = localStorage.getItem('darkroom.crumb'); } catch (e) { /* no storage */ }
+  if (!v) try { if (String(window.name).startsWith('darkroom-crumb:')) v = window.name.slice(15); } catch (e) { /* ignore */ }
+  try { const o = v && JSON.parse(v); return o && Date.now() - o.t < 10 * 60 * 1000 ? o : null; } catch (e) { return null; }
+};
 U.nextFrame = () => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
 U.clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 })();

@@ -295,7 +295,7 @@ App.modules.push({
     if (App.split != null) setCompare(false);
     if (!fromDraft) {
       R.setPhoto2(null); App.photo2File = null;
-      saveDraftPhotos();
+      setTimeout(saveDraftPhotos, 2500);
     }
   }
 });

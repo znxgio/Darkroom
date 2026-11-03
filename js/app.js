@@ -125,14 +125,16 @@ App.renderThumb = function (id, st) {
   App.thumbCanvas(id).getContext('2d').drawImage(view, 0, 0, 144, 144);
 };
 App.presetThumbState = id => ({ ...App.defaultState(), preset: id, frame: 'preset' });
+/* Preset thumbnails are rendered lazily, only for the collection on screen, to keep loading light on iPhone */
+const staleThumbs = new Set();
 App.renderAllThumbs = function () {
   if (!App.photo) return;
   R.freeSource(thumbSrc);
   thumbSrc = R.makeSource(U.scaledCanvas(App.photo, 160, 0, true));
-  for (const p of P.PRESETS) App.renderThumb(p.id, App.presetThumbState(p.id));
+  for (const p of P.PRESETS) staleThumbs.add(p.id);
   for (const m of App.modules) if (m.thumbs) m.thumbs();
-  App.renderPreview();
   App.paintStrip();
+  App.renderPreview();
 };
 
 /* ---------- Collections + strip ---------- */
@@ -197,11 +199,15 @@ function buildStrip() {
 App.buildStrip = buildStrip;
 App.paintStrip = function () {
   const active = App.activeId();
+  let rendered = false;
   for (const b of $('strip').querySelectorAll('.frame')) {
     b.setAttribute('aria-pressed', b.dataset.id === active);
-    const t = App.thumbs[b.dataset.id];
+    const id = b.dataset.id;
+    if (staleThumbs.has(id) && thumbSrc) { staleThumbs.delete(id); App.renderThumb(id, App.presetThumbState(id)); rendered = true; }
+    const t = App.thumbs[id];
     if (t) b.querySelector('canvas').getContext('2d').drawImage(t, 0, 0);
   }
+  if (rendered) App.renderPreview();
 };
 
 App.selectItem = function (id) {
@@ -247,7 +253,7 @@ App.setTab = function (name) {
 /* ---------- Opening photos ---------- */
 App.previewDim = () => Math.min(2400, Math.round(Math.max(innerWidth, innerHeight) * Math.min(window.devicePixelRatio || 1, 2) * 0.9));
 
-const stage = (s) => { App.loadStage = s; $('spinnerText').textContent = s + '\u2026'; };
+const stage = (s) => { App.loadStage = s; $('spinnerText').textContent = s + '\u2026'; U.crumb(s, App.loadingInfo); };
 App.loadPhoto = async function (file, st) {
   stage('Decoding photo');
   const img = await U.decodeFile(file);
@@ -275,10 +281,14 @@ App.loadPhoto = async function (file, st) {
   view.hidden = false;
   $('panel').hidden = false; $('tabbar').hidden = false;
   $('saveBtn').hidden = false;
-  stage('Rendering presets');
-  try { App.renderAllThumbs(); } catch (e) { App.notify('Preset thumbnails failed: ' + e.message, 8000); }
+  stage('Rendering preview');
   App.resetHistory();
   App.sync();
+  await U.nextFrame();
+  stage('Rendering presets');
+  try { App.renderAllThumbs(); } catch (e) { App.notify('Preset thumbnails failed: ' + e.message, 8000); }
+  await U.nextFrame();
+  U.crumb(null);
 };
 
 let loading = false, handled = null;
@@ -287,6 +297,7 @@ async function openFile(file) {
   handled = file; loading = true;
   App.busy(true, 'Opening\u2026');
   App.loadStage = 'Opening';
+  App.loadingInfo = (file.type || 'unknown type') + ', ' + (file.size / 1e6).toFixed(1) + ' MB';
   const watchdog = setTimeout(() => App.notify('Still working: ' + App.loadStage + '\u2026 (' + (file.type || 'unknown type') + ', ' + (file.size / 1e6).toFixed(1) + ' MB)', 15000), 12000);
   try {
     await App.loadPhoto(file);
@@ -458,6 +469,17 @@ App.start = function () {
     return;
   }
   for (const m of App.modules) if (m.init) m.init();
+  // If the last session died mid-load (iOS reloads a tab that runs out of memory), say where
+  const crumb = U.crumb.read();
+  if (crumb) {
+    U.crumb(null);
+    const msg = `Last time Darkroom stopped at \u201c${crumb.s}\u201d${crumb.info ? ' (' + crumb.info + ')' : ''} and the page reloaded. ` +
+      (crumb.s === 'Choosing photo' ? 'The viewer reloaded while the photo picker was open. Try opening the file in Safari.' : 'This usually means Safari ran out of memory.');
+    const p = document.createElement('p'); p.className = 'error'; p.id = 'crashNote'; p.textContent = msg;
+    $('emptyWrap').appendChild(p);
+  }
+  for (const id of ['openBtn', 'emptyBtn']) $(id).addEventListener('click', () => U.crumb('Choosing photo'));
+  window.addEventListener('focus', () => { if (U.crumb.read() && U.crumb.read().s === 'Choosing photo' && !loading) setTimeout(() => { if (!loading) U.crumb(null); }, 1500); });
   buildCollections();
   buildStrip();
   // Some iOS web views fire only one of these, so listen for both, plus a focus fallback.
