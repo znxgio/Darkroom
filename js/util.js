@@ -7,7 +7,7 @@ const U = window.DRU = {};
 function loadImg(src) {
   return new Promise((resolve, reject) => {
     const img = new Image();
-    const timer = setTimeout(() => reject(new Error('timeout')), 20000);
+    const timer = setTimeout(() => reject(new Error('timeout')), 15000);
     img.onload = () => { clearTimeout(timer); resolve(img); };
     img.onerror = () => { clearTimeout(timer); reject(new Error('failed')); };
     img.src = src;
@@ -49,9 +49,16 @@ U.scaledCanvas = function (img, maxDim, maxArea, square) {
 U.canvasBlob = (c, type = 'image/jpeg', q = 0.92) => new Promise(r => c.toBlob(r, type, q));
 
 /* ---------- EXIF DateTimeOriginal (JPEG or HEIC: scans for the TIFF block) ---------- */
+U.timeout = (p, ms, what) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error(what + ' timed out')), ms))]);
+const readBytes = blob => new Promise((resolve, reject) => {
+  const r = new FileReader();
+  r.onload = () => resolve(new Uint8Array(r.result));
+  r.onerror = () => reject(r.error || new Error('read failed'));
+  r.readAsArrayBuffer(blob);
+});
 U.readDate = async function (file) {
   try {
-    const buf = new Uint8Array(await file.slice(0, Math.min(file.size, 512 * 1024)).arrayBuffer());
+    const buf = await U.timeout(readBytes(file.slice(0, Math.min(file.size, 512 * 1024))), 3000, 'date read');
     for (let i = 0; i < buf.length - 14; i++) {
       if (buf[i] === 0x45 && buf[i + 1] === 0x78 && buf[i + 2] === 0x69 && buf[i + 3] === 0x66 && buf[i + 4] === 0 && buf[i + 5] === 0) {
         const t = i + 6;

@@ -247,12 +247,18 @@ App.setTab = function (name) {
 /* ---------- Opening photos ---------- */
 App.previewDim = () => Math.min(2400, Math.round(Math.max(innerWidth, innerHeight) * Math.min(window.devicePixelRatio || 1, 2) * 0.9));
 
+const stage = (s) => { App.loadStage = s; $('spinnerText').textContent = s + '\u2026'; };
 App.loadPhoto = async function (file, st) {
+  stage('Decoding photo');
   const img = await U.decodeFile(file);
+  stage('Reading date');
+  const date = await U.readDate(file);
   U.releaseImg(App.photo);
   App.photo = img;
   App.photoFile = file;
-  App.photoDate = (await U.readDate(file)) || (file.lastModified ? new Date(file.lastModified) : new Date());
+  App.photoDate = date || (file.lastModified ? new Date(file.lastModified) : new Date());
+  stage('Preparing preview');
+  await U.nextFrame();
   R.freeSource(App.previewSrc);
   App.previewSrc = R.makeSource(U.scaledCanvas(img, App.previewDim(), 0, false));
   const prevPreset = App.state.preset, prevLook = App.state.look;
@@ -262,26 +268,35 @@ App.loadPhoto = async function (file, st) {
     App.state.preset = prevPreset; App.state.look = prevLook;
   }
   if (App.state.stamp.auto) App.state.stamp.text = U.stampText(App.photoDate);
-  for (const m of App.modules) if (m.photoLoaded) await m.photoLoaded(!!st);
+  for (const m of App.modules) if (m.photoLoaded) {
+    try { await U.timeout(Promise.resolve(m.photoLoaded(!!st)), 4000, 'setup'); } catch (e) { /* non-essential (drafts etc.) */ }
+  }
   $('emptyWrap').hidden = true;
   view.hidden = false;
   $('panel').hidden = false; $('tabbar').hidden = false;
   $('saveBtn').hidden = false;
-  App.renderAllThumbs();
+  stage('Rendering presets');
+  try { App.renderAllThumbs(); } catch (e) { App.notify('Preset thumbnails failed: ' + e.message, 8000); }
   App.resetHistory();
   App.sync();
 };
 
+let loading = false, handled = null;
 async function openFile(file) {
-  if (!file) return;
-  App.busy(true);
+  if (!file || loading || file === handled) return;
+  handled = file; loading = true;
+  App.busy(true, 'Opening\u2026');
+  App.loadStage = 'Opening';
+  const watchdog = setTimeout(() => App.notify('Still working: ' + App.loadStage + '\u2026 (' + (file.type || 'unknown type') + ', ' + (file.size / 1e6).toFixed(1) + ' MB)', 15000), 12000);
   try {
     await App.loadPhoto(file);
   } catch (e) {
-    App.notify('That photo couldn’t be opened. Details: ' + e.message + ' | ' + (file.type || 'unknown type') + ', ' + (file.size / 1e6).toFixed(1) + ' MB', 8000);
+    App.notify('That photo couldn\u2019t be opened at \u201c' + App.loadStage + '\u201d. Details: ' + (e && e.message ? e.message : e) + ' | ' + (file.type || 'unknown type') + ', ' + (file.size / 1e6).toFixed(1) + ' MB', 15000);
   } finally {
+    clearTimeout(watchdog);
+    loading = false;
     App.busy(false);
-    $('file').value = '';
+    try { $('file').value = ''; } catch (e) { /* ignore */ }
   }
 }
 App.pickPhoto = () => $('file').click();
@@ -445,7 +460,12 @@ App.start = function () {
   for (const m of App.modules) if (m.init) m.init();
   buildCollections();
   buildStrip();
-  $('file').addEventListener('change', e => openFile(e.target.files[0]));
+  // Some iOS web views fire only one of these, so listen for both, plus a focus fallback.
+  const fromInput = () => { const f = $('file').files && $('file').files[0]; if (f) openFile(f); };
+  $('file').addEventListener('change', fromInput);
+  $('file').addEventListener('input', fromInput);
+  window.addEventListener('focus', () => setTimeout(fromInput, 300));
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) setTimeout(fromInput, 300); });
   for (const id of ['openBtn', 'emptyBtn']) $(id).addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); App.pickPhoto(); } });
   $('saveBtn').addEventListener('click', () => (App.onSave ? App.onSave() : App.save()));
   $('moreBtn').addEventListener('click', openMenu);
