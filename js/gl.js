@@ -248,7 +248,7 @@ void main(){
     vec2 o = vec2(0.05, 0.015) * (0.5 + prism);
     vec3 g1 = look(uv + o) * hue(fract(uv.y * 0.8 + 0.1));
     vec3 g2 = look(uv - o * 0.6) * hue(fract(uv.y * 0.8 + 0.55));
-    float side = smoothstep(0.55, 0.0, uv.x) * 0.8 + 0.2;
+    float side = (1.0 - smoothstep(0.0, 0.55, uv.x)) * 0.8 + 0.2;
     c = screen(c, (g1 * 0.5 + g2 * 0.3) * prism * side);
   }
   if (u_fxC.x > 0.0) c = screen(c, vec3(1.0, 0.28, 0.1) * smoothstep(0.5, 1.0, lum(bl)) * u_fxC.x * 1.4);
@@ -623,7 +623,7 @@ R.render = function (src, st, p, o = {}) {
     u_size: [w, h], u_outSize: [ow, oh], u_padLB: [pads.l, pads.b], u_paper: pads.color,
     u_rebate: pads.rebate ? 1 : 0, u_rebateW: pads.rebate || 0, u_unit: unit, u_seed: (fx.seed || 1) % 97,
     u_split: original ? 2 : (o.split == null ? -1 : o.split),
-    u_fxA: [f('grain'), g('grain').size ?? 0.4, f('dust'), g('dust').style || 0],
+    u_fxA: [f('grain'), (g('grain').size == null ? 0.4 : g('grain').size), f('dust'), g('dust').style || 0],
     u_fxB: [f('leak'), leak.style || 0, f('burn'), burn.pos || 0],
     u_fxC: [f('halation'), f('bloom'), f('vhs'), f('rgb')],
     u_fxD: [g('rgb').style || 0, f('blur'), g('blur').style || 0, f('prism')],

@@ -33,6 +33,8 @@
 }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
+.picker { position: absolute; width: 1px; height: 1px; opacity: 0; overflow: hidden; pointer-events: none; left: -100px; top: 0; }
+label.tb, label.empty { cursor: pointer; }
 html, body { margin: 0; height: 100%; overflow: hidden; }
 body {
   background: var(--workspace);

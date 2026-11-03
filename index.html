@@ -16,7 +16,7 @@
 </head>
 <body>
   <div class="toolbar">
-    <button class="tb" id="openBtn" type="button">Open</button>
+    <label class="tb" id="openBtn" for="file" role="button" tabindex="0">Open</label>
     <button class="tb" id="undoBtn" type="button" aria-label="Undo" hidden disabled>
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 010 12h-3"/></svg></button>
     <button class="tb" id="redoBtn" type="button" aria-label="Redo" hidden disabled>
@@ -31,14 +31,14 @@
 
   <main class="stage" id="stage">
     <div class="emptyWrap" id="emptyWrap">
-      <button class="empty" id="emptyBtn" type="button">
+      <label class="empty" id="emptyBtn" for="file" role="button" tabindex="0">
         <svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
           <circle cx="24" cy="24" r="18"/><circle cx="24" cy="24" r="7"/>
           <path d="M24 6l6 11M42 24H29.5M33 39l-6-11M15 39l6-11M6 24h12.5M15 9l6 11"/>
         </svg>
         <strong>Open a photo</strong>
         <span>JPEG or HEIC from your library</span>
-      </button>
+      </label>
       <button class="resume" id="resumeBtn" type="button" hidden>
         <img id="resumeImg" alt="">
         <span><b>Continue last edit</b><small id="resumeInfo"></small></span>
@@ -155,7 +155,7 @@
     <div class="body" id="sheetBody"></div>
   </div>
 
-  <input id="file" type="file" accept="image/*" hidden>
+  <input id="file" class="picker" type="file" accept="image/*" tabindex="-1" aria-hidden="true">
   <input id="fileMulti" type="file" accept="image/*" multiple hidden>
   <input id="fileJson" type="file" accept="application/json,.json" hidden>
 
@@ -167,7 +167,14 @@
 <script src="js/tools.js"></script>
 <script src="js/edit.js"></script>
 <script src="js/extras.js"></script>
-<script>App.start();</script>
+<script>
+  window.addEventListener('error', e => { try { App.notify('Something went wrong: ' + (e.message || e.error) + (e.lineno ? ' (line ' + e.lineno + ')' : ''), 12000); } catch (x) {} });
+  window.addEventListener('unhandledrejection', e => { try { App.notify('Something went wrong: ' + ((e.reason && e.reason.message) || e.reason), 12000); } catch (x) {} });
+  try { App.start(); } catch (e) {
+    document.getElementById('stage').innerHTML = '<p class="error"></p>';
+    document.querySelector('#stage .error').textContent = 'Darkroom couldn\u2019t start: ' + (e && e.message ? e.message : e);
+  }
+</script>
 <script>
   if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
     navigator.serviceWorker.register('sw.js').catch(() => {});

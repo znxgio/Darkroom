@@ -445,9 +445,8 @@ App.start = function () {
   for (const m of App.modules) if (m.init) m.init();
   buildCollections();
   buildStrip();
-  $('openBtn').addEventListener('click', App.pickPhoto);
-  $('emptyBtn').addEventListener('click', App.pickPhoto);
   $('file').addEventListener('change', e => openFile(e.target.files[0]));
+  for (const id of ['openBtn', 'emptyBtn']) $(id).addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); App.pickPhoto(); } });
   $('saveBtn').addEventListener('click', () => (App.onSave ? App.onSave() : App.save()));
   $('moreBtn').addEventListener('click', openMenu);
   $('sheetClose').addEventListener('click', App.closeSheet);
