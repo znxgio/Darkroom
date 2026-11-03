@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Darkroom">
+<meta name="theme-color" content="#1c1c1b">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<link rel="icon" href="icons/icon-192.png">
+<title>Darkroom</title>
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+  <div class="toolbar">
+    <label class="tb" id="openBtn" for="file" role="button" tabindex="0">Open</label>
+    <button class="tb" id="undoBtn" type="button" aria-label="Undo" hidden disabled>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 010 12h-3"/></svg></button>
+    <button class="tb" id="redoBtn" type="button" aria-label="Redo" hidden disabled>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 14l5-5-5-5"/><path d="M20 9H10a6 6 0 000 12h3"/></svg></button>
+    <span class="grow"></span>
+    <button class="tb" id="compareBtn" type="button" aria-label="Before and after" aria-pressed="false" hidden>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M12 2v20"/><path d="M12 4h7a2 2 0 012 2v12a2 2 0 01-2 2h-7z" fill="currentColor" stroke="none" opacity=".35"/></svg></button>
+    <button class="tb" id="moreBtn" type="button" aria-label="More">
+      <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button>
+    <button class="tb primary" id="saveBtn" type="button" hidden>Save</button>
+  </div>
+
+  <main class="stage" id="stage">
+    <div class="emptyWrap" id="emptyWrap">
+      <label class="empty" id="emptyBtn" for="file" role="button" tabindex="0">
+        <svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+          <circle cx="24" cy="24" r="18"/><circle cx="24" cy="24" r="7"/>
+          <path d="M24 6l6 11M42 24H29.5M33 39l-6-11M15 39l6-11M6 24h12.5M15 9l6 11"/>
+        </svg>
+        <strong>Open a photo</strong>
+        <span>JPEG or HEIC from your library</span>
+      </label>
+      <button class="resume" id="resumeBtn" type="button" hidden>
+        <img id="resumeImg" alt="">
+        <span><b>Continue last edit</b><small id="resumeInfo"></small></span>
+      </button>
+    </div>
+    <canvas id="view" hidden></canvas>
+    <div class="cropbox" id="cropbox" hidden><div class="grid"></div><i class="h tl" data-h="tl"></i><i class="h tr" data-h="tr"></i><i class="h bl" data-h="bl"></i><i class="h br" data-h="br"></i></div>
+    <div class="textsel" id="textsel" hidden></div>
+    <div class="divider" id="divider" hidden><i></i></div>
+    <div class="tag" id="origTag" hidden>Original</div>
+    <div class="tag right" id="editTag" hidden>Edited</div>
+    <div class="spinner" id="spinner" hidden><div></div><p id="spinnerText"></p></div>
+    <div class="notice" id="notice" role="status" hidden></div>
+  </main>
+
+  <section class="panel" id="panel" hidden>
+    <!-- Presets -->
+    <div class="pane" id="pane-presets">
+      <div class="readout">
+        <span class="left"><strong id="presetName">TV Set</strong>
+          <button class="star" id="favBtn" type="button" aria-pressed="false" aria-label="Favorite">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M12 3l2.7 5.6 6.1.8-4.5 4.2 1.1 6-5.4-2.9-5.4 2.9 1.1-6L3.2 9.4l6.1-.8z"/></svg>
+          </button><button class="pct" id="strengthLabel" type="button" aria-label="Adjust strength">100%</button></span>
+        <span class="modes" role="tablist" aria-label="Filter layer">
+          <button class="chip" id="modeBase" type="button" role="tab" aria-selected="true">Base</button>
+          <button class="chip" id="modeLayer" type="button" role="tab" aria-selected="false">+ Layer</button>
+          <button class="chip" id="layerOff" type="button" aria-label="Remove layer" hidden>&times;</button>
+        </span>
+      </div>
+      <div class="browse" id="browse">
+        <div class="chips tabs" id="collections" role="tablist" aria-label="Collections"></div>
+        <div class="strip" id="strip" role="group" aria-label="Presets"></div>
+      </div>
+      <div class="strength-panel" id="strengthPanel" hidden>
+        <div class="sp-head"><span id="strengthWhat">Filter</span><output id="strengthValue">100</output></div>
+        <input id="strength" type="range" min="0" max="100" value="100" aria-label="Strength">
+        <div class="sp-actions"><button class="btn" id="strengthCancel" type="button">Cancel</button><button class="btn primary" id="strengthApply" type="button">Apply</button></div>
+      </div>
+    </div>
+
+    <!-- Effects -->
+    <div class="pane" id="pane-effects" hidden>
+      <div class="readout"><strong id="fxName">Grain</strong><output id="fxValue">0%</output></div>
+      <input id="fxAmount" type="range" min="0" max="100" value="0" aria-label="Effect intensity">
+      <div class="chips" id="fxOptions"></div>
+      <div class="chips" id="fxList" role="tablist" aria-label="Effects"></div>
+    </div>
+
+    <!-- Adjust -->
+    <div class="pane" id="pane-adjust" hidden>
+      <div class="readout"><strong id="adjName">Exposure</strong><output id="adjValue">0</output></div>
+      <input id="adjAmount" type="range" min="-100" max="100" value="0" aria-label="Adjustment">
+      <div class="row"><span class="muted grow">Double-tap the slider to reset</span><button class="btn small" id="adjReset" type="button">Reset all</button></div>
+      <div class="chips" id="adjList" role="tablist" aria-label="Adjustments"></div>
+    </div>
+
+    <!-- Crop -->
+    <div class="pane padded" id="pane-crop" hidden>
+      <div class="chips" id="aspectList" aria-label="Aspect ratio"></div>
+      <div class="row">
+        <button class="btn" id="rotBtn" type="button">Rotate 90°</button>
+        <button class="btn" id="flipBtn" type="button">Flip</button>
+        <span class="grow"></span>
+        <button class="btn" id="cropReset" type="button">Reset</button>
+      </div>
+      <div class="readout"><strong>Straighten</strong><output id="straightenLabel">0.0°</output></div>
+      <input id="straighten" type="range" min="-150" max="150" value="0" aria-label="Straighten">
+    </div>
+
+    <!-- Frames -->
+    <div class="pane padded" id="pane-frames" hidden>
+      <div class="frames" id="frameList" aria-label="Frames"></div>
+      <div class="row">
+        <label class="toggle"><input type="checkbox" id="stampOn"> Date stamp</label>
+        <input type="text" id="stampText" class="grow" style="min-width:0" maxlength="16" aria-label="Date stamp text" inputmode="text" autocomplete="off">
+      </div>
+      <div class="row">
+        <div class="swatches" id="stampColors"></div>
+        <span class="grow"></span>
+        <button class="btn small" id="stampDate" type="button">Photo date</button>
+      </div>
+    </div>
+
+    <!-- Text -->
+    <div class="pane padded scroll" id="pane-text" hidden>
+      <div class="row">
+        <button class="btn primary" id="addText" type="button">Add text</button>
+        <div class="chips grow" id="textLayers" style="padding:0"></div>
+      </div>
+      <div id="textEditor" hidden>
+        <div class="row"><input type="text" id="textInput" class="grow" style="min-width:0" aria-label="Text" autocomplete="off"><button class="btn small danger" id="textDel" type="button">Delete</button></div>
+        <div class="chips" id="fontList" aria-label="Font"></div>
+        <div class="row"><div class="swatches" id="textColors" style="overflow-x:auto;scrollbar-width:none;min-width:0;flex:1"></div><label class="toggle"><input type="checkbox" id="textShadow"> Shadow</label></div>
+        <div class="row"><span class="muted">Size</span><input type="range" id="textSize" min="2" max="40" value="8" style="margin:0;min-width:0" aria-label="Text size"><span class="muted">Turn</span><input type="range" id="textRot" min="-180" max="180" value="0" style="margin:0;min-width:0" aria-label="Text rotation"></div>
+      </div>
+      <p class="muted" id="textHint" style="padding:0 16px">Drag text on the photo to move it. Pinch to resize and turn.</p>
+    </div>
+  </section>
+
+  <nav class="tabbar" id="tabbar" role="tablist" hidden>
+    <button type="button" data-tab="presets" aria-selected="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="5" width="18" height="14" rx="1.5"/><path d="M3 8h18M3 16h18M7 5v3M11 5v3M15 5v3M19 5v3M7 16v3M11 16v3M15 16v3M19 16v3"/></svg>Presets</button>
+    <button type="button" data-tab="effects" aria-selected="false" hidden>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/><circle cx="12" cy="12" r="3"/></svg>Effects</button>
+    <button type="button" data-tab="adjust" aria-selected="false" hidden>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg>Adjust</button>
+    <button type="button" data-tab="crop" aria-selected="false" hidden>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 2v16h16M2 6h16v16"/></svg>Crop</button>
+    <button type="button" data-tab="frames" aria-selected="false" hidden>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="3" width="16" height="18" rx="1"/><rect x="7" y="6" width="10" height="9"/></svg>Frame</button>
+    <button type="button" data-tab="text" aria-selected="false" hidden>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5 6V4h14v2M12 4v16M9 20h6"/></svg>Text</button>
+  </nav>
+
+  <!-- Save result fallback -->
+  <div class="sheet" id="resultSheet" hidden>
+    <header><h2 id="resultTitle">Saved</h2><button type="button" data-close>Done</button></header>
+    <div class="body" id="resultBody"></div>
+  </div>
+
+  <!-- Generic sheet used by menu, export, looks, batch, feed, collage, carousel -->
+  <div class="sheet" id="sheet" hidden>
+    <header><button type="button" id="sheetBack" hidden>Back</button><h2 id="sheetTitle"></h2><button type="button" id="sheetClose">Done</button></header>
+    <div class="body" id="sheetBody"></div>
+  </div>
+
+  <input id="file" class="picker" type="file" accept="image/*" tabindex="-1" aria-hidden="true">
+  <input id="fileMulti" type="file" accept="image/*" multiple hidden>
+  <input id="fileJson" type="file" accept="application/json,.json" hidden>
+
+<script src="js/presets.js"></script>
+<script src="js/gl.js"></script>
+<script src="js/util.js"></script>
+<script src="js/app.js"></script>
+<script src="js/panels.js"></script>
+<script src="js/tools.js"></script>
+<script src="js/edit.js"></script>
+<script src="js/extras.js"></script>
+<script>
+  window.addEventListener('error', e => { try { App.notify('Something went wrong: ' + (e.message || e.error) + (e.lineno ? ' (line ' + e.lineno + ')' : ''), 12000); } catch (x) {} });
+  window.addEventListener('unhandledrejection', e => { try { App.notify('Something went wrong: ' + ((e.reason && e.reason.message) || e.reason), 12000); } catch (x) {} });
+  try { App.start(); } catch (e) {
+    document.getElementById('stage').innerHTML = '<p class="error"></p>';
+    document.querySelector('#stage .error').textContent = 'Darkroom couldn\u2019t start: ' + (e && e.message ? e.message : e);
+  }
+</script>
+<script>
+  if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
+    navigator.serviceWorker.register('sw.js').catch(() => {});
+  }
+</script>
+</body>
+</html>
