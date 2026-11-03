@@ -61,16 +61,22 @@
         <span class="left"><strong id="presetName">TV Set</strong>
           <button class="star" id="favBtn" type="button" aria-pressed="false" aria-label="Favorite">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M12 3l2.7 5.6 6.1.8-4.5 4.2 1.1 6-5.4-2.9-5.4 2.9 1.1-6L3.2 9.4l6.1-.8z"/></svg>
-          </button><output id="strengthLabel">100%</output></span>
+          </button><button class="pct" id="strengthLabel" type="button" aria-label="Adjust strength">100%</button></span>
         <span class="modes" role="tablist" aria-label="Filter layer">
           <button class="chip" id="modeBase" type="button" role="tab" aria-selected="true">Base</button>
           <button class="chip" id="modeLayer" type="button" role="tab" aria-selected="false">+ Layer</button>
           <button class="chip" id="layerOff" type="button" aria-label="Remove layer" hidden>&times;</button>
         </span>
       </div>
-      <input id="strength" type="range" min="0" max="100" value="100" aria-label="Strength">
-      <div class="chips tabs" id="collections" role="tablist" aria-label="Collections"></div>
-      <div class="strip" id="strip" role="group" aria-label="Presets"></div>
+      <div class="browse" id="browse">
+        <div class="chips tabs" id="collections" role="tablist" aria-label="Collections"></div>
+        <div class="strip" id="strip" role="group" aria-label="Presets"></div>
+      </div>
+      <div class="strength-panel" id="strengthPanel" hidden>
+        <div class="sp-head"><span id="strengthWhat">Filter</span><output id="strengthValue">100</output></div>
+        <input id="strength" type="range" min="0" max="100" value="100" aria-label="Strength">
+        <div class="sp-actions"><button class="btn" id="strengthCancel" type="button">Cancel</button><button class="btn primary" id="strengthApply" type="button">Apply</button></div>
+      </div>
     </div>
 
     <!-- Effects -->

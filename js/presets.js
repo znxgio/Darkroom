@@ -18,8 +18,12 @@ const DEFAULTS = {
 };
 
 const COLLECTIONS = [
-  { id: 'popular', name: 'Popular', ids: ['analog', 'candy', 'rust', 'field', 'portrait400', 'gold200', 'tvset', 'reportage',
+  { id: 'popular', name: 'Popular', ids: ['latte', 'maple', 'lilac', 'analog', 'candy', 'rust', 'field', 'portrait400', 'gold200', 'tvset', 'reportage',
     'negative', 'cine800t', 'mattecool', 'goldenhour', 'mint400', 'silver', 'nostalgia', 'blush'] },
+  { id: 'trends', name: 'Trends' },
+  { id: 'autumn', name: 'Autumn' },
+  { id: 'mood', name: 'Mood' },
+  { id: 'minimal', name: 'Minimal' },
   { id: 'everyday', name: 'Everyday' },
   { id: 'film', name: 'Film' },
   { id: 'vintage', name: 'Vintage' },
@@ -31,6 +35,88 @@ const COLLECTIONS = [
 
 const WHITE = [1, 1, 1];
 const LIST = [
+  /* ---------- Trends / Autumn / Mood / Minimal: subtle Esti-style colour looks, no built-in grain ---------- */
+  { id: 'latte', c: 'trends', name: 'Latte', // creamy mid-brown, milky highlights
+    exposure: -.04, curve: [[0, .06], [.5, .51], [1, .95]], saturation: .78, mix: [1.07, 1, .86], highlightTint: [1, .88, .72], highlightAmount: .35,
+    shadowTint: [.48, .4, .32], shadowAmount: .25, hsl: { orange: [-4, 1.1, 0], green: [-24, .55, -.03], blue: [0, .55, 0] } },
+  { id: 'toffee', c: 'trends', name: 'Toffee', // light golden caramel
+    exposure: .06, curve: [[0, .04], [.5, .53], [1, .97]], contrast: 1.02, saturation: .95, mix: [1.08, 1.03, .82],
+    highlightTint: [1, .82, .55], highlightAmount: .3, hsl: { orange: [-2, 1.2, 0], yellow: [-8, 1, 0], green: [-24, .6, -.03], blue: [0, .5, 0] } },
+  { id: 'rosewood', c: 'trends', name: 'Rosewood', // dark romance: muted wine reds, cool dark shadows
+    exposure: -.1, curve: [[0, .04], [.5, .47], [1, .93]], contrast: 1.06, saturation: .8, mix: [1.03, .95, .98],
+    shadowTint: [.4, .32, .45], shadowAmount: .35, hsl: { red: [-8, 1.15, -.08], orange: [-6, .95, 0], green: [10, .55, -.06], blue: [10, .7, -.05] } },
+  { id: 'honeybee', c: 'trends', name: 'Honey', // golden yellows, warm bright skin
+    exposure: .08, curve: [[0, .04], [.5, .54], [1, .98]], saturation: 1, mix: [1.07, 1.04, .84], highlightTint: [1, .84, .5], highlightAmount: .3,
+    hsl: { yellow: [-6, 1.2, .08], orange: [2, 1.05, .05], green: [-18, .85, .04] } },
+  { id: 'cream', c: 'trends', name: 'Butter', // pale buttery yellow wash, airy
+    exposure: .15, curve: [[0, .08], [.5, .56], [1, .97]], contrast: .9, saturation: .75, mix: [1.04, 1.04, .9],
+    hsl: { yellow: [0, 1.1, .1], green: [-15, .7, .06], blue: [0, .6, .05] } },
+  { id: 'morning', c: 'trends', name: 'Morning', // fresh soft daylight, gentle cool shadows
+    exposure: .12, curve: [[0, .04], [.5, .55], [1, .99]], contrast: .95, saturation: .9, mix: [1, 1.01, 1.02],
+    shadowTint: [.4, .5, .6], shadowAmount: .2, highlightTint: [1, .94, .86], highlightAmount: .15 },
+  { id: 'espresso', c: 'trends', name: 'Espresso', // deep dark brown, low key
+    exposure: -.2, curve: [[0, .05], [.5, .45], [1, .9]], contrast: 1.08, saturation: .75, mix: [1.08, .99, .82], lift: [.02, .01, 0],
+    hsl: { orange: [-6, 1.2, -.08], green: [-30, .45, -.1], blue: [0, .4, -.05], yellow: [-12, .8, -.08] } },
+
+  { id: 'maple', c: 'autumn', name: 'Maple', // red-orange leaves, warm amber light
+    curve: [[0, .03], [.5, .51], [1, .96]], saturation: 1, mix: [1.08, 1, .86], highlightTint: [1, .78, .5], highlightAmount: .25,
+    hsl: { yellow: [-14, 1.1, -.02], green: [-35, .7, -.04], orange: [-6, 1.2, 0], red: [0, 1.1, -.04] } },
+  { id: 'hazel', c: 'autumn', name: 'Hazel', // muted olive-brown, earthy
+    curve: [[0, .06], [.5, .5], [1, .93]], saturation: .72, mix: [1.04, 1.02, .86], shadowTint: [.45, .45, .32], shadowAmount: .3,
+    hsl: { green: [-25, .7, -.04], yellow: [-10, .8, -.04], blue: [0, .5, 0], orange: [-4, 1.05, 0] } },
+  { id: 'cider', c: 'autumn', name: 'Cider', // bright golden orange, glowing
+    exposure: .06, curve: [[0, .03], [.5, .53], [1, .98]], saturation: 1.08, mix: [1.1, 1.02, .8], highlightTint: [1, .75, .4], highlightAmount: .35,
+    hsl: { yellow: [-10, 1.15, .04], green: [-30, .8, 0], blue: [0, .6, 0] }, halation: .1 },
+  { id: 'sienna', c: 'autumn', name: 'Sienna', // burnt red earth, dusky and dark
+    exposure: -.14, curve: [[0, .04], [.5, .47], [1, .93]], contrast: 1.08, saturation: .95, mix: [1.12, .95, .86],
+    shadowTint: [.5, .32, .3], shadowAmount: .4, hsl: { orange: [-14, 1.2, -.05], red: [6, 1.15, -.04], green: [-30, .45, -.08], blue: [0, .45, -.05] } },
+  { id: 'chestnut', c: 'autumn', name: 'Chestnut', // dark woody brown, faded
+    exposure: -.1, curve: [[0, .09], [.5, .48], [1, .9]], saturation: .7, mix: [1.06, 1, .86],
+    hsl: { orange: [-6, 1.15, -.06], green: [-28, .45, -.08], blue: [0, .4, -.05], yellow: [-14, .7, -.06] } },
+  { id: 'spice', c: 'autumn', name: 'Spice', // cinnamon: warm red-brown with teal shadows
+    curve: [[0, .03], [.5, .5], [1, .95]], contrast: 1.06, saturation: .95, mix: [1.07, .98, .9],
+    shadowTint: [.25, .48, .5], shadowAmount: .3, highlightTint: [1, .7, .5], highlightAmount: .3, hsl: { orange: [-8, 1.15, 0], green: [-20, .6, -.05] } },
+
+  { id: 'dusk', c: 'mood', name: 'Dusk', // blue-violet evening, soft
+    exposure: -.08, curve: [[0, .06], [.5, .49], [1, .93]], saturation: .8, mix: [.96, .96, 1.08],
+    shadowTint: [.35, .35, .6], shadowAmount: .35, highlightTint: [1, .82, .78], highlightAmount: .2, hsl: { orange: [0, .9, .03] } },
+  { id: 'hush', c: 'mood', name: 'Hush', // quiet grey-green, low contrast, near muted
+    curve: [[0, .1], [.5, .5], [1, .9]], contrast: .9, saturation: .5, mix: [.98, 1.02, 1], shadowTint: [.4, .5, .45], shadowAmount: .25 },
+  { id: 'cloud', c: 'mood', name: 'Cloud', // soft white-grey high key, milky
+    exposure: .22, curve: [[0, .12], [.5, .58], [1, .96]], contrast: .85, saturation: .6, mix: [1, 1, 1.02] },
+  { id: 'ink', c: 'mood', name: 'Ink', // dark, desaturated, crushed blue-black
+    exposure: -.18, curve: [[0, 0], [.3, .2], [.6, .56], [1, .95]], contrast: 1.12, saturation: .6, mix: [.95, .98, 1.06],
+    shadowTint: [.25, .3, .45], shadowAmount: .35 },
+  { id: 'lilac', c: 'mood', name: 'Lilac', // whimsical pink-violet highlights
+    exposure: .06, curve: [[0, .05], [.5, .53], [1, .97]], saturation: .88, mix: [1.04, .95, 1.04],
+    highlightTint: [1, .7, .88], highlightAmount: .45, hsl: { blue: [14, .9, .04], green: [16, .7, 0] } },
+  { id: 'seafoam', c: 'mood', name: 'Seafoam', // soft teal wash, pale skin
+    curve: [[0, .06], [.5, .52], [1, .96]], saturation: .78, mix: [.95, 1.02, 1.02], shadowTint: [.3, .58, .56], shadowAmount: .35,
+    hsl: { green: [30, .8, .04], blue: [-14, .85, .04], orange: [0, .92, .04] } },
+
+  { id: 'linen', c: 'minimal', name: 'Linen', // clean warm neutral, barely there
+    exposure: .08, curve: [[0, .03], [.5, .53], [1, .98]], saturation: .9, mix: [1.03, 1.01, .96] },
+  { id: 'oat', c: 'minimal', name: 'Oat', // matte beige, lifted and soft
+    curve: [[0, .12], [.5, .53], [1, .93]], contrast: .9, saturation: .7, mix: [1.05, 1.02, .9] },
+  { id: 'pebble', c: 'minimal', name: 'Pebble', // bright neutral grey, cool and calm
+    exposure: .14, curve: [[0, .02], [.5, .55], [1, .99]], contrast: 1.04, saturation: .6, mix: [.97, 1, 1.04] },
+  { id: 'shell', c: 'minimal', name: 'Shell', // pale blush, pink-tinged whites
+    exposure: .12, curve: [[0, .05], [.5, .55], [1, .98]], saturation: .82, mix: [1.04, .96, 1.01], highlightTint: [1, .8, .84], highlightAmount: .4 },
+  { id: 'bay', c: 'minimal', name: 'Bay', // lagoon: clean cool blues, crisp whites
+    exposure: .1, curve: [[0, .02], [.5, .54], [1, 1]], saturation: .88, mix: [.95, 1, 1.06],
+    hsl: { blue: [-8, 1.05, .05], aqua: [0, 1.05, .04], orange: [4, .88, .04] } },
+  { id: 'ivory', c: 'minimal', name: 'Ivory', // bright clean whites, faint warmth
+    exposure: .24, curve: [[0, .03], [.5, .57], [1, 1]], contrast: 1.02, saturation: .88, mix: [1.02, 1.01, .98], highlightTint: [1, .96, .9], highlightAmount: .2 },
+
+  { id: 'riviera', c: 'vintage', name: 'Riviera', // sunny 60s Mediterranean: warm, faded, turquoise water
+    exposure: .08, curve: [[0, .07], [.5, .53], [1, .94]], saturation: .92, mix: [1.06, 1.02, .9],
+    highlightTint: [1, .82, .6], highlightAmount: .25, hsl: { blue: [-18, 1.05, .04], aqua: [0, 1.1, .04], green: [-12, .8, 0] } },
+  { id: 'postcard', c: 'vintage', name: 'Postcard', // printed postcard: punchy but faded, warm
+    curve: [[0, .08], [.25, .26], [.5, .52], [.75, .8], [1, .92]], saturation: 1.05, mix: [1.05, 1, .9], rgb: { b: [[0, .1], [1, .9]] } },
+  { id: 'y2016', c: 'vintage', name: '2016', // faded matte Instagram era: lifted blacks, teal-orange lite
+    curve: [[0, .14], [.5, .52], [1, .95]], saturation: .85, shadowTint: [.3, .5, .55], shadowAmount: .3,
+    highlightTint: [1, .82, .66], highlightAmount: .2 },
+
   /* ---------- Everyday: the most-used VSCO-style looks (see FILTERS.md for what each is modelled on) ---------- */
   { id: 'analog', c: 'everyday', name: 'Analog', // A6: subtle fade, orange highlights, green shadows, kind to skin
     curve: [[0, .07], [.25, .28], [.5, .52], [.75, .76], [1, .95]], saturation: .8,
@@ -326,6 +412,7 @@ const LIST = [
 
 // retired ids that saved looks, favourites or drafts may still reference
 const ALIASES = { cool400: 'coldfront' };
+const ORIGINALS = ['tvset', 'golden', 'sodium', 'coastfog', 'observer', 'expired', 'bypass', 'silver'];
 const PRESETS = LIST.map(p => ({ ...DEFAULTS, ...p }));
 const BY_ID = {};
 for (const p of PRESETS) BY_ID[p.id] = p;
@@ -338,5 +425,7 @@ const itemsIn = cid => {
   return c && c.ids ? c.ids.map(id => BY_ID[id]).filter(Boolean) : PRESETS.filter(p => p.c === cid);
 };
 
-window.DRPresets = { DEFAULTS, COLLECTIONS, PRESETS, BY_ID, inCollection, itemsIn, get: id => BY_ID[id] || BY_ID[ALIASES[id]] || PRESETS[0] };
+window.DRPresets = { DEFAULTS, COLLECTIONS, PRESETS, BY_ID, inCollection, itemsIn, get: id => BY_ID[id] || BY_ID[ALIASES[id]] || PRESETS[0],
+  // the owner's originals open at full strength; everything else at 80%, like Esti
+  defaultStrength: id => (ORIGINALS.includes(id) ? 1 : (BY_ID[id] && BY_ID[id].strength0) || 0.8) };
 })();

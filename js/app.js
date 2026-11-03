@@ -113,7 +113,18 @@ App.commit = function () {
   for (const m of App.modules) if (m.committed) m.committed();
 };
 App.resetHistory = function () { App.history = { stack: [], index: -1 }; App.commit(); };
-App.sync = function () { for (const m of App.modules) if (m.sync) m.sync(); App.renderPreview(); };
+/* filled slider tracks: keep --fill in step with every range input */
+App.updateRanges = function () {
+  for (const r of document.querySelectorAll('input[type=range]')) {
+    const min = +r.min || 0, max = +r.max || 100;
+    r.style.setProperty('--fill', ((r.value - min) / (max - min)) * 100 + '%');
+  }
+};
+document.addEventListener('input', e => {
+  const r = e.target;
+  if (r.type === 'range') { const min = +r.min || 0, max = +r.max || 100; r.style.setProperty('--fill', ((r.value - min) / (max - min)) * 100 + '%'); }
+});
+App.sync = function () { for (const m of App.modules) if (m.sync) m.sync(); App.renderPreview(); App.updateRanges(); };
 
 /* ---------- Thumbnails ---------- */
 let thumbSrc = null;
@@ -196,13 +207,21 @@ function buildStrip() {
     const b = document.createElement('button');
     b.type = 'button'; b.className = 'frame'; b.dataset.id = it.id;
     b.innerHTML = '<span class="holes"><i></i><i></i><i></i><i></i></span><canvas width="144" height="144"></canvas><b></b><span class="holes"><i></i><i></i><i></i><i></i></span>';
-    b.querySelector('b').textContent = it.name;
+    const lab = b.querySelector('b');
+    lab.textContent = it.name;
+    const col = App.labelColor(it.id);
+    if (col) { lab.style.background = col.bg; lab.style.color = col.fg; }
     b.setAttribute('aria-label', it.name);
     if (App.favs.includes(it.id) && collection !== 'fav') { const s = document.createElement('span'); s.className = 'fav'; s.textContent = '★'; b.appendChild(s); }
-    b.addEventListener('click', () => App.selectItem(it.id));
+    b.addEventListener('click', () => {
+      if (App.activeId() === it.id && App.itemById(it.id).kind === 'preset') App.openStrength();
+      else App.selectItem(it.id);
+    });
     strip.appendChild(b);
   }
   App.paintStrip();
+  const on = strip.querySelector('.frame[aria-pressed=true]');
+  if (on) requestAnimationFrame(() => strip.scrollTo({ left: Math.max(0, on.offsetLeft - strip.clientWidth / 2 + on.offsetWidth / 2), behavior: 'smooth' }));
 }
 App.buildStrip = buildStrip;
 App.paintStrip = function () {
@@ -227,6 +246,7 @@ App.selectItem = function (id) {
     if (!App.state.layer.strength) App.state.layer.strength = 0.6;
   } else if (it.kind === 'preset') {
     App.state.preset = id; App.state.look = null;
+    App.state.strength = P.defaultStrength(id);
     if (App.state.layer.preset === id) App.state.layer.preset = null;
   } else {
     App.setLayerMode(false);
@@ -245,7 +265,8 @@ function syncPresets() {
   $('favBtn').setAttribute('aria-pressed', !!id && App.favs.includes(id));
   const v = Math.round((L ? lay.strength : App.state.strength) * 100);
   $('strength').value = v;
-  $('strength').disabled = L && !lay.preset;
+  $('strengthValue').textContent = v;
+  $('strengthLabel').disabled = L && !lay.preset;
   $('strengthLabel').textContent = `${v}%`;
   $('modeBase').setAttribute('aria-selected', !L);
   $('modeLayer').setAttribute('aria-selected', L);
@@ -253,6 +274,64 @@ function syncPresets() {
   $('layerOff').hidden = !lay.preset;
   App.paintStrip();
 }
+/* Tap the selected filter again (or the %) for a strength panel with Cancel / Apply */
+let strengthBefore = null;
+App.openStrength = function () {
+  if (App.layerMode && !App.state.layer.preset) return;
+  strengthBefore = App.layerMode ? App.state.layer.strength : App.state.strength;
+  $('strengthWhat').textContent = App.layerMode ? 'Layer strength' : 'Filter strength';
+  $('browse').hidden = true; $('strengthPanel').hidden = false;
+  syncPresets();
+};
+App.closeStrength = function (apply) {
+  if ($('strengthPanel').hidden) return;
+  if (!apply && strengthBefore != null) {
+    if (App.layerMode) App.state.layer.strength = strengthBefore; else App.state.strength = strengthBefore;
+    App.renderPreview();
+  }
+  strengthBefore = null;
+  $('strengthPanel').hidden = true; $('browse').hidden = false;
+  if (apply) App.commit();
+  syncPresets();
+};
+
+/* Each filter gets a fixed colour label, measured from what it does to a neutral test swatch */
+const labelCache = {};
+App.labelColor = function (id) {
+  if (labelCache[id] !== undefined) return labelCache[id];
+  const p = P.BY_ID[id];
+  if (!p) return (labelCache[id] = null);
+  if (p.label) return (labelCache[id] = { bg: p.label, fg: '#1d1c1a' });
+  if (!App.swatchSrc) {
+    const c = document.createElement('canvas'); c.width = 32; c.height = 8;
+    const x = c.getContext('2d');
+    ['#3a3a3a', '#6e6e6e', '#a0a0a0', '#d2d2d2', '#c99a7e', '#7f9fc4', '#7f9a6a', '#b8b0a6'].forEach((col, i) => { x.fillStyle = col; x.fillRect(i * 4, 0, 4, 8); });
+    App.swatchSrc = R.makeSource(c);
+    App.swatchIn = Array.from(x.getImageData(0, 0, 32, 8).data);
+    App.swatchCv = document.createElement('canvas'); App.swatchCv.width = 32; App.swatchCv.height = 8;
+  }
+  const st = { ...App.defaultState(), preset: id, frame: 'none' };
+  const saved = { grain: p.grain, chroma: p.chroma, vignette: p.vignette, fisheye: p.fisheye, leakStrength: p.leakStrength };
+  Object.assign(p, { grain: 0, chroma: 0, vignette: 0, fisheye: 0, leakStrength: 0 });
+  App.renderTo(App.swatchSrc, st, { noOverlays: true });
+  Object.assign(p, saved);
+  const x = App.swatchCv.getContext('2d');
+  x.drawImage(view, 0, 0, 32, 8);
+  const d = x.getImageData(0, 0, 32, 8).data, s = App.swatchIn;
+  let r = 0, g = 0, b = 0;
+  const n = d.length / 4;
+  for (let i = 0; i < d.length; i += 4) { r += d[i] - s[i]; g += d[i + 1] - s[i + 1]; b += d[i + 2] - s[i + 2]; }
+  r /= n; g /= n; b /= n;
+  const m = (r + g + b) / 3;
+  // exaggerate the colour shift into a soft pastel; neutral looks stay grey
+  const k = 3.2, base = 196 + m * 0.6;
+  const ch = v => Math.round(Math.min(245, Math.max(70, base + (v - m) * k)));
+  const R8 = ch(r), G8 = ch(g), B8 = ch(b);
+  const lum = (0.2126 * R8 + 0.7152 * G8 + 0.0722 * B8) / 255;
+  App.renderPreview();
+  return (labelCache[id] = { bg: `rgb(${R8},${G8},${B8})`, fg: lum > 0.55 ? '#1d1c1a' : '#f4efe4' });
+};
+
 App.setLayerMode = function (on) {
   if (App.layerMode === on) return;
   App.layerMode = on;
@@ -272,6 +351,7 @@ App.toggleFav = function (id = App.activeId()) {
 /* ---------- Tabs ---------- */
 App.setTab = function (name) {
   if (App.tab === name) return;
+  App.closeStrength(true);
   const prev = App.tab;
   for (const m of App.modules) if (m.leave) m.leave(prev, name);
   App.tab = name;
@@ -544,13 +624,17 @@ App.start = function () {
   $('modeBase').addEventListener('click', () => App.setLayerMode(false));
   $('modeLayer').addEventListener('click', () => App.setLayerMode(true));
   $('layerOff').addEventListener('click', () => { App.state.layer.preset = null; App.setLayerMode(false); App.commit(); App.sync(); });
+  $('strengthLabel').addEventListener('click', App.openStrength);
+  $('strengthCancel').addEventListener('click', () => App.closeStrength(false));
+  $('strengthApply').addEventListener('click', () => App.closeStrength(true));
   $('strength').addEventListener('input', e => {
     if (App.layerMode) App.state.layer.strength = e.target.value / 100;
     else App.state.strength = e.target.value / 100;
+    $('strengthValue').textContent = e.target.value;
     $('strengthLabel').textContent = `${e.target.value}%`;
     App.renderPreview();
   });
-  $('strength').addEventListener('change', App.commit);
+  // commit happens on Apply
   for (const b of $('tabbar').querySelectorAll('button')) b.addEventListener('click', () => App.setTab(b.dataset.tab));
 
   // Long-press a preset frame to favourite it

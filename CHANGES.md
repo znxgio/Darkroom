@@ -8,6 +8,17 @@ Confidence tags: **[Certain]** verified by an automated test or screenshot · **
 
 ---
 
+## Update: Esti-style filtering and a smoother UI
+
+- **Tap a selected filter again** (or the % chip) for a strength panel with Cancel / Apply. New filters open at 80% like Esti; your original eight still open at 100%. [Certain in Chromium]
+- **New collections: Trends, Autumn, Mood, Minimal** (25 subtle colour looks with no built-in grain), plus Riviera, Postcard and 2016 in Vintage. Library is now 106 presets. Names are my own. [Certain they render; taste is my judgment]
+- **Colour label per filter**, measured from what each filter does to a neutral swatch, so you can recognise filters by colour. [Certain]
+- **Polish:**
+  - Panels fade and slide in, sheets slide up, and buttons and frames give press feedback.
+  - Slider tracks fill as you drag, collection tabs use small spaced capitals, and the strip snaps and scrolls to the selected filter.
+  - The photo sits on a soft shadow.
+  - All motion is switched off when iOS Reduce Motion is on. [Certain in Chromium; feel on iPhone not checked]
+
 ## Update: filter overhaul and layering (after first iPhone test)
 
 You reported that many filters looked the same. Measuring confirmed it: the median preset had a near-twin only 4.7 ΔE away. Full research, method and sources are in **[FILTERS.md](FILTERS.md)**.
