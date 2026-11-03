@@ -8,6 +8,29 @@ Confidence tags: **[Certain]** verified by an automated test or screenshot · **
 
 ---
 
+## Update: filter overhaul and layering (after first iPhone test)
+
+You reported that many filters looked the same. Measuring confirmed it: the median preset had a near-twin only 4.7 ΔE away. Full research, method and sources are in **[FILTERS.md](FILTERS.md)**.
+
+- **Per-colour HSL in the engine** (8 hue bands: hue shift, saturation, brightness) and **tinted black lift**. These are what actually separate film and VSCO looks: greens toward olive or teal, skies toward cyan, protected skin, coloured blacks. [Certain they render]
+- **Library rebuilt: 47 → 78 presets** [Certain they render; the taste is my judgment]
+  - New collections: **Popular** (a curated mix of the most-used looks) and **Everyday** (VSCO-style looks modelled on A6, C1, M5, F2, HB1/HB2, AL3, KK1/KK2, P5, G3, J2, A4, A5, BBMA, ACG).
+  - New film looks: Portrait 400/160, Max 400, Plus 200, Mint 400, Slide 100, Punch 800, plus Fujifilm-style Reportage, Negative, Nostalgia and Cinema Flat.
+  - New in other collections: Drugstore '99, Toy Cam, Jade, Arctic, Fine Grain, Street 400.
+  - The other non-original presets were redesigned with distinct signatures.
+- **Your original eight are untouched** and still pixel-identical to the first version: TV Set, Golden 400, Sodium, Coast Fog, Observer, Expired, Bypass, Silver 400. [Certain: maximum pixel difference 0]
+- **Distinctness, measured on 4 stock photos:** median nearest-neighbour distance 4.7 → 6.4, and pairs under 6 went from 33 to 17 even though there are 31 more presets. Most remaining close pairs involve the originals or are B&W, which can only differ in tone. [Certain]
+- **Fixed during tuning:** green skin in Green 400, neon lips in Max 400 and Slide 50, and faces crushed to black in Noir and Push 1600. [Certain on the test photos]
+- **Filter layering:** tap **+ Layer** next to the strength, then pick a second preset to stack on top with its own strength. [Certain in Chromium]
+  - The thumbnails then preview your base plus each candidate. × removes the layer.
+  - Saved looks, batch, undo and drafts include the layer.
+  - The base strength scales the whole stack.
+- **Retired:** Cool 400 (saved looks and favourites that used it now get Cold Front).
+- **Audit tool for future tuning:** `node tools/filter-audit.js out.json photo.jpg`, then `node tools/filter-distance.js out.json 6`.
+- **Not verified:** how the looks land on your R10 and iPhone files. That's the first thing to check.
+
+---
+
 ## Structure
 
 - `index.html` is the app. `darkroom.html` now redirects to it, so an existing home-screen icon keeps working. [Certain in Chromium, Likely on an iOS home-screen icon]
@@ -25,7 +48,7 @@ Confidence tags: **[Certain]** verified by an automated test or screenshot · **
 
 ## Phase 1: preset library
 
-- **47 presets in 6 collections** [Certain]:
+- **47 presets in 6 collections** (since expanded to 78; see the update above) [Certain]:
   - Film (9): TV Set, Golden 400, Portrait 160, Gold 200, Green 400, Vivid 100, Slide 50, Cool 400, Coast Fog
   - Vintage (8): Expired, Faded '70s, Chrome 64, Summer '79, Mall '86, Album, Cross, Bypass
   - Retro camera (8): Disposable, Instant, Instant Cool, Digicam '04, CCD, Flash 35, Super 8, Camcorder

@@ -13,13 +13,13 @@ App.ICONS = I;
 
 /* ---------- Custom presets ---------- */
 const lookState = l => {
-  const st = App.normalize({ ...App.defaultState(), preset: l.preset, strength: l.strength, fx: l.fx, adjust: l.adjust, frame: l.frame });
+  const st = App.normalize({ ...App.defaultState(), preset: l.preset, strength: l.strength, fx: l.fx, adjust: l.adjust, frame: l.frame, layer: l.layer });
   st.stamp.on = !!(l.stamp && l.stamp.on); st.stamp.color = (l.stamp && l.stamp.color) || 0;
   return st;
 };
 function snapshotLook(name) {
   const s = JSON.parse(JSON.stringify(App.state));
-  return { id: 'look-' + Date.now().toString(36), name, preset: s.preset, strength: s.strength, fx: s.fx, adjust: s.adjust,
+  return { id: 'look-' + Date.now().toString(36), name, preset: s.preset, strength: s.strength, layer: s.layer, fx: s.fx, adjust: s.adjust,
     frame: s.frame, stamp: { on: s.stamp.on, color: s.stamp.color }, created: Date.now() };
 }
 function saveLookPrompt() {
@@ -233,7 +233,7 @@ App.modules.push({
   applyItem(it) {
     const l = App.looks.find(x => x.id === it.id); if (!l) return;
     const s = App.state, ls = lookState(l);
-    s.preset = ls.preset; s.strength = ls.strength; s.fx = ls.fx; s.adjust = ls.adjust; s.frame = ls.frame;
+    s.preset = ls.preset; s.strength = ls.strength; s.fx = ls.fx; s.adjust = ls.adjust; s.frame = ls.frame; s.layer = ls.layer;
     s.stamp.on = ls.stamp.on; s.stamp.color = ls.stamp.color;
     s.look = l.id;
   },

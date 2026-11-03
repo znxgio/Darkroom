@@ -247,3 +247,8 @@ input[type=range] { width: calc(100% - 32px); margin: 6px 16px 8px; accent-color
   .strip { min-height: 108px; }
   .frame canvas { width: 62px; height: 62px; }
 }
+
+/* Base / Layer switch in the presets readout */
+.readout .modes { display: flex; gap: 4px; flex: none; }
+.readout .modes .chip { padding: 5px 10px; font-size: 13px; }
+.readout .left output { margin-left: 2px; }

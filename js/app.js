@@ -32,6 +32,7 @@ App.defaultState = () => ({
   adjust: { exposure: 0, contrast: 0, highlights: 0, shadows: 0, whites: 0, blacks: 0, temp: 0, tint: 0,
     saturation: 0, vibrance: 0, fade: 0, clarity: 0, sharpen: 0, vignette: 0 },
   crop: { aspect: 'free', rect: [0, 0, 1, 1], rot: 0, flipH: false, flipV: false, straighten: 0 },
+  layer: { preset: null, strength: 0.6 },
   frame: 'preset',
   stamp: { on: false, text: '', auto: true, color: 0 },
   texts: []
@@ -46,6 +47,7 @@ App.normalize = function (s) {
   if (s.fx && s.fx.seed) out.fx.seed = s.fx.seed;
   out.adjust = { ...d.adjust, ...(s.adjust || {}) };
   out.crop = { ...d.crop, ...(s.crop || {}) };
+  out.layer = { ...d.layer, ...(s.layer || {}) };
   out.stamp = { ...d.stamp, ...(s.stamp || {}) };
   out.texts = Array.isArray(s.texts) ? s.texts : [];
   return out;
@@ -81,6 +83,7 @@ App.overlays = function (st, layout, opts = {}) {
 App.renderTo = function (src, st, o = {}) {
   return R.render(src, st, App.preset(st), {
     editing: o.editing, split: o.split, original: o.original, lean: o.lean,
+    layerPreset: st.layer && st.layer.preset ? P.get(st.layer.preset) : null,
     overlays: o.noOverlays ? null : (layout => App.overlays(st, layout, o))
   });
 };
@@ -124,7 +127,12 @@ App.renderThumb = function (id, st) {
   App.renderTo(thumbSrc, st, { noOverlays: true });
   App.thumbCanvas(id).getContext('2d').drawImage(view, 0, 0, 144, 144);
 };
-App.presetThumbState = id => ({ ...App.defaultState(), preset: id, frame: 'preset' });
+/* In layer mode a thumbnail previews the current base filter with that preset stacked on top */
+App.layerMode = false;
+App.presetThumbState = id => App.layerMode
+  ? { ...App.defaultState(), preset: App.state.preset, layer: { preset: id, strength: 1 }, frame: 'preset' }
+  : { ...App.defaultState(), preset: id, frame: 'preset' };
+App.invalidatePresetThumbs = () => { for (const p of P.PRESETS) staleThumbs.add(p.id); };
 /* Preset thumbnails are rendered lazily, only for the collection on screen, to keep loading light on iPhone */
 const staleThumbs = new Set();
 App.renderAllThumbs = function () {
@@ -138,7 +146,7 @@ App.renderAllThumbs = function () {
 };
 
 /* ---------- Collections + strip ---------- */
-let collection = U.lsGet('darkroom.collection', 'film');
+let collection = U.lsGet('darkroom.collection', 'popular');
 App.collections = function () {
   const list = [{ id: 'fav', name: 'Favorites' }, ...P.COLLECTIONS];
   for (const m of App.modules) if (m.collections) list.push(...m.collections());
@@ -147,7 +155,7 @@ App.collections = function () {
 App.itemsFor = function (cid) {
   if (cid === 'fav') return App.favs.map(id => App.itemById(id)).filter(Boolean);
   for (const m of App.modules) if (m.items) { const r = m.items(cid); if (r) return r; }
-  return P.PRESETS.filter(p => p.c === cid).map(p => ({ id: p.id, name: p.name, kind: 'preset' }));
+  return P.itemsIn(cid).map(p => ({ id: p.id, name: p.name, kind: 'preset' }));
 };
 App.itemById = function (id) {
   const p = P.BY_ID[id];
@@ -155,13 +163,13 @@ App.itemById = function (id) {
   for (const m of App.modules) if (m.itemById) { const r = m.itemById(id); if (r) return r; }
   return null;
 };
-App.activeId = () => App.state.look || App.state.preset;
+App.activeId = () => App.layerMode ? App.state.layer.preset : (App.state.look || App.state.preset);
 
 function buildCollections() {
   const bar = $('collections');
   bar.innerHTML = '';
   const cols = App.collections();
-  if (!cols.some(c => c.id === collection)) collection = 'film';
+  if (!cols.some(c => c.id === collection)) collection = 'popular';
   for (const c of cols) {
     const b = document.createElement('button');
     b.type = 'button'; b.className = 'chip'; b.setAttribute('role', 'tab');
@@ -213,22 +221,45 @@ App.paintStrip = function () {
 App.selectItem = function (id) {
   const it = App.itemById(id);
   if (!it) return;
-  if (it.kind === 'preset') { App.state.preset = id; App.state.look = null; }
-  else for (const m of App.modules) if (m.applyItem) m.applyItem(it);
+  if (it.kind === 'preset' && App.layerMode) {
+    if (id === App.state.preset) { App.notify('That\u2019s already the base filter', 1800); return; }
+    App.state.layer.preset = id;
+    if (!App.state.layer.strength) App.state.layer.strength = 0.6;
+  } else if (it.kind === 'preset') {
+    App.state.preset = id; App.state.look = null;
+    if (App.state.layer.preset === id) App.state.layer.preset = null;
+  } else {
+    App.setLayerMode(false);
+    for (const m of App.modules) if (m.applyItem) m.applyItem(it);
+  }
   App.commit();
   App.sync();
 };
 
 function syncPresets() {
   const id = App.activeId();
-  const it = App.itemById(id);
-  $('presetName').textContent = it ? it.name : App.preset().name;
-  $('favBtn').setAttribute('aria-pressed', App.favs.includes(id));
-  const v = Math.round(App.state.strength * 100);
+  const it = id && App.itemById(id);
+  const L = App.layerMode, lay = App.state.layer;
+  $('presetName').textContent = it ? it.name : (L ? 'Pick a layer' : App.preset().name);
+  $('favBtn').hidden = !it;
+  $('favBtn').setAttribute('aria-pressed', !!id && App.favs.includes(id));
+  const v = Math.round((L ? lay.strength : App.state.strength) * 100);
   $('strength').value = v;
-  $('strengthLabel').textContent = `Strength ${v}%`;
+  $('strength').disabled = L && !lay.preset;
+  $('strengthLabel').textContent = `${v}%`;
+  $('modeBase').setAttribute('aria-selected', !L);
+  $('modeLayer').setAttribute('aria-selected', L);
+  $('modeLayer').textContent = lay.preset ? 'Layer' : '+ Layer';
+  $('layerOff').hidden = !lay.preset;
   App.paintStrip();
 }
+App.setLayerMode = function (on) {
+  if (App.layerMode === on) return;
+  App.layerMode = on;
+  App.invalidatePresetThumbs();
+  syncPresets();
+  if (on && !App.state.layer.preset) App.notify('Tap a filter to stack it on top of ' + App.preset().name, 2500);
+};
 App.toggleFav = function (id = App.activeId()) {
   const i = App.favs.indexOf(id);
   if (i >= 0) App.favs.splice(i, 1); else App.favs.push(id);
@@ -510,9 +541,13 @@ App.start = function () {
     for (const u of s.querySelectorAll('img')) if (u.src.startsWith('blob:')) URL.revokeObjectURL(u.src);
   });
   $('favBtn').addEventListener('click', () => App.toggleFav());
+  $('modeBase').addEventListener('click', () => App.setLayerMode(false));
+  $('modeLayer').addEventListener('click', () => App.setLayerMode(true));
+  $('layerOff').addEventListener('click', () => { App.state.layer.preset = null; App.setLayerMode(false); App.commit(); App.sync(); });
   $('strength').addEventListener('input', e => {
-    App.state.strength = e.target.value / 100;
-    $('strengthLabel').textContent = `Strength ${e.target.value}%`;
+    if (App.layerMode) App.state.layer.strength = e.target.value / 100;
+    else App.state.strength = e.target.value / 100;
+    $('strengthLabel').textContent = `${e.target.value}%`;
     App.renderPreview();
   });
   $('strength').addEventListener('change', App.commit);

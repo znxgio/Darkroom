@@ -10,7 +10,8 @@ A film-style photo editor for iPhone Safari, inspired by Esti. Quick film looks 
 
 ## Features
 
-- **47 film presets** in collections: Film, Vintage, Retro camera, Cinematic, B&W and Soft. Each has live thumbnails and a strength slider. Star presets to add them to **Favorites**.
+- **78 film presets** in collections: Popular, Everyday (VSCO-style), Film, Vintage, Retro camera, Cinematic, B&W and Soft. Each has live thumbnails and a strength slider. Star presets to add them to **Favorites**. See [FILTERS.md](FILTERS.md) for the research behind them.
+- **Filter layering:** stack a second preset on top of the first, with its own strength.
 - **Effects** you can stack on any preset:
   - Grain, dust & scratches, light leaks, film burn
   - Halation, bloom, VHS, RGB split, blur/soft focus, fisheye, prism

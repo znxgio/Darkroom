@@ -35,8 +35,36 @@ void main(){
 const FS_GRADE = `precision highp float;
 varying vec2 v_uv;
 uniform sampler2D u_src, u_lut;
-uniform float u_exposure, u_contrast, u_saturation, u_scale, u_fade, u_shadowAmt, u_hiAmt;
-uniform vec3 u_mix, u_shadowTint, u_hiTint;
+uniform float u_exposure, u_contrast, u_saturation, u_scale, u_fade, u_shadowAmt, u_hiAmt, u_hslOn, u_amount;
+uniform vec3 u_mix, u_shadowTint, u_hiTint, u_lift;
+uniform vec3 u_hsl[9];   // per hue band: hue shift (turns), saturation multiplier, luminance shift; [8] repeats [0]
+uniform float u_hc[9];   // band centres in turns: red, orange, yellow, green, aqua, blue, purple, magenta, red
+vec3 rgb2hsv(vec3 c){
+  vec4 K = vec4(0.0, -1.0 / 3.0, 2.0 / 3.0, -1.0);
+  vec4 p = mix(vec4(c.bg, K.wz), vec4(c.gb, K.xy), step(c.b, c.g));
+  vec4 q = mix(vec4(p.xyw, c.r), vec4(c.r, p.yzx), step(p.x, c.r));
+  float d = q.x - min(q.w, q.y);
+  return vec3(abs(q.z + (q.w - q.y) / (6.0 * d + 1.0e-10)), d / (q.x + 1.0e-10), q.x);
+}
+vec3 hsv2rgb(vec3 c){
+  vec3 p = abs(fract(c.xxx + vec3(1.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0);
+  return c.z * mix(vec3(1.0), clamp(p - 1.0, 0.0, 1.0), c.y);
+}
+vec3 hslBands(vec3 c){
+  vec3 h = rgb2hsv(clamp(c, 0.0, 1.0));
+  vec3 a = vec3(0.0, 1.0, 0.0);
+  for (int i = 0; i < 8; i++) {
+    if (h.x >= u_hc[i] && h.x < u_hc[i + 1]) {
+      float t = (h.x - u_hc[i]) / (u_hc[i + 1] - u_hc[i]);
+      a = mix(u_hsl[i], u_hsl[i + 1], t * t * (3.0 - 2.0 * t));
+    }
+  }
+  float w = smoothstep(0.02, 0.25, h.y);      // leave near-greys alone
+  h.x = fract(h.x + a.x * w);
+  h.y = clamp(h.y * mix(1.0, a.y, w), 0.0, 1.0);
+  vec3 o = hsv2rgb(h);
+  return o * (1.0 + a.z * w);
+}
 vec3 curve(vec3 x){ x = (clamp(x, 0.0, 1.0) * 255.0 + 0.5) / 256.0;
   return vec3(texture2D(u_lut, vec2(x.r, 0.5)).r, texture2D(u_lut, vec2(x.g, 0.5)).g, texture2D(u_lut, vec2(x.b, 0.5)).b); }
 vec3 softLight(vec3 b, vec3 s){
@@ -44,16 +72,18 @@ vec3 softLight(vec3 b, vec3 s){
   return mix(b + (2.0 * s - 1.0) * (d - b), b - (1.0 - 2.0 * s) * b * (1.0 - b), step(s, vec3(0.5)));
 }
 void main(){
-  vec3 c = texture2D(u_src, v_uv).rgb * exp2(u_exposure);
+  vec3 src = texture2D(u_src, v_uv).rgb;
+  vec3 c = src * exp2(u_exposure);
+  if (u_hslOn > 0.5) c = hslBands(c);
   c = curve(c);
   float l = dot(c, vec3(0.2125, 0.7154, 0.0721));
   c = mix(vec3(l), c, u_saturation);
   c = clamp((c - 0.5) * u_contrast + 0.5, 0.0, 1.0);
-  c = clamp(c * u_mix * u_scale + u_fade, 0.0, 1.0);
+  c = clamp(c * u_mix * u_scale + u_fade + u_lift, 0.0, 1.0);
   float l2 = dot(c, vec3(0.2126, 0.7152, 0.0722));
   c = mix(c, softLight(c, u_shadowTint), (1.0 - l2) * u_shadowAmt);
   c = mix(c, softLight(c, u_hiTint), l2 * u_hiAmt);
-  gl_FragColor = vec4(clamp(c, 0.0, 1.0), 1.0);
+  gl_FragColor = vec4(mix(src, clamp(c, 0.0, 1.0), u_amount), 1.0);
 }`;
 
 /* Bright pass (threshold >= 0) or plain downsample copy (threshold < 0) */
@@ -369,6 +399,7 @@ function use(prog, uniforms, textures) {
   for (const [n, v] of Object.entries(uniforms)) {
     const l = loc(n); if (l === null) continue;
     if (typeof v === 'number') gl.uniform1f(l, v);
+    else if (v instanceof Float32Array) (n.startsWith('u_hsl') ? gl.uniform3fv(l, v) : gl.uniform1fv(l, v));
     else if (v.length === 2) gl.uniform2fv(l, v);
     else if (v.length === 3) gl.uniform3fv(l, v);
     else gl.uniform4fv(l, v);
@@ -524,6 +555,29 @@ const FX_LEAK_COL = [
   [[1, 1, 1], [1, 1, 1]]                   // rainbow (computed in shader)
 ];
 
+/* Hue bands (Lightroom-style): red, orange, yellow, green, aqua, blue, purple, magenta */
+const HSL_BANDS = ['red', 'orange', 'yellow', 'green', 'aqua', 'blue', 'purple', 'magenta'];
+const HSL_CENTRES = [0, 30, 60, 120, 180, 240, 275, 315, 360].map(d => d / 360);
+R.HSL_BANDS = HSL_BANDS;
+function hslUniforms(hsl) {
+  const out = [];
+  for (const b of HSL_BANDS) {
+    const v = (hsl && hsl[b]) || [0, 1, 0];          // [hue shift in degrees, saturation x, luminance +/-]
+    out.push(v[0] / 360, v[1] == null ? 1 : v[1], v[2] || 0);
+  }
+  out.push(out[0], out[1], out[2]);
+  return new Float32Array(out);
+}
+function gradeUniforms(p, amount) {
+  return {
+    u_exposure: p.exposure, u_contrast: p.contrast, u_saturation: p.saturation, u_scale: p.scale, u_fade: p.fade,
+    u_mix: p.mix, u_shadowTint: p.shadowTint || [.5, .5, .5], u_shadowAmt: p.shadowTint ? p.shadowAmount : 0,
+    u_hiTint: p.highlightTint || [.5, .5, .5], u_hiAmt: p.highlightTint ? p.highlightAmount : 0,
+    u_lift: p.lift || [0, 0, 0], u_hslOn: p.hsl ? 1 : 0, u_amount: amount,
+    'u_hsl[0]': hslUniforms(p.hsl), 'u_hc[0]': new Float32Array(HSL_CENTRES)
+  };
+}
+
 function blurChain(srcTex, A, B, bright, spread, passes) {
   use(progBright, bright, [['u_src', srcTex]]);
   drawTo(A, A.w, A.h);
@@ -560,17 +614,22 @@ R.render = function (src, st, p, o = {}) {
   const original = !!o.original;
   const strength = original ? 0 : st.strength;
   const grade = target(src, 'grade', w, h);
-  use(progGrade, {
-    u_exposure: p.exposure, u_contrast: p.contrast, u_saturation: p.saturation, u_scale: p.scale, u_fade: p.fade,
-    u_mix: p.mix, u_shadowTint: p.shadowTint || [.5, .5, .5], u_shadowAmt: p.shadowTint ? p.shadowAmount : 0,
-    u_hiTint: p.highlightTint || [.5, .5, .5], u_hiAmt: p.highlightTint ? p.highlightAmount : 0
-  }, [['u_src', baseTex], ['u_lut', lutFor(p)]]);
+  use(progGrade, gradeUniforms(p, 1), [['u_src', baseTex], ['u_lut', lutFor(p)]]);
   drawTo(grade, w, h);
+  let gradeTex = grade.tex;
+  const layerP = !original && o.layerPreset;
+  if (layerP && st.layer && st.layer.strength > 0) {
+    // a second filter stacked on the first, blended by its own strength
+    const g2 = target(src, 'grade2', w, h);
+    use(progGrade, gradeUniforms(layerP, st.layer.strength), [['u_src', grade.tex], ['u_lut', lutFor(layerP)]]);
+    drawTo(g2, w, h);
+    gradeTex = g2.tex;
+  } else dropTarget(src, 'grade2');
 
   let glowTex = null;
   if (p.halation > 0) {
     const A = target(src, 'glowA', qw, qh), B = target(src, 'glowB', qw, qh);
-    blurChain(grade.tex, A, B, { u_amount: p.halation, u_thresh: p.halThreshold, u_tint: p.halTint }, Math.max(1, 1.6 * unit), 2);
+    blurChain(gradeTex, A, B, { u_amount: p.halation, u_thresh: p.halThreshold, u_tint: p.halTint }, Math.max(1, 1.6 * unit), 2);
     glowTex = A.tex;
   }
 
@@ -594,9 +653,9 @@ R.render = function (src, st, p, o = {}) {
     u_adjB: [a('whites'), a('blacks'), a('temp'), a('tint')],
     u_adjC: [a('saturation'), a('vibrance'), a('fade'), a('clarity')],
     u_adjD: [a('sharpen'), a('vignette'), 0, 0]
-  }, [['u_orig', baseTex], ['u_grade', grade.tex], ['u_glow', glowTex], ['u_cblur', cblurTex]]);
+  }, [['u_orig', baseTex], ['u_grade', gradeTex], ['u_glow', glowTex], ['u_cblur', cblurTex]]);
   drawTo(lookT, w, h);
-  if (o.lean) dropTarget(src, 'grade');
+  if (o.lean) { dropTarget(src, 'grade'); dropTarget(src, 'grade2'); }
 
   const f = k => (original || !fx[k] ? 0 : fx[k].amount || 0);
   let fxBlurTex = null;

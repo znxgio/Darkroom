@@ -1,0 +1,22 @@
+// Usage: node tools/filter-distance.js out.json [threshold]   → closest preset pairs by mean CIELAB ΔE
+const fs = require('fs');
+const d = JSON.parse(fs.readFileSync(process.argv[2] || 'audit.json'));
+const lin = v => { v /= 255; return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); };
+const f = t => t > 0.008856 ? Math.cbrt(t) : 7.787 * t + 16 / 116;
+const lab = a => { const o = []; for (let i = 0; i < a.length; i += 4) { const r = lin(a[i]), g = lin(a[i+1]), b = lin(a[i+2]);
+  const X = (r*0.4124+g*0.3576+b*0.1805)/0.95047, Y = r*0.2126+g*0.7152+b*0.0722, Z = (r*0.0193+g*0.1192+b*0.9505)/1.08883;
+  o.push([116*f(Y)-16, 500*(f(X)-f(Y)), 200*(f(Y)-f(Z))]); } return o; };
+const L = {}; for (const k in d) L[k] = lab(d[k]);
+const ids = Object.keys(L).filter(k => k !== '_orig');
+const dist = (a, b) => { let s = 0; for (let i = 0; i < a.length; i++) s += Math.hypot(a[i][0]-b[i][0], a[i][1]-b[i][1], a[i][2]-b[i][2]); return s / a.length; };
+const pairs = [];
+for (let i = 0; i < ids.length; i++) for (let j = i + 1; j < ids.length; j++) pairs.push([dist(L[ids[i]], L[ids[j]]), ids[i], ids[j]]);
+pairs.sort((a, b) => a[0] - b[0]);
+const th = +(process.argv[3] || 6);
+const close = pairs.filter(p => p[0] < th);
+console.log(`presets ${ids.length}, pairs ${pairs.length}, pairs with mean dE < ${th}: ${close.length}`);
+console.log('closest 15:', pairs.slice(0, 15).map(p => `${p[1]}~${p[2]} ${p[0].toFixed(1)}`).join(', '));
+const nn = ids.map(id => [id, Math.min(...pairs.filter(p => p[1] === id || p[2] === id).map(p => p[0])), dist(L[id], L._orig)]);
+nn.sort((a, b) => a[1] - b[1]);
+console.log('nearest-neighbour dE (lowest first):', nn.map(n => `${n[0]} ${n[1].toFixed(1)}`).join(', '));
+console.log('median NN dE', nn.map(n => n[1]).sort((a,b)=>a-b)[Math.floor(nn.length/2)].toFixed(1), '| median dE vs original', nn.map(n => n[2]).sort((a,b)=>a-b)[Math.floor(nn.length/2)].toFixed(1));
