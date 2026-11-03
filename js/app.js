@@ -479,7 +479,20 @@ App.start = function () {
     $('emptyWrap').appendChild(p);
   }
   for (const id of ['openBtn', 'emptyBtn']) $(id).addEventListener('click', () => U.crumb('Choosing photo'));
-  window.addEventListener('focus', () => { if (U.crumb.read() && U.crumb.read().s === 'Choosing photo' && !loading) setTimeout(() => { if (!loading) U.crumb(null); }, 1500); });
+  // After the picker closes: if no photo arrived, say so (some in-app viewers show the picker but never pass the photo on)
+  const pickerClosed = () => {
+    const c = U.crumb.read();
+    if (!c || c.s !== 'Choosing photo' || loading) return;
+    setTimeout(() => {
+      if (loading || App.photo && handled) { return; }
+      const f = $('file').files && $('file').files[0];
+      if (f) return;
+      U.crumb(null);
+      App.notify('No photo came through. If you did pick one, this viewer can\u2019t pass photos to web pages. Open Darkroom in Safari instead.', 12000);
+    }, 1500);
+  };
+  window.addEventListener('focus', pickerClosed);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) pickerClosed(); });
   buildCollections();
   buildStrip();
   // Some iOS web views fire only one of these, so listen for both, plus a focus fallback.
