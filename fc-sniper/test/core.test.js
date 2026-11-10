@@ -293,3 +293,135 @@ test('planMaxBuy: discount under avg, capped by coins', () => {
   assert.deepEqual(c.planMaxBuy(0, 10, 1e6), { maxBuy: 0, cappedByCoins: false });
   assert.equal(c.planMaxBuy(1000, 0, 1e6).maxBuy, 1000);
 });
+
+// ---- squads -----------------------------------------------------------------
+
+test('squadRating matches EA formula', () => {
+  assert.equal(c.squadRating(Array(11).fill(83)), 83);
+  // ten 82s + one 92 — the high card pulls the rating up via excess
+  assert.equal(c.squadRating([...Array(10).fill(82), 92]), 83);
+  assert.equal(c.squadRating([...Array(10).fill(82), 83]), 82);
+  assert.equal(c.squadRating([84, 84, 84, 83, 83, 83, 83, 82, 82, 82, 82]), 83);
+  assert.equal(c.squadRating([]), 0);
+});
+
+test('squadChemistry: league/nation/club thresholds, out of position, icons', () => {
+  const p = (nationId, leagueId, teamId, extra = {}) => ({ nationId, leagueId, teamId, inPosition: true, ...extra });
+  // 11 players same league, nation, club → all 3 chem
+  assert.equal(c.squadChemistry(Array(11).fill(0).map(() => p(1, 13, 10))).total, 33);
+  // all different → 0
+  assert.equal(c.squadChemistry(Array(11).fill(0).map((_, i) => p(i + 1, i + 100, i + 200))).total, 0);
+  // 3 from one league → 1 each (league needs 3), 2 from a nation → +1
+  const r = c.squadChemistry([p(1, 13, 1), p(1, 13, 2), p(2, 13, 3), p(3, 14, 4)]);
+  assert.deepEqual(r.each, [2, 2, 1, 0]);
+  // out of position gets 0 and doesn't count for others
+  const r2 = c.squadChemistry([p(1, 13, 1), p(1, 13, 2), p(1, 13, 3, { inPosition: false })]);
+  assert.deepEqual(r2.each, [1, 1, 0]);
+  // icon: 3 chem and counts double for nation
+  const r3 = c.squadChemistry([p(5, 2118, 0), p(5, 13, 1)]);
+  assert.deepEqual(r3.each, [3, 1]);
+});
+
+test('topValues', () => {
+  assert.deepEqual(c.topValues([{ l: 1 }, { l: 2 }, { l: 1 }, null], 'l', 1), [{ value: 1, count: 2 }]);
+});
+
+test('rankUpgrades prefers rating gain that keeps chemistry', () => {
+  // different nations and clubs, so league is the only chemistry link
+  const mk = (id, rating, leagueId, pos) => ({ id, name: `P${id}`, rating, nationId: id, leagueId, teamId: id, positions: [pos] });
+  const squad = Array.from({ length: 11 }, (_, i) => ({ position: i === 10 ? 'ST' : `X${i}`, player: mk(i + 1, i === 10 ? 75 : 85, 13, i === 10 ? 'ST' : `X${i}`) }));
+  const cands = [
+    { ...mk(100, 86, 13, 'ST'), price: 20000, source: 'market' }, // same league
+    { ...mk(101, 87, 99, 'ST'), price: 25000, source: 'market' }, // other league, loses chem
+    { ...mk(102, 80, 13, 'ST'), price: 0, source: 'club' }, // owned
+    { ...mk(103, 90, 13, 'CB'), price: 1000, source: 'market' }, // wrong position
+    { ...mk(1, 85, 13, 'ST'), price: 0, source: 'club' }, // already in squad
+  ];
+  const r = c.rankUpgrades(squad, 10, cands, { budget: 50000 });
+  assert.equal(r[0].id, 100); // +1 rating and keeps the league link
+  const other = r.find((x) => x.id === 101);
+  assert.ok(!other || other.chemGain < 0, 'other-league striker costs chemistry');
+  assert.ok(r.every((x) => x.id !== 103 && x.id !== 1));
+  assert.ok(r[0].ratingGain >= 1);
+});
+
+// ---- SBC ------------------------------------------------------------------------
+
+const clubPool = (spec) => {
+  let id = 1;
+  const out = [];
+  for (const [rating, n, extra = {}] of spec) for (let i = 0; i < n; i++) {
+    const p = { id: id++, rating, rare: false, untradeable: true, ...extra };
+    p.cost = c.playerCost(p);
+    out.push(p);
+  }
+  return out;
+};
+
+test('parseRequirements', () => {
+  const r = c.parseRequirements([
+    { key: 'TEAM_RATING', scope: 'GREATER', values: [84], count: -1 },
+    { key: 'PLAYER_QUALITY', scope: 'GREATER', values: [3], count: -1 },
+    { key: 'PLAYER_RARITY_GROUP', scope: 'GREATER', values: [4], count: 2 },
+    { key: 'CHEMISTRY_POINTS', scope: 'GREATER', values: [0], count: -1 },
+  ]);
+  assert.deepEqual(r.unsupported, []);
+  assert.equal(r.constraints.teamRating, 84);
+  assert.equal(r.constraints.minQuality, 3);
+  assert.equal(r.constraints.rareMin, 2);
+  const bad = c.parseRequirements([{ key: 'SAME_LEAGUE_COUNT', scope: 'GREATER', values: [3], count: 5 }, { key: 'CHEMISTRY_POINTS', scope: 'GREATER', values: [20] }]);
+  assert.deepEqual(bad.unsupported, ['same league count', 'chemistry']);
+});
+
+test('solveSbc reaches team rating with the cheapest mix', () => {
+  const pool = clubPool([[86, 2], [85, 3], [84, 6], [83, 10], [82, 10], [81, 5], [75, 20]]);
+  const k = c.parseRequirements([{ key: 'TEAM_RATING', scope: 'GREATER', values: [84], count: -1 }]).constraints;
+  const sol = c.solveSbc(pool, k);
+  assert.ok(sol);
+  assert.equal(sol.players.length, 11);
+  assert.ok(sol.rating >= 84, `rating ${sol.rating}`);
+  assert.equal(new Set(sol.players.map((p) => p.id)).size, 11);
+  // cheaper than just using eleven 84s or better
+  const naive = pool.filter((p) => p.rating >= 84).sort((a, b) => a.rating - b.rating).slice(0, 11).reduce((a, p) => a + p.cost, 0);
+  assert.ok(sol.cost <= naive);
+});
+
+test('solveSbc prefers duplicates/storage, respects rare minimum and quality', () => {
+  const pool = clubPool([[83, 11, { untradeable: false }], [83, 11, { storage: true }], [76, 4, { rare: true }], [70, 20]]);
+  const sol = c.solveSbc(pool, c.parseRequirements([{ key: 'TEAM_RATING', scope: 'GREATER', values: [83] }]).constraints);
+  assert.ok(sol.players.every((p) => p.storage), 'uses storage players first');
+
+  const gold = c.parseRequirements([{ key: 'PLAYER_QUALITY', scope: 'GREATER', values: [3], count: -1 }, { key: 'PLAYER_RARITY_GROUP', scope: 'GREATER', values: [4], count: 3 }], 5).constraints;
+  const s2 = c.solveSbc(pool, gold);
+  assert.equal(s2.players.length, 5);
+  assert.ok(s2.players.every((p) => p.rating >= 75));
+  assert.ok(s2.players.filter((p) => p.rare).length >= 3);
+});
+
+test('solveSbc returns null when impossible', () => {
+  const pool = clubPool([[80, 15]]);
+  assert.equal(c.solveSbc(pool, c.parseRequirements([{ key: 'TEAM_RATING', scope: 'GREATER', values: [84] }]).constraints), null);
+  assert.equal(c.solveSbc(clubPool([[84, 5]]), c.parseRequirements([]).constraints), null);
+});
+
+test('solveSbc is fast on a big club', () => {
+  const spec = [];
+  for (let r = 70; r <= 90; r++) spec.push([r, 25]);
+  const pool = clubPool(spec);
+  const t = Date.now();
+  const sol = c.solveSbc(pool, c.parseRequirements([{ key: 'TEAM_RATING', scope: 'GREATER', values: [86] }]).constraints);
+  assert.ok(sol && sol.rating >= 86);
+  assert.ok(Date.now() - t < 3000, `took ${Date.now() - t}ms`);
+});
+
+// ---- pack sorting ---------------------------------------------------------------
+
+test('sortItem', () => {
+  assert.equal(c.sortItem({ duplicate: false }), 'club');
+  assert.equal(c.sortItem({ duplicate: true, player: true, untradeable: true }), 'storage');
+  assert.equal(c.sortItem({ duplicate: true, player: true, untradeable: true }, { storageFull: true }), 'keep');
+  assert.equal(c.sortItem({ duplicate: true, player: true, untradeable: false }), 'transfer');
+  assert.equal(c.sortItem({ duplicate: true, player: true, untradeable: true, rating: 70 }, { quickSellBelow: 75 }), 'quicksell');
+  assert.equal(c.sortItem({ duplicate: true, player: true, untradeable: true, rating: 70, special: true }, { quickSellBelow: 75 }), 'storage');
+  assert.equal(c.sortItem({ duplicate: true, player: false, untradeable: true }), 'keep');
+});

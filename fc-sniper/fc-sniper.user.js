@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         FC Sniper
 // @namespace    https://github.com/znxgio/darkroom
-// @version      1.0.1
-// @description  Transfer-market sniper for the EA SPORTS FC Ultimate Team Web App — price checks, auto max buy, alerts, auto-listing, history and built-in safety limits.
+// @version      1.1.0
+// @description  Sniper, pack opener, SBC solver and team upgrade advisor for the EA SPORTS FC Ultimate Team Web App, with built-in safety limits.
 // @match        https://www.ea.com/*ultimate-team/web-app*
 // @match        https://www.ea.com/ea-sports-fc/ultimate-team/web-app*
 // @run-at       document-idle
@@ -22,8 +22,10 @@
  *   2. Snipe loop: searches each player in turn with a cache-busting min bid,
  *      buys (or just alerts on) listings at or under the max, optionally
  *      relists them for profit, then waits a random delay.
- *   3. Safety: enforced minimum delays and rests, session and daily limits, and
- *      lockouts after a captcha or market limit.
+ *   3. Tasks: open your unopened packs and sort the items, solve SBCs from your
+ *      cheapest fodder, and suggest upgrades for your squad's weakest spots.
+ *   4. Safety: enforced minimum delays and rests, session and daily limits, and
+ *      lockouts after a captcha or market limit (shared by every feature).
  *
  * Layout: pure, unit-tested logic first (test/core.test.js), then the runtime
  * (Web App adapter, engine, UI). Using automation on the Web App breaks EA's
@@ -175,6 +177,7 @@
         description: `Buy Now **${fmt(d.price)}** (your max ${fmt(d.maxBuy)})` },
       stop: { title: '⏹ Sniper stopped', color: 0xff6b6b, description: d.reason || '' },
       test: { title: '🔔 FC Sniper connected', color: 0x5aa9ff, description: 'Notifications are working.' },
+      info: { title: d.title || 'FC Sniper', color: 0x5aa9ff, description: d.text || '' },
     }[kind] || { title: kind, description: '' };
     return { username: 'FC Sniper', embeds: [{ ...embed, timestamp: new Date(d.at || Date.now()).toISOString() }] };
   }
@@ -413,6 +416,281 @@
     return { ok: true };
   }
 
+  // ---- Squads: rating & chemistry ------------------------------------------------
+
+  /** EA squad rating: floor(round(sum + excess over the average) / 11). */
+  function squadRating(ratings, size = 11) {
+    const list = ratings.filter((r) => r > 0);
+    if (!list.length) return 0;
+    const sum = list.reduce((a, b) => a + b, 0);
+    const avg = sum / size;
+    const excess = list.reduce((a, r) => a + Math.max(0, r - avg), 0);
+    return Math.floor(Math.round(sum + excess) / size);
+  }
+
+  const ICONS_LEAGUE = 2118;
+  const CHEM_STEPS = { club: [2, 5, 8], nation: [2, 5, 8], league: [3, 5, 8] };
+  const chemPoints = (count, steps) => steps.filter((s) => count >= s).length;
+
+  /**
+   * Chemistry (FC 24+ system): each in-position player earns club, nation and
+   * league points from how many teammates share them, capped at 3. Icons
+   * always have 3 and count double for their nation.
+   * players: [{ nationId, leagueId, teamId, inPosition, icon }]
+   */
+  function squadChemistry(players) {
+    const counts = { club: new Map(), nation: new Map(), league: new Map() };
+    const bump = (m, k, n = 1) => { if (k) m.set(k, (m.get(k) || 0) + n); };
+    for (const p of players) {
+      if (!p || !p.inPosition) continue;
+      const icon = p.icon || p.leagueId === ICONS_LEAGUE;
+      bump(counts.nation, p.nationId, icon ? 2 : 1);
+      if (!icon) { bump(counts.club, p.teamId); bump(counts.league, p.leagueId); }
+    }
+    const each = players.map((p) => {
+      if (!p || !p.inPosition) return 0;
+      if (p.icon || p.leagueId === ICONS_LEAGUE) return 3;
+      return Math.min(3,
+        chemPoints(counts.club.get(p.teamId) || 0, CHEM_STEPS.club)
+        + chemPoints(counts.nation.get(p.nationId) || 0, CHEM_STEPS.nation)
+        + chemPoints(counts.league.get(p.leagueId) || 0, CHEM_STEPS.league));
+    });
+    return { each, total: each.reduce((a, b) => a + b, 0) };
+  }
+
+  /** Most common value of `key` among players, e.g. the squad's main league. */
+  function topValues(players, key, n = 2) {
+    const m = new Map();
+    players.forEach((p) => { if (p && p[key]) m.set(p[key], (m.get(p[key]) || 0) + 1); });
+    return [...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, n).map(([v, count]) => ({ value: v, count }));
+  }
+
+  /**
+   * Ranks possible upgrades for one squad slot.
+   * squad: [{ position, player }] (11 slots); slotIndex: slot to replace;
+   * candidates: [{ id, name, rating, nationId, leagueId, teamId, positions:[..], price, source }]
+   * Returns candidates with { ratingAfter, chemAfter, ratingGain, chemGain, score }, best first.
+   */
+  function rankUpgrades(squad, slotIndex, candidates, opts = {}) {
+    const inPos = (pl, pos) => !!pl && (pl.positions || []).includes(pos);
+    const base = squad.map((s) => s.player);
+    const baseRating = squadRating(base.map((p) => (p ? p.rating : 0)));
+    const baseChem = squadChemistry(squad.map((s) => s.player && { ...s.player, inPosition: inPos(s.player, s.position) })).total;
+    const taken = new Set(base.filter(Boolean).map((p) => p.id));
+    const pos = squad[slotIndex].position;
+    return candidates
+      .filter((c) => !taken.has(c.id) && inPos(c, pos))
+      .map((c) => {
+        const after = squad.map((s, i) => (i === slotIndex ? c : s.player));
+        const ratingAfter = squadRating(after.map((p) => (p ? p.rating : 0)));
+        const chemAfter = squadChemistry(after.map((p, i) => p && { ...p, inPosition: inPos(p, squad[i].position) })).total;
+        const ratingGain = ratingAfter - baseRating;
+        const chemGain = chemAfter - baseChem;
+        const playerGain = c.rating - ((squad[slotIndex].player && squad[slotIndex].player.rating) || 0);
+        // Rating matters most, chemistry next; owned players are free.
+        const price = c.source === 'club' ? 0 : (c.price || 0);
+        const score = ratingGain * 10 + playerGain * 2 + chemGain * 3 - price / Math.max(1000, opts.budget || 100000) * 4;
+        return { ...c, ratingAfter, chemAfter, ratingGain, chemGain, playerGain, score };
+      })
+      .filter((c) => c.playerGain > 0 && (opts.allowChemLoss || c.chemGain >= -(opts.maxChemLoss ?? 2)))
+      .sort((a, b) => b.score - a.score);
+  }
+
+  // ---- SBC solving ------------------------------------------------------------------
+
+  /** Rough coin value of a player by rating — used to spend the cheapest players first. */
+  function fodderValue(rating) {
+    const table = { 75: 300, 76: 350, 77: 400, 78: 500, 79: 650, 80: 850, 81: 1100, 82: 1500, 83: 2500, 84: 4500, 85: 7500, 86: 12000, 87: 18000, 88: 26000, 89: 36000, 90: 50000 };
+    if (rating < 75) return 100 + rating;
+    return table[rating] || Math.round(50000 * 1.4 ** (rating - 90));
+  }
+
+  /**
+   * How costly it is to give a club player away. Duplicates and SBC-storage
+   * players are nearly free (you can't keep them), untradeables are cheaper
+   * than tradeables, specials are expensive.
+   */
+  function playerCost(p) {
+    let c = fodderValue(p.rating);
+    if (p.duplicate || p.storage) c *= 0.2;
+    else if (p.untradeable) c *= 0.6;
+    if (p.special) c *= 4;
+    return Math.max(1, Math.round(c));
+  }
+
+  const QUALITY = { bronze: 1, silver: 2, gold: 3 };
+  const qualityOf = (rating) => (rating >= 75 ? 3 : rating >= 65 ? 2 : 1);
+
+  /**
+   * Turns EA requirements into solver constraints.
+   * reqs: [{ key: 'TEAM_RATING', scope: 'GREATER'|'LOWER'|'EXACT', values: [..], count }]
+   * Requirements the solver can't satisfy yet are listed in `unsupported`.
+   */
+  function parseRequirements(reqs, playersRequired = 11) {
+    const c = { players: playersRequired, teamRating: 0, minOvr: 0, maxOvr: 99, minQuality: 0, maxQuality: 9, rareMin: 0, chemMin: 0 };
+    const unsupported = [];
+    for (const r of reqs || []) {
+      const v = Number((r.values || [])[0]);
+      const all = !(r.count > 0); // count -1 means "every player"
+      switch (r.key) {
+        case 'TEAM_RATING':
+          if (r.scope === 'LOWER') unsupported.push('max team rating'); else c.teamRating = Math.max(c.teamRating, v);
+          break;
+        case 'PLAYER_COUNT':
+        case 'SCOPE':
+          break;
+        case 'PLAYER_MIN_OVR': c.minOvr = Math.max(c.minOvr, v); break;
+        case 'PLAYER_MAX_OVR': c.maxOvr = Math.min(c.maxOvr, v); break;
+        case 'PLAYER_EXACT_OVR': c.minOvr = Math.max(c.minOvr, v); c.maxOvr = Math.min(c.maxOvr, v); break;
+        case 'PLAYER_QUALITY':
+        case 'PLAYER_LEVEL':
+          if (!all) { unsupported.push('quality count'); break; }
+          if (r.scope === 'GREATER') c.minQuality = Math.max(c.minQuality, v);
+          else if (r.scope === 'LOWER') c.maxQuality = Math.min(c.maxQuality, v);
+          else { c.minQuality = Math.max(c.minQuality, v); c.maxQuality = Math.min(c.maxQuality, v); }
+          break;
+        case 'PLAYER_RARITY_GROUP':
+          if (r.scope === 'LOWER') unsupported.push('max rares'); else c.rareMin = Math.max(c.rareMin, all ? playersRequired : r.count);
+          break;
+        case 'CHEMISTRY_POINTS':
+        case 'ALL_PLAYERS_CHEMISTRY_POINTS':
+          if (v > 0) unsupported.push('chemistry');
+          break;
+        case 'PLAYER_TRADABILITY':
+          break; // untradeables are allowed everywhere; tradeables only if you allow them
+        default:
+          unsupported.push(String(r.key || 'unknown').toLowerCase().replace(/_/g, ' '));
+      }
+    }
+    return { constraints: c, unsupported: [...new Set(unsupported)] };
+  }
+
+  /**
+   * Picks the cheapest set of club players that meets the constraints.
+   * pool: [{ id, rating, rare, cost, ... }]. Returns { players, rating, cost } or null.
+   */
+  function solveSbc(pool, k) {
+    const eligible = pool.filter((p) => p.rating >= k.minOvr && p.rating <= k.maxOvr
+      && qualityOf(p.rating) >= (k.minQuality || 0) && qualityOf(p.rating) <= (k.maxQuality || 9));
+    const n = k.players;
+    if (eligible.length < n) return null;
+
+    // Buckets of players by rating, cheapest first.
+    const byRating = new Map();
+    for (const p of eligible) {
+      if (!byRating.has(p.rating)) byRating.set(p.rating, []);
+      byRating.get(p.rating).push(p);
+    }
+    byRating.forEach((list) => list.sort((a, b) => a.cost - b.cost || (b.rare ? 1 : 0) - (a.rare ? 1 : 0)));
+
+    /** Cheapest pick for a rating multiset that also meets the rare minimum. */
+    const pick = (counts) => {
+      const chosen = [];
+      const spare = [];
+      for (const [r, cnt] of counts) {
+        const list = byRating.get(r);
+        chosen.push(...list.slice(0, cnt));
+        spare.push(...list.slice(cnt));
+      }
+      let rares = chosen.filter((p) => p.rare).length;
+      if (rares < k.rareMin) {
+        // Swap commons for rares of the same rating, cheapest extra cost first.
+        const swaps = [];
+        for (const c of chosen.filter((p) => !p.rare)) {
+          const alt = spare.filter((s) => s.rare && s.rating === c.rating).sort((a, b) => a.cost - b.cost)[0];
+          if (alt) swaps.push({ c, alt, extra: alt.cost - c.cost });
+        }
+        swaps.sort((a, b) => a.extra - b.extra);
+        const used = new Set();
+        for (const s of swaps) {
+          if (rares >= k.rareMin) break;
+          if (used.has(s.alt.id)) continue;
+          used.add(s.alt.id);
+          chosen[chosen.indexOf(s.c)] = s.alt;
+          rares++;
+        }
+        if (rares < k.rareMin) return null;
+      }
+      return chosen;
+    };
+
+    const finish = (players) => players && {
+      players,
+      rating: squadRating(players.map((p) => p.rating), Math.max(11, n)),
+      cost: players.reduce((a, p) => a + p.cost, 0),
+    };
+
+    if (!k.teamRating) {
+      const byCost = (x, y) => x.cost - y.cost;
+      const rares = eligible.filter((p) => p.rare).sort(byCost);
+      if (rares.length < k.rareMin) return null;
+      const chosen = rares.slice(0, k.rareMin);
+      const ids = new Set(chosen.map((p) => p.id));
+      for (const p of eligible.slice().sort(byCost)) {
+        if (chosen.length >= n) break;
+        if (!ids.has(p.id)) chosen.push(p);
+      }
+      return chosen.length === n ? finish(chosen) : null;
+    }
+    if (n !== 11) return null; // team rating with fewer than 11 players isn't modelled
+
+    // Branch and bound over how many players of each rating to use.
+    const ratings = [...byRating.keys()].filter((r) => r >= k.teamRating - 8 && r <= k.teamRating + 6).sort((a, b) => b - a);
+    const prefix = (r, cnt) => byRating.get(r).slice(0, cnt).reduce((a, p) => a + p.cost, 0);
+    let best = null;
+    let bestCost = Infinity;
+    const counts = new Map();
+    const chosenRatings = [];
+    let visits = 0;
+    const dfs = (i, left, costSoFar) => {
+      if (++visits > 400000) return;
+      if (costSoFar >= bestCost) return;
+      if (left === 0) {
+        if (squadRating(chosenRatings) < k.teamRating) return;
+        const players = pick(counts);
+        if (!players) return;
+        const cost = players.reduce((a, p) => a + p.cost, 0);
+        if (cost < bestCost) { bestCost = cost; best = players; }
+        return;
+      }
+      if (i >= ratings.length) return;
+      // Even filling every remaining slot with this rating can't reach the target: stop.
+      const optimistic = chosenRatings.concat(Array(left).fill(ratings[i]));
+      if (squadRating(optimistic) < k.teamRating) return;
+      const r = ratings[i];
+      const max = Math.min(left, byRating.get(r).length);
+      for (let cnt = max; cnt >= 0; cnt--) {
+        if (cnt) { counts.set(r, cnt); for (let j = 0; j < cnt; j++) chosenRatings.push(r); } else counts.delete(r);
+        dfs(i + 1, left - cnt, costSoFar + prefix(r, cnt));
+        for (let j = 0; j < cnt; j++) chosenRatings.pop();
+      }
+      counts.delete(r);
+    };
+    dfs(0, n, 0);
+    return finish(best);
+  }
+
+  // ---- Pack items --------------------------------------------------------------------
+
+  /**
+   * Where a new item should go.
+   *   club      — new to your club
+   *   storage   — untradeable duplicate player (SBC storage)
+   *   transfer  — tradeable duplicate (to sell)
+   *   quicksell — duplicate worth less than your quick-sell threshold
+   *   keep      — leave it in unassigned (pile full, or nothing safe to do)
+   */
+  function sortItem(item, opts = {}) {
+    const { storageFull = false, transferFull = false, quickSellBelow = 0 } = opts;
+    if (!item.duplicate) return 'club';
+    if (item.player && quickSellBelow > 0 && item.rating < quickSellBelow && !item.special) return 'quicksell';
+    if (item.player && item.untradeable) return storageFull ? 'keep' : 'storage';
+    if (!item.untradeable) return transferFull ? 'keep' : 'transfer';
+    return 'keep';
+  }
+
+  // ---- Config defaults ---------------------------------------------------------------
+
   const DEFAULT_CONFIG = {
     // targets
     players: [], // [{ id, name, rating, avg, lowest, maxBuy, manualMax, checkedAt }]
@@ -451,6 +729,17 @@
     // notifications
     sound: true,
     discordWebhook: '',
+    // packs
+    packSort: true, // sort items after each pack
+    quickSellBelow: 0, // quick-sell duplicate players rated below this (0 = never)
+    // SBC
+    sbcUseTradeables: false, // let the solver use tradeable players
+    sbcMaxRating: 86, // never use players rated above this
+    sbcProtectSquad: true, // never use players from your active squad
+    sbcRepeat: 1, // times to repeat a repeatable SBC
+    // upgrades
+    upgradeBudget: 0, // 0 = your coins minus Keep coins
+    upgradeMarket: true, // also search the market (uses searches)
   };
 
   const core = {
@@ -460,6 +749,8 @@
     normalizeName, parsePlayerDb, searchPlayers, playerForIteration, migrateConfig,
     findMarketPrice, planMaxBuy, effectiveMaxBuy,
     addHistory, summarizeHistory, isDiscordWebhook, discordPayload,
+    squadRating, squadChemistry, topValues, rankUpgrades,
+    fodderValue, playerCost, qualityOf, parseRequirements, solveSbc, sortItem,
     SAFETY, clampConfig, dayKey, usageFor, lockoutFor, formatDuration, canStart,
   };
 
@@ -489,6 +780,24 @@
     },
   };
   const loadConfig = () => clampConfig(migrateConfig({ ...DEFAULT_CONFIG, ...store.get(KEYS.cfg, {}) })).cfg;
+
+  // EA's SBC requirement types (read live from the Web App when it exposes them).
+  const SBC_KEYS = {
+    0: 'TEAM_STAR_RATING', 2: 'PLAYER_COUNT', 3: 'PLAYER_QUALITY', 4: 'SAME_NATION_COUNT', 5: 'SAME_LEAGUE_COUNT',
+    6: 'SAME_CLUB_COUNT', 7: 'NATION_COUNT', 8: 'LEAGUE_COUNT', 9: 'CLUB_COUNT', 10: 'NATION_ID', 11: 'LEAGUE_ID',
+    12: 'CLUB_ID', 13: 'SCOPE', 15: 'LEGEND_COUNT', 16: 'NUM_TROPHY_REQUIRED', 17: 'PLAYER_LEVEL', 18: 'PLAYER_RARITY',
+    19: 'TEAM_RATING', 21: 'PLAYER_COUNT_COMBINED', 25: 'PLAYER_RARITY_GROUP', 26: 'PLAYER_MIN_OVR', 27: 'PLAYER_EXACT_OVR',
+    28: 'PLAYER_MAX_OVR', 30: 'FIRST_OWNER_PLAYERS_COUNT', 33: 'PLAYER_TRADABILITY', 35: 'CHEMISTRY_POINTS', 36: 'ALL_PLAYERS_CHEMISTRY_POINTS',
+  };
+  /** { NAME: number } enum → { number: NAME }, or the fallback. */
+  function invert(enumObj, fallback) {
+    if (enumObj && typeof enumObj === 'object') {
+      const out = {};
+      for (const [k, v] of Object.entries(enumObj)) if (typeof v === 'number') out[v] = k;
+      if (Object.keys(out).length) return out;
+    }
+    return fallback;
+  }
 
   // ---- Web App adapter --------------------------------------------------------
   // Wraps the app's own services (the calls its UI makes) in promises.
@@ -553,6 +862,155 @@
       const res = await observe(w.services.Item.list(item, prevPrice(sellPrice), sellPrice, duration));
       return { ok: !!res.success, status: res.status };
     },
+    // -- items, club, squad, packs, SBC --
+
+    pileFull(pile) {
+      try { return !!(w.repositories && w.repositories.Item.isPileFull(pile)); } catch { return false; }
+    },
+    /** Normalise a Web App item into the plain shape the pure logic uses. */
+    toPlayer(item) {
+      const sd = item._staticData || (typeof item.getStaticData === 'function' && item.getStaticData()) || {};
+      const posName = (p) => {
+        if (typeof p !== 'number') return p;
+        try { return w.UTLocalizationUtil.positionIdToName(p); } catch { return p; }
+      };
+      const positions = [...new Set([item.preferredPosition, ...(item.possiblePositions || [])]
+        .filter((p) => p !== undefined && p !== null).map(posName))];
+      const auction = item._auction || {};
+      return {
+        id: item.definitionId,
+        name: sd.name || item.name || `#${item.definitionId}`,
+        rating: item.rating || 0,
+        nationId: item.nationId,
+        leagueId: item.leagueId,
+        teamId: item.teamId,
+        positions,
+        rare: (item.rareflag || 0) >= 1,
+        special: (item.rareflag || 0) > 1,
+        untradeable: !!item.untradeable,
+        duplicate: typeof item.isDuplicate === 'function' ? !!item.isDuplicate() : false,
+        storage: !!w.ItemPile && item.pile === w.ItemPile.STORAGE,
+        loan: typeof item.isLimitedUse === 'function' ? !!item.isLimitedUse() : false,
+        evo: !!item.academy,
+        player: typeof item.isPlayer === 'function' ? !!item.isPlayer() : item.type === 'player',
+        price: auction.buyNowPrice || 0,
+        item,
+      };
+    },
+    newCriteria() {
+      const c = new w.UTSearchCriteriaDTO();
+      c.type = (w.SearchType && w.SearchType.PLAYER) || 'player';
+      if (w.SearchCategory) c.category = w.SearchCategory.ANY;
+      return c;
+    },
+    /** Every player in your club (paged), plus SBC storage. */
+    async clubPlayers(onPage) {
+      const out = [];
+      const page = async (fn) => {
+        const c = this.newCriteria();
+        c.count = 91;
+        c.offset = 0;
+        for (let i = 0; i < 40; i++) {
+          const res = await observe(fn(c));
+          if (!res.success) return { ok: false, status: res.status };
+          const d = res.data || {};
+          out.push(...(d.items || []));
+          if (onPage) onPage(out.length);
+          if (d.retrievedAll || d.endOfList || !(d.items || []).length) return { ok: true };
+          c.offset += c.count;
+          await sleep(jitter(500, 900));
+        }
+        return { ok: true };
+      };
+      const club = await page((c) => w.services.Club.search(c));
+      if (!club.ok) return club;
+      if (typeof w.services.Item.searchStorageItems === 'function') await page((c) => w.services.Item.searchStorageItems(c));
+      return { ok: true, items: out };
+    },
+    async unassigned() {
+      const res = await observe(w.services.Item.requestUnassignedItems());
+      return res.success ? ((res.data && res.data.items) || []) : null;
+    },
+    async move(items, pile) {
+      if (!items.length) return true;
+      return !!(await observe(w.services.Item.move(items, pile))).success;
+    },
+    async quickSell(items) {
+      if (!items.length) return true;
+      return !!(await observe(w.services.Item.discard(items))).success;
+    },
+    unassignedCount() {
+      try { return w.repositories.Item.numItemsInCache(w.ItemPile.PURCHASED) || 0; } catch { return 0; }
+    },
+    async myPacks() {
+      const type = (w.PurchasePackType && w.PurchasePackType.ALL) ?? 0;
+      const res = await observe(w.services.Store.getPacks(type, true, true));
+      if (!res.success) return { ok: false, status: res.status, packs: [] };
+      const packs = ((res.data && res.data.packs) || []).filter((p) => p.isMyPack);
+      return { ok: true, packs };
+    },
+    packName(pack) {
+      try { return w.services.Localization.localize(pack.packName); } catch { return pack.packName || `Pack ${pack.id}`; }
+    },
+    async openPack(pack) {
+      const res = await observe(pack.open(), 30000);
+      try { w.repositories.Item.setDirty(w.ItemPile.PURCHASED); } catch { /* ignore */ }
+      return { ok: !!res.success, status: res.status };
+    },
+    async activeSquad() {
+      const res = await observe(w.services.Squad.requestSquadById(w.services.Squad.getActiveSquadId()));
+      return res.success ? res.data && res.data.squad : null;
+    },
+    async sbcSets() {
+      const res = await observe(w.services.SBC.requestSets());
+      if (!res.success) return { ok: false, status: res.status, sets: [] };
+      const d = res.data || {};
+      return { ok: true, sets: d.sets || (Array.isArray(d) ? d : []) };
+    },
+    async challenges(set) {
+      const res = await observe(w.services.SBC.requestChallengesForSet(set));
+      if (!res.success) return { ok: false, status: res.status, list: [] };
+      const list = (res.data && res.data.challenges) || (typeof set.getChallenges === 'function' ? set.getChallenges() : []);
+      return { ok: true, list };
+    },
+    async loadChallenge(ch) {
+      const res = await observe(w.services.SBC.loadChallenge(ch));
+      return { ok: !!res.success, status: res.status };
+    },
+    /** EA requirement objects → [{ key, scope, values, count }] with readable names. */
+    requirements(ch) {
+      const keyNames = invert(w.SBCEligibilityKey, SBC_KEYS);
+      const scopeNames = invert(w.SBCEligibilityScope, { 0: 'GREATER', 1: 'LOWER', 2: 'EXACT' });
+      const out = [];
+      for (const r of ch.eligibilityRequirements || []) {
+        const kv = (r.kvPairs && (r.kvPairs._collection || r.kvPairs)) || {};
+        for (const [k, values] of Object.entries(kv)) {
+          out.push({ key: keyNames[k] || `KEY_${k}`, scope: scopeNames[r.scope] || String(r.scope), values: [].concat(values), count: r.count });
+        }
+      }
+      return out;
+    },
+    requiredPlayers(ch) {
+      try { return ch.squad.getNumOfRequiredPlayers() || 11; } catch { return 11; }
+    },
+    /** Put players into the challenge squad's open slots and save it. */
+    async fillChallenge(ch, items) {
+      const squad = ch.squad;
+      const slots = squad.getFieldPlayers();
+      const open = slots.filter((s) => !(typeof s.isBrick === 'function' && s.isBrick())).map((s) => s.index);
+      const arr = new Array(Math.max(11, ...slots.map((s) => s.index + 1))).fill(null);
+      open.slice(0, items.length).forEach((idx, i) => { arr[idx] = items[i]; });
+      squad.removeAllItems();
+      squad.setPlayers(arr, true);
+      const res = await observe(w.services.SBC.saveChallenge(ch));
+      return { ok: !!res.success, status: res.status };
+    },
+    async submitChallenge(ch, set) {
+      const chem = !!(w.services.Chemistry && typeof w.services.Chemistry.isFeatureEnabled === 'function' && w.services.Chemistry.isFeatureEnabled());
+      const res = await observe(w.services.SBC.submitChallenge(ch, set, true, chem), 30000);
+      return { ok: !!res.success, status: res.status, data: res.data };
+    },
+
     /** Relist expired items and clear sold ones, if this Web App version supports it. */
     async tidyTransferList() {
       const S = w.services.Item;
@@ -780,15 +1238,23 @@
 
     // -- main loop --
 
-    toggle() { if (this.running) this.stop('stopped by you'); else this.start(); },
+    toggle() {
+      if (jobs.current) return jobs.cancel();
+      if (this.running) this.stop('stopped by you'); else this.start();
+    },
 
     async start() {
-      if (this.running || this.busy) return;
+      if (this.running || this.busy || jobs.current) return;
       ui.commit(); // pick up a field that was typed but not yet saved
       if (!fut.ready()) { ui.log('Web App not ready — log in and open Transfers first', 'err'); return; }
       const { cfg, changed } = clampConfig(this.cfg);
       if (changed.length) ui.log(`Raised to safe minimums: ${changed.join(', ')}`, 'warn');
       this.cfg = cfg; this.save(); ui.syncForm();
+      const hasFilter = cfg.level !== 'any' || cfg.rarity || cfg.position || cfg.nation || cfg.league || cfg.club || cfg.minRating > 0;
+      if (!cfg.players.length && !hasFilter) {
+        ui.log('Add a player (or set a filter) first — otherwise it would buy any card under your max', 'warn');
+        return;
+      }
       this.safety = store.get(KEYS.safety, {});
       const gate = this.gate();
       if (!gate.ok) { ui.log(`Can't start — ${gate.reason}`, 'err'); ui.renderStatus(); return; }
@@ -933,6 +1399,378 @@
     },
   };
 
+  // ---- Tasks (packs, SBCs, upgrades) -----------------------------------------------
+  // One task at a time, never while sniping. Every EA call is paced and checked:
+  // a captcha or market limit stops the task and sets the same safety lock.
+
+  class Stopped extends Error {}
+
+  const jobs = {
+    current: null,
+    cancelled: false,
+
+    async run(name, fn) {
+      if (engine.running || engine.busy || this.current) { ui.log('Busy — wait for the current task to finish', 'warn'); return; }
+      if (!fut.ready()) { ui.log('Web App not ready — log in first', 'err'); return; }
+      engine.safety = store.get(KEYS.safety, {});
+      const gate = engine.gate();
+      if (!gate.ok && engine.safety.lockUntil > Date.now()) { ui.log(`Can't start — ${gate.reason}`, 'err'); return; }
+      this.current = name;
+      this.cancelled = false;
+      ui.setJob(name);
+      try {
+        await fn();
+      } catch (e) {
+        if (!(e instanceof Stopped)) ui.log(`${name}: ${errText(e)}`, 'err');
+      } finally {
+        this.current = null;
+        ui.setJob(null);
+        engine.setStatus('idle', 'Idle');
+      }
+    },
+
+    cancel() {
+      if (!this.current) return;
+      this.cancelled = true;
+      ui.log(`Stopping ${this.current}…`, 'warn');
+    },
+
+    /** Pause between actions; throws if the task was cancelled. */
+    async pause(min = 1500, max = 3000) {
+      const until = Date.now() + jitter(min, max);
+      while (Date.now() < until) {
+        if (this.cancelled) throw new Stopped();
+        await sleep(200);
+      }
+      if (this.cancelled) throw new Stopped();
+    },
+
+    /** Stop the task (and lock) when EA pushes back. */
+    check(res, what) {
+      if (res && res.ok) return;
+      const status = res ? res.status : 'error';
+      const kind = classifyStatus(status);
+      if (kind === 'captcha' || kind === 'throttled') {
+        engine.lock(kind, `EA pushback during ${what} (${status})`);
+        sounds.alarm();
+        throw new Stopped();
+      }
+      if (kind === 'session') { ui.log(`Logged out (${status}) — log in again`, 'err'); throw new Stopped(); }
+      throw new Error(`${what} failed (${status})`);
+    },
+  };
+
+  // ---- Pack opener ------------------------------------------------------------------
+
+  const packs = {
+    list: [],
+
+    async refresh() {
+      await jobs.run('Loading packs', async () => {
+        engine.setStatus('pricing', 'Loading your packs…');
+        const r = await fut.myPacks();
+        jobs.check(r, 'loading packs');
+        this.list = r.packs;
+        ui.renderPacks();
+        ui.log(r.packs.length ? `You have ${r.packs.length} unopened pack${r.packs.length === 1 ? '' : 's'}` : 'No unopened packs', 'muted');
+      });
+    },
+
+    groups() {
+      const m = new Map();
+      for (const p of this.list) {
+        const name = fut.packName(p);
+        if (!m.has(name)) m.set(name, []);
+        m.get(name).push(p);
+      }
+      return [...m.entries()].map(([name, list]) => ({ name, list }));
+    },
+
+    /** Sort what's in unassigned. Returns false if something had to stay there. */
+    async sortUnassigned(summary) {
+      const items = await fut.unassigned();
+      if (!items) throw new Error('could not read unassigned items');
+      if (!items.length) return true;
+      const cfg = engine.cfg;
+      const groups = { club: [], storage: [], transfer: [], quicksell: [], keep: [] };
+      for (const item of items) {
+        const p = fut.toPlayer(item);
+        const dest = cfg.packSort ? sortItem(p, {
+          storageFull: fut.pileFull(w.ItemPile.STORAGE),
+          transferFull: fut.pileFull(w.ItemPile.TRANSFER),
+          quickSellBelow: cfg.quickSellBelow,
+        }) : 'keep';
+        groups[dest].push(item);
+        if (p.player) summary.players.push(p);
+      }
+      const piles = { club: w.ItemPile.CLUB, storage: w.ItemPile.STORAGE, transfer: w.ItemPile.TRANSFER };
+      for (const dest of ['club', 'storage', 'transfer']) {
+        if (!groups[dest].length) continue;
+        const ok = await fut.move(groups[dest], piles[dest]);
+        if (ok) summary[dest] += groups[dest].length; else summary.keep += groups[dest].length;
+        await jobs.pause(900, 1600);
+      }
+      if (groups.quicksell.length) {
+        const ok = await fut.quickSell(groups.quicksell);
+        if (ok) summary.quicksell += groups.quicksell.length; else summary.keep += groups.quicksell.length;
+        await jobs.pause(900, 1600);
+      }
+      summary.keep += groups.keep.length;
+      return fut.unassignedCount() === 0 && !groups.keep.length;
+    },
+
+    async open(packList) {
+      await jobs.run('Opening packs', async () => {
+        const summary = { opened: 0, players: [], club: 0, storage: 0, transfer: 0, quicksell: 0, keep: 0 };
+        try {
+          if (fut.unassignedCount() > 0) {
+            ui.log('Sorting your unassigned items first…', 'muted');
+            if (!(await this.sortUnassigned(summary))) {
+              ui.log('Unassigned still has items — EA won’t open packs until it’s empty. Sort them in the Web App.', 'warn');
+              return;
+            }
+          }
+          for (const pack of packList) {
+            const name = fut.packName(pack);
+            engine.setStatus('pricing', `Opening ${name} (${summary.opened + 1}/${packList.length})`);
+            const r = await fut.openPack(pack);
+            jobs.check(r, 'opening a pack');
+            summary.opened++;
+            this.list = this.list.filter((p) => p !== pack);
+            ui.renderPacks();
+            await jobs.pause(1500, 2500);
+            const clean = await this.sortUnassigned(summary);
+            const best = summary.players.slice(-12).sort((a, b) => b.rating - a.rating)[0];
+            ui.log(`Opened ${name}${best ? ` — best: ${best.name} ${best.rating}` : ''}`, 'ok');
+            if (best && (best.rating >= 86 || best.special)) { ui.toast(`🎉 ${best.name} ${best.rating}`, 'ok'); sounds.buy(); }
+            if (!clean) { ui.log('Some items stayed in unassigned (pile full?) — stopping so EA allows the next pack', 'warn'); break; }
+            await jobs.pause(2000, 3500);
+          }
+        } finally {
+          if (summary.opened || summary.club || summary.storage || summary.transfer || summary.quicksell) this.report(summary);
+        }
+      });
+    },
+
+    report(s) {
+      const top = s.players.slice().sort((a, b) => b.rating - a.rating).slice(0, 5)
+        .map((p) => `${p.name} ${p.rating}${p.special ? '★' : ''}`).join(', ');
+      ui.log(`Packs: ${s.opened} opened · ${s.club} to club · ${s.storage} to SBC storage · ${s.transfer} to transfer list · ${s.quicksell} quick-sold · ${s.keep} left in unassigned`, 'ok');
+      if (top) ui.log(`Best pulls: ${top}`, 'ok');
+      notify.discord('info', { title: `📦 Opened ${s.opened} pack${s.opened === 1 ? '' : 's'}`, text: top ? `Best: ${top}` : '' });
+    },
+  };
+
+  // ---- SBC solver ---------------------------------------------------------------------
+
+  const sbc = {
+    sets: [],
+    open: new Map(), // setId -> [{ challenge, reqs, parsed }]
+    club: null, // cached club pool for this session
+    plan: null, // { set, challenge, solution }
+
+    async loadSets() {
+      await jobs.run('Loading SBCs', async () => {
+        engine.setStatus('pricing', 'Loading SBCs…');
+        const r = await fut.sbcSets();
+        jobs.check(r, 'loading SBCs');
+        this.sets = r.sets.filter((s) => !(typeof s.isComplete === 'function' && s.isComplete()));
+        ui.renderSbc();
+        ui.log(`${this.sets.length} SBCs available`, 'muted');
+      });
+    },
+
+    async loadChallenges(set) {
+      await jobs.run('Loading SBC', async () => {
+        engine.setStatus('pricing', `Loading ${set.name}…`);
+        const r = await fut.challenges(set);
+        jobs.check(r, 'loading challenges');
+        const list = r.list.filter((ch) => !(typeof ch.isCompleted === 'function' && ch.isCompleted()) && ch.status !== 'COMPLETED');
+        this.open.set(set.id, list.map((challenge) => {
+          const reqs = fut.requirements(challenge);
+          return { challenge, reqs, parsed: parseRequirements(reqs, fut.requiredPlayers(challenge)) };
+        }));
+        ui.renderSbc();
+      });
+    },
+
+    /** Club + storage players the solver may use. */
+    async pool(force) {
+      if (this.club && !force) return this.club;
+      engine.setStatus('pricing', 'Reading your club…');
+      const r = await fut.clubPlayers((n) => engine.setStatus('pricing', `Reading your club… ${n}`));
+      jobs.check(r, 'reading your club');
+      let protectedIds = new Set();
+      if (engine.cfg.sbcProtectSquad) {
+        const squad = await fut.activeSquad();
+        if (squad) protectedIds = new Set(squad.getFieldPlayers().map((s) => s.item && s.item.id).filter(Boolean));
+      }
+      const cfg = engine.cfg;
+      this.club = r.items.map((item) => ({ ...fut.toPlayer(item), itemId: item.id }))
+        .filter((p) => p.player && !p.loan && !p.evo && !protectedIds.has(p.itemId)
+          && p.rating <= cfg.sbcMaxRating && (p.untradeable || p.storage || cfg.sbcUseTradeables))
+        .map((p) => ({ ...p, id: p.itemId, cost: playerCost(p) }));
+      ui.log(`Club: ${this.club.length} players available for SBCs`, 'muted');
+      return this.club;
+    },
+
+    async solve(set, entry) {
+      await jobs.run('Solving SBC', async () => {
+        const { challenge, parsed } = entry;
+        if (parsed.unsupported.length) { ui.log(`Can't auto-solve yet: ${parsed.unsupported.join(', ')}`, 'warn'); return; }
+        const pool = await this.pool();
+        engine.setStatus('pricing', 'Solving…');
+        await sleep(30);
+        const solution = solveSbc(pool, parsed.constraints);
+        if (!solution) { ui.log(`No solution from your club for ${challenge.name || set.name}`, 'warn'); this.plan = null; ui.renderSbc(); return; }
+        this.plan = { set, entry, solution };
+        ui.log(`Solution: ${solution.players.length} players, rating ${solution.rating || '—'} — review it, then Submit`, 'ok');
+        ui.renderSbc();
+      });
+    },
+
+    async submit(fillOnly) {
+      const plan = this.plan;
+      if (!plan) return;
+      await jobs.run(fillOnly ? 'Filling SBC' : 'Submitting SBC', async () => {
+        const times = fillOnly ? 1 : Math.max(1, engine.cfg.sbcRepeat || 1);
+        let current = plan;
+        for (let n = 1; n <= times; n++) {
+          const { set, entry, solution } = current;
+          engine.setStatus('pricing', `${fillOnly ? 'Filling' : 'Submitting'} ${set.name}${times > 1 ? ` (${n}/${times})` : ''}`);
+          const load = await fut.loadChallenge(entry.challenge);
+          jobs.check(load, 'loading the challenge');
+          await jobs.pause(800, 1500);
+          const items = solution.players.map((p) => p.item);
+          const fill = await fut.fillChallenge(entry.challenge, items);
+          jobs.check(fill, 'filling the squad');
+          if (fillOnly) { ui.log(`Squad filled and saved — open ${set.name} in the Web App to check and submit`, 'ok'); return; }
+          await jobs.pause(1500, 2500);
+          const sub = await fut.submitChallenge(entry.challenge, set);
+          jobs.check(sub, 'submitting');
+          const used = new Set(solution.players.map((p) => p.id));
+          this.club = (this.club || []).filter((p) => !used.has(p.id));
+          ui.log(`✅ Submitted ${set.name}${entry.challenge.name && entry.challenge.name !== set.name ? ` — ${entry.challenge.name}` : ''}`, 'ok');
+          ui.toast(`SBC done: ${set.name}`, 'ok');
+          sounds.buy();
+          notify.discord('info', { title: `🧩 SBC done: ${set.name}`, text: entry.challenge.name || '' });
+          this.plan = null;
+          if (n === times) break;
+          // Repeatable: reload the set and solve the next one with the players left.
+          await jobs.pause(2500, 4000);
+          const again = await fut.challenges(set);
+          jobs.check(again, 'reloading the SBC');
+          const next = again.list.find((ch) => !(typeof ch.isCompleted === 'function' && ch.isCompleted()));
+          if (!next) { ui.log('No more repeats available', 'muted'); break; }
+          const reqs = fut.requirements(next);
+          const parsed = parseRequirements(reqs, fut.requiredPlayers(next));
+          const sol = !parsed.unsupported.length && solveSbc(this.club, parsed.constraints);
+          if (!sol) { ui.log('Out of suitable players for another repeat', 'muted'); break; }
+          current = { set, entry: { challenge: next, reqs, parsed }, solution: sol };
+        }
+        ui.renderSbc();
+      });
+    },
+  };
+
+  // ---- Upgrade advisor -------------------------------------------------------------------
+
+  const upgrades = {
+    squad: null, // [{ position, player }]
+    summary: null,
+    results: [], // [{ slotIndex, position, current, options: [...] }]
+
+    async analyse() {
+      await jobs.run('Analysing your team', async () => {
+        engine.setStatus('pricing', 'Reading your squad…');
+        const squad = await fut.activeSquad();
+        if (!squad) throw new Error('could not read your active squad');
+        const slots = squad.getFieldPlayers().slice(0, 11).map((s) => ({
+          position: (s.position && (s.position.typeName || s.position.id)) || '?',
+          player: s.item && s.item.definitionId ? fut.toPlayer(s.item) : null,
+        }));
+        this.squad = slots;
+        const inPos = (p, pos) => !!p && p.positions.includes(pos);
+        const chem = squadChemistry(slots.map((s) => s.player && { ...s.player, inPosition: inPos(s.player, s.position) }));
+        const players = slots.map((s) => s.player).filter(Boolean);
+        this.summary = {
+          rating: squadRating(slots.map((s) => (s.player ? s.player.rating : 0))),
+          chem: chem.total,
+          eachChem: chem.each,
+          formation: typeof squad.getFormation === 'function' ? (squad.getFormation().name || squad.getFormation().typeName || '') : '',
+          leagues: topValues(players, 'leagueId', 2),
+          nations: topValues(players, 'nationId', 2),
+        };
+        // Weakest first: lowest rating, then lowest chemistry.
+        const order = slots.map((s, i) => ({ i, r: s.player ? s.player.rating : 0, c: chem.each[i] }))
+          .sort((a, b) => a.r - b.r || a.c - b.c).map((x) => x.i);
+        this.results = order.slice(0, 3).map((i) => ({ slotIndex: i, position: slots[i].position, current: slots[i].player, options: [] }));
+        ui.renderUpgrades();
+
+        // Candidates you already own.
+        const owned = await fut.clubPlayers((n) => engine.setStatus('pricing', `Checking your club… ${n}`));
+        jobs.check(owned, 'reading your club');
+        const club = owned.items.map((item) => ({ ...fut.toPlayer(item), source: 'club' })).filter((p) => p.player && !p.loan);
+
+        const budget = engine.cfg.upgradeBudget || Math.max(0, fut.coins() - engine.cfg.minCoins);
+        for (const res of this.results) {
+          let candidates = club.slice();
+          if (engine.cfg.upgradeMarket && budget >= 1000) {
+            candidates = candidates.concat(await this.market(res, budget));
+          }
+          res.options = rankUpgrades(slots, res.slotIndex, candidates, { budget }).filter((o) => o.source === 'club' || o.price <= budget).slice(0, 4);
+          res.done = true;
+          ui.renderUpgrades();
+        }
+        ui.log(`Team: rating ${this.summary.rating}, chemistry ${this.summary.chem}/33 — suggestions for your ${this.results.length} weakest spots`, 'ok');
+      });
+    },
+
+    /** Market listings that fit the slot: same league / nation as your squad, within budget. */
+    async market(res, budget) {
+      const out = [];
+      const s = this.summary;
+      const searches = [
+        { league: s.leagues[0] && s.leagues[0].value, min: Math.round(budget * 0.25) },
+        { nation: s.nations[0] && s.nations[0].value, min: Math.round(budget * 0.25) },
+        { league: s.leagues[0] && s.leagues[0].value, min: Math.round(budget * 0.05) },
+      ].filter((q) => q.league || q.nation);
+      for (const q of searches) {
+        engine.setStatus('pricing', `Searching market for a ${res.position}…`);
+        const c = fut.newCriteria();
+        if (q.league) c.league = q.league;
+        if (q.nation) c.nation = q.nation;
+        c._position = res.position;
+        c.maxBuy = roundPrice(budget);
+        if (q.min >= 200) c.minBuy = roundPrice(q.min);
+        const r = await fut.search(c);
+        engine.countUsage('searches');
+        jobs.check(r, 'market search');
+        for (const l of r.listings) {
+          const p = fut.toPlayer(l.item);
+          if (p.player && l.buyNowPrice) out.push({ ...p, price: l.buyNowPrice, source: 'market' });
+        }
+        await jobs.pause(engine.cfg.delayMin, engine.cfg.delayMax);
+      }
+      // Cheapest listing per card.
+      const best = new Map();
+      for (const p of out) if (!best.has(p.id) || best.get(p.id).price > p.price) best.set(p.id, p);
+      return [...best.values()];
+    },
+
+    /** Send a suggestion to the sniper with its listed price as the max buy. */
+    snipe(opt) {
+      if (engine.running) return;
+      const players = engine.cfg.players.filter((p) => p.id !== opt.id);
+      players.push({ id: opt.id, name: opt.name, rating: opt.rating, manualMax: opt.price ? roundPrice(opt.price) : 0 });
+      engine.cfg.players = players;
+      engine.save();
+      ui.renderPlayers();
+      ui.showTab('snipe');
+      ui.log(`Added ${opt.name} to snipe${opt.price ? ` at ≤ ${fmt(roundPrice(opt.price))}` : ''} — tap ▶ to start`, 'ok');
+    },
+  };
+
   // ---- UI -----------------------------------------------------------------------
 
   const ICON = {
@@ -948,12 +1786,29 @@
   // [key, label, type, options/hint]
   const TABS = [
     ['snipe', 'Snipe'],
+    ['upgrades', 'Upgrades'],
+    ['packs', 'Packs'],
+    ['sbc', 'SBC'],
     ['filters', 'Filters'],
     ['sell', 'Sell'],
     ['safety', 'Safety'],
     ['history', 'History'],
   ];
   const FIELDS = {
+    upgrades: [
+      ['upgradeBudget', 'Budget (0 = my coins)', 'number'],
+      ['upgradeMarket', 'Also search the market', 'toggle'],
+    ],
+    packs: [
+      ['packSort', 'Sort items after each pack', 'toggle'],
+      ['quickSellBelow', 'Quick-sell duplicates rated below', 'number', '0 = never'],
+    ],
+    sbc: [
+      ['sbcProtectSquad', 'Never use my active squad', 'toggle'],
+      ['sbcUseTradeables', 'Use tradeable players', 'toggle'],
+      ['sbcMaxRating', 'Max player rating to use', 'number'],
+      ['sbcRepeat', 'Repeat repeatable SBCs', 'number'],
+    ],
     snipe: [
       ['mode', 'Mode', 'seg', OPT([['buy', 'Buy'], ['alert', 'Alert only']])],
       ['discount', 'Snipe % under avg', 'number'],
@@ -1107,6 +1962,24 @@
   #fcs .hist small{color:var(--dim)}#fcs .hist .p{text-align:right;font-weight:700;font-variant-numeric:tabular-nums}
   #fcs .hist .g{color:var(--green)}
   #fcs .empty{color:var(--dim);text-align:center;padding:14px 0}
+  #fcs [hidden]{display:none!important}
+  #fcs .list{display:flex;flex-direction:column}
+  #fcs .li{display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--line)}
+  #fcs .li:last-child{border-bottom:0}
+  #fcs .li .t{flex:1;min-width:0}
+  #fcs .li .t b{display:block;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  #fcs .li .t small{display:block;color:var(--dim);font-size:11.5px}
+  #fcs .mini{padding:6px 10px;border-radius:8px;background:var(--card2);border:1px solid var(--line);font-weight:600;font-size:12px;white-space:nowrap}
+  #fcs .mini.go2{background:var(--green);border-color:var(--green);color:var(--green-ink)}
+  #fcs .tag{display:inline-block;font-size:10.5px;font-weight:700;padding:1px 6px;border-radius:6px;margin-left:4px;background:var(--card2);color:var(--muted)}
+  #fcs .tag.ok{color:var(--green);background:rgba(61,220,132,.1)}#fcs .tag.no{color:var(--amber);background:rgba(255,200,87,.1)}
+  #fcs .sub{padding-left:10px;border-left:2px solid var(--line);margin:2px 0 8px}
+  #fcs .kpi{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:8px}
+  #fcs .kpi div{background:var(--card2);border-radius:9px;padding:7px 6px;text-align:center;color:var(--muted);font-size:11px}
+  #fcs .kpi b{display:block;color:var(--text);font-size:16px}
+  #fcs .up{font-weight:700;color:var(--green)}#fcs .down{font-weight:700;color:var(--red)}
+  #fcs .plan{border-color:var(--green)}
+  #fcs.mob .mini{padding:9px 12px;font-size:14px}#fcs.mob .li{padding:10px 0}
 
   #fcs-toast{position:fixed;left:50%;top:16px;transform:translate(-50%,-30px);opacity:0;visibility:hidden;z-index:2147483001;padding:10px 16px;border-radius:12px;
     font:600 14px -apple-system,system-ui,sans-serif;color:#05210f;background:#3ddc84;box-shadow:0 12px 30px rgba(0,0,0,.4);transition:transform .25s,opacity .25s,visibility .25s;pointer-events:none;max-width:90vw}
@@ -1177,6 +2050,26 @@
             </div>
             <div class="card"><h4>Activity</h4><div class="log" data-r="log"></div></div>
           </section>
+          <section class="pane" data-pane="upgrades">
+            <div class="card"><h4>Your team</h4><div data-r="team"><p class="empty">Reads your active squad and finds the best upgrades for your weakest spots.</p></div>
+              <button class="btn blue" data-a="analyse">Analyse my team</button></div>
+            <div data-r="upg"></div>
+            <div class="card">${FIELDS.upgrades.map(fieldHtml).join('')}
+              <p class="note">Owned players are suggested first. Market suggestions match your squad’s main league or nation so you keep chemistry, and cost a few searches.</p></div>
+          </section>
+          <section class="pane" data-pane="packs">
+            <div class="card"><h4>Unopened packs</h4><div data-r="packs"><p class="empty">Tap below to see your packs.</p></div>
+              <button class="btn blue" data-a="packs-load">Load my packs</button></div>
+            <div class="card">${FIELDS.packs.map(fieldHtml).join('')}
+              <p class="note">New items go to your club, untradeable duplicates to SBC storage, tradeable duplicates to your transfer list. Specials are never quick-sold.</p></div>
+          </section>
+          <section class="pane" data-pane="sbc">
+            <div class="card plan" data-r="plan" hidden></div>
+            <div class="card"><h4>Squad Building Challenges</h4><div data-r="sbc"><p class="empty">Load SBCs to see which ones can be solved from your club.</p></div>
+              <button class="btn blue" data-a="sbc-load">Load SBCs</button></div>
+            <div class="card">${FIELDS.sbc.map(fieldHtml).join('')}
+              <p class="note">Uses your cheapest fodder first: SBC storage and duplicates, then untradeables. Solves rating, quality, rare and min/max rating requirements; chemistry and league/nation/club counts aren’t automatic yet.</p></div>
+          </section>
           <section class="pane" data-pane="filters"><div class="card">${FIELDS.filters.map(fieldHtml).join('')}
             <p class="note">Players match every version of the card. Use Min rating to target one version.</p></div></section>
           <section class="pane" data-pane="sell"><div class="card">${FIELDS.sell.map(fieldHtml).join('')}
@@ -1225,6 +2118,26 @@
           case 'toggle': return engine.toggle();
           case 'fold': return root.classList.toggle('min');
           case 'price': return engine.checkPricesNow();
+          case 'analyse': return upgrades.analyse();
+          case 'snipe-opt': {
+            const r = upgrades.results[Number(btn.dataset.s)];
+            return r && upgrades.snipe(r.options[Number(btn.dataset.o)]);
+          }
+          case 'packs-load': return packs.refresh();
+          case 'pack-open': {
+            const g = packs.groups()[Number(btn.dataset.g)];
+            return g && packs.open(btn.dataset.n === 'all' ? g.list : g.list.slice(0, 1));
+          }
+          case 'pack-open-all': return packs.open(packs.list.slice());
+          case 'sbc-load': return sbc.loadSets();
+          case 'sbc-set': return sbc.loadChallenges(sbc.sets[Number(btn.dataset.i)]);
+          case 'sbc-solve': {
+            const set = sbc.sets[Number(btn.dataset.i)];
+            return set && sbc.solve(set, sbc.open.get(set.id)[Number(btn.dataset.j)]);
+          }
+          case 'sbc-submit': return sbc.submit(false);
+          case 'sbc-fill': return sbc.submit(true);
+          case 'sbc-discard': sbc.plan = null; return this.renderSbc();
           case 'discord-test':
             this.commit();
             if (!engine.cfg.discordWebhook) return this.log('Paste a Discord webhook URL first', 'warn');
@@ -1386,6 +2299,88 @@
           <button class="mx${p.manualMax ? ' manual' : ''}" data-max="${p.id}">≤ ${fmt(max)}</button>
           <button class="rm" data-rm="${p.id}" aria-label="Remove ${esc(p.name)}">×</button></div>`;
       }).join('');
+    },
+
+    setJob(name) {
+      const go = this.q('[data-a=toggle]');
+      const on = !!name || engine.running;
+      go.classList.toggle('on', on);
+      go.innerHTML = on ? ICON.stop : ICON.play;
+      go.disabled = false;
+      this.qa('[data-a=analyse], [data-a=packs-load], [data-a=pack-open], [data-a=pack-open-all], [data-a=sbc-load], [data-a=sbc-set], [data-a=sbc-solve], [data-a=sbc-submit], [data-a=sbc-fill], [data-a=price]')
+        .forEach((b) => { b.disabled = !!name; });
+      if (name) engine.setStatus('pricing', `${name}…`);
+    },
+
+    renderPacks() {
+      const groups = packs.groups();
+      const total = packs.list.length;
+      this.q('[data-r=packs]').innerHTML = total ? `
+        <div class="list">${groups.map((g, i) => `<div class="li"><span class="t"><b>${esc(g.name)}</b><small>${g.list.length} unopened</small></span>
+          <button class="mini" data-a="pack-open" data-g="${i}" data-n="1">Open 1</button>
+          ${g.list.length > 1 ? `<button class="mini" data-a="pack-open" data-g="${i}" data-n="all">All ${g.list.length}</button>` : ''}</div>`).join('')}</div>
+        <button class="btn" data-a="pack-open-all" style="color:var(--green)">Open all ${total} pack${total === 1 ? '' : 's'}</button>`
+        : '<p class="empty">No unopened packs</p>';
+    },
+
+    reqText(r) {
+      const sym = { GREATER: '≥', LOWER: '≤', EXACT: '=' }[r.scope] || r.scope;
+      const v = r.values.join(', ');
+      const q = { 1: 'Bronze', 2: 'Silver', 3: 'Gold' };
+      const per = r.count > 0 ? `${r.count}× ` : '';
+      switch (r.key) {
+        case 'TEAM_RATING': return `Team rating ${sym} ${v}`;
+        case 'PLAYER_QUALITY': case 'PLAYER_LEVEL': return `${per}Quality ${sym} ${r.values.map((x) => q[x] || x).join('/')}`;
+        case 'PLAYER_RARITY_GROUP': return `${per}Rare ${sym} ${r.count > 0 ? '' : 'all'}`.trim();
+        case 'PLAYER_MIN_OVR': return `Each player ≥ ${v}`;
+        case 'PLAYER_MAX_OVR': return `Each player ≤ ${v}`;
+        case 'PLAYER_EXACT_OVR': return `Each player = ${v}`;
+        case 'CHEMISTRY_POINTS': case 'ALL_PLAYERS_CHEMISTRY_POINTS': return `Chemistry ${sym} ${v}`;
+        default: return `${per}${r.key.toLowerCase().replace(/_/g, ' ')} ${sym} ${v}`;
+      }
+    },
+
+    renderSbc() {
+      const box = this.q('[data-r=sbc]');
+      box.innerHTML = sbc.sets.length ? `<div class="list">${sbc.sets.slice(0, 80).map((set, i) => {
+        const loaded = sbc.open.get(set.id);
+        const rep = set.repeatable || set.timesCompleted ? `<span class="tag">${set.timesCompleted || 0} done</span>` : '';
+        const sub = loaded ? `<div class="sub">${loaded.length ? loaded.map((e, j) => {
+          const ok = !e.parsed.unsupported.length;
+          return `<div class="li"><span class="t"><b>${esc(e.challenge.name || set.name)}${ok ? '<span class="tag ok">auto</span>' : '<span class="tag no">manual</span>'}</b>
+            <small>${esc(e.reqs.filter((r) => r.key !== 'SCOPE' && r.key !== 'PLAYER_COUNT').map((r) => this.reqText(r)).join(' · ') || `${fut.requiredPlayers(e.challenge)} players`)}${ok ? '' : ` — needs ${esc(e.parsed.unsupported.join(', '))}`}</small></span>
+            ${ok ? `<button class="mini go2" data-a="sbc-solve" data-i="${i}" data-j="${j}">Solve</button>` : ''}</div>`;
+        }).join('') : '<p class="empty">All done</p>'}</div>` : '';
+        return `<div class="li"><span class="t"><b>${esc(set.name)}${rep}</b><small>${esc(set.description || '')}</small></span>
+          ${loaded ? '' : `<button class="mini" data-a="sbc-set" data-i="${i}">View</button>`}</div>${sub}`;
+      }).join('')}</div>` : '<p class="empty">Load SBCs to see which ones can be solved from your club.</p>';
+
+      const plan = this.q('[data-r=plan]');
+      const p = sbc.plan;
+      plan.hidden = !p;
+      if (!p) return;
+      const tag = (x) => (x.storage ? '<span class="tag">storage</span>' : x.duplicate ? '<span class="tag">duplicate</span>' : x.untradeable ? '<span class="tag">untradeable</span>' : '<span class="tag no">tradeable</span>');
+      plan.innerHTML = `<h4>Solution — ${esc(p.set.name)}</h4>
+        <div class="kpi"><div><b>${p.solution.players.length}</b>Players</div><div><b>${p.solution.rating || '—'}</b>Rating</div><div><b>${p.solution.players.filter((x) => x.rare).length}</b>Rares</div></div>
+        <div class="list">${p.solution.players.slice().sort((a, b) => b.rating - a.rating).map((x) => `<div class="li"><span class="t"><b>${esc(x.name)}${tag(x)}</b></span><b>${x.rating}</b></div>`).join('')}</div>
+        <button class="btn" data-a="sbc-submit" style="background:var(--green);color:var(--green-ink);border-color:var(--green)">Submit${engine.cfg.sbcRepeat > 1 ? ` (up to ${engine.cfg.sbcRepeat}×)` : ''}</button>
+        <button class="btn" data-a="sbc-fill">Fill squad only (check it in the Web App)</button>
+        <button class="btn red" data-a="sbc-discard">Discard</button>`;
+    },
+
+    renderUpgrades() {
+      const s = upgrades.summary;
+      if (s) {
+        this.q('[data-r=team]').innerHTML = `<div class="kpi"><div><b>${s.rating}</b>Rating</div><div><b>${s.chem}/33</b>Chemistry</div><div><b>${esc(s.formation || '—')}</b>Formation</div></div>`;
+      }
+      this.q('[data-r=upg]').innerHTML = upgrades.results.map((r, si) => `
+        <div class="card"><h4>${esc(r.position)} — now ${r.current ? `${esc(r.current.name)} ${r.current.rating}` : 'empty'}</h4>
+        ${r.options.length ? `<div class="list">${r.options.map((o, oi) => `<div class="li">
+          <span class="t"><b>${esc(o.name)} ${o.rating}</b><small>${o.source === 'club' ? 'You own him' : `${fmt(o.price)} coins`} ·
+            team <span class="${o.ratingGain > 0 ? 'up' : ''}">${o.ratingGain > 0 ? '+' : ''}${o.ratingGain}</span> ·
+            chem <span class="${o.chemGain > 0 ? 'up' : o.chemGain < 0 ? 'down' : ''}">${o.chemGain > 0 ? '+' : ''}${o.chemGain}</span></small></span>
+          ${o.source === 'club' ? '<span class="tag ok">owned</span>' : `<button class="mini go2" data-a="snipe-opt" data-s="${si}" data-o="${oi}">Snipe</button>`}</div>`).join('')}</div>`
+          : `<p class="empty">${r.done ? 'No better option found within budget' : 'Looking…'}</p>`}</div>`).join('');
     },
 
     renderStats() {

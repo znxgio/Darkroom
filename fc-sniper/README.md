@@ -1,7 +1,8 @@
 # FC Sniper
 
-A transfer-market sniper for the **EA SPORTS FC Ultimate Team Web App**. It's a userscript
-that runs inside the official Web App on your phone or computer and adds a control panel.
+A transfer-market sniper, pack opener, SBC solver and team upgrade advisor for the
+**EA SPORTS FC Ultimate Team Web App**. It's a userscript that runs inside the official
+Web App on your phone or computer and adds a control panel.
 
 > ⚠️ Automating the Web App breaks EA's User Agreement. EA bans accounts for it, including
 > users of paid bots. The safety limits below lower the risk; nothing removes it.
@@ -34,7 +35,10 @@ the Companion app. Updates install automatically.
 | **Notifications** | Sound, vibration (Android), on-screen banner, and Discord webhook messages for buys, alerts and stops. |
 | **History** | Every buy with time, price and listed price. Totals for today and all time. |
 | **Phone layout** | Bottom sheet with large controls, keeps the screen awake while running. |
-| **Safety** | Enforced pacing, session and daily limits, and lockouts after EA warnings (below). |
+| **Upgrade advisor** | Reads your active squad, finds the 3 weakest spots, and suggests upgrades that raise your rating without breaking chemistry. Players you own come first, then market cards in your squad's main league or nation within budget. One tap sends a card to the sniper. |
+| **Pack opener** | Lists your unopened packs and opens one, a type, or all. Sorts each pack: new items to your club, untradeable duplicates to SBC storage, tradeable duplicates to the transfer list, and optionally quick-sells duplicates rated below a number you set. Shows your best pulls. |
+| **SBC solver** | Loads SBCs, marks which it can solve, and builds the cheapest squad from your club: SBC storage and duplicates first, then untradeables, never your active squad or players rated above your limit. Review, then submit, or just fill the squad and check it in the Web App. Repeats repeatable SBCs. |
+| **Safety** | Enforced pacing, session and daily limits, and lockouts after EA warnings (below). Shared by every feature. |
 
 ## Using it
 
@@ -47,6 +51,15 @@ the Companion app. Updates install automatically.
 
 Prices refresh on start if they're older than 15 minutes, or when you tap **Check prices**.
 A name matches every version of the card; set **Min rating** (Filters) to aim at one version.
+
+### Upgrades, packs and SBCs
+- **Upgrades tab → Analyse my team.** Set a budget (0 = your coins minus Keep coins).
+  Turn off *Also search the market* to only use players you own (no searches).
+- **Packs tab → Load my packs.** Unassigned must be empty before EA lets you open a pack;
+  the bot sorts it first and stops if something can't be moved (for example a full pile).
+- **SBC tab → Load SBCs → View → Solve.** Challenges tagged **auto** can be solved:
+  team rating, min/max/exact player rating, Bronze/Silver/Gold, and rare count.
+  Chemistry and league/nation/club count requirements show as **manual** for now.
 
 ### Discord alerts
 In Discord: Server Settings → Integrations → Webhooks → New Webhook → Copy URL. Paste it
@@ -75,11 +88,21 @@ and stop for the day. Don't use an account you can't afford to lose.
 **Deliberately not included:** running 24/7 or auto-restarting after limits, solving or
 skipping captchas, and hiding the script from EA.
 
+## Roadmap
+
+Researched and possible next, roughly in order of value:
+1. **Chemistry & league/nation/club SBCs** — extend the solver with the chemistry model
+   already used by the upgrade advisor, so "Hybrid Leagues"-style SBCs can be solved.
+2. **Open SBC reward packs automatically** after submitting, and sort them.
+3. **Claim objectives / rewards** in one tap.
+4. **Evolutions helper** — list which of your players qualify for active evolutions.
+5. **Price data in the upgrade advisor** — show each suggestion's market average.
+
 ## Develop
 
 ```
 npm test        # unit tests for pricing, search, safety, history (no browser)
-npm run e2e     # full run in Chromium against a mocked Web App (~2 min)
+npm run e2e     # Chromium runs against a mocked Web App: sniper, then packs/SBC/upgrades (~5 min)
 ```
 
 `fc-sniper.user.js` has pure, unit-tested logic first, then the runtime: Web App adapter,
