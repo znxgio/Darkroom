@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FC Sniper
 // @namespace    https://github.com/znxgio/darkroom
-// @version      1.6.0
+// @version      1.6.1
 // @description  Sniper, pack opener, SBC solver and team upgrade advisor for the EA SPORTS FC Ultimate Team Web App, with built-in safety limits.
 // @match        https://www.ea.com/*ultimate-team/web-app*
 // @match        https://www.ea.com/ea-sports-fc/ultimate-team/web-app*
@@ -633,6 +633,12 @@
 
   // ---- Positions, formations & best lineup -------------------------------------------
 
+  /** The base player behind any version of a card (specials add a prefix above 24 bits). */
+  function baseId(defId) {
+    const n = Number(defId) || 0;
+    return n > 0xFFFFFF ? n & 0xFFFFFF : n;
+  }
+
   /** EA position ids → names. */
   const POS_NAMES = { 0: 'GK', 1: 'SW', 2: 'RWB', 3: 'RB', 4: 'RCB', 5: 'CB', 6: 'LCB', 7: 'LB', 8: 'LWB', 9: 'RDM', 10: 'CDM', 11: 'LDM', 12: 'RM', 13: 'RCM', 14: 'CM', 15: 'LCM', 16: 'LM', 17: 'RAM', 18: 'CAM', 19: 'LAM', 20: 'RF', 21: 'CF', 22: 'LF', 23: 'RW', 24: 'RS', 25: 'ST', 26: 'LS', 27: 'LW' };
   const POS_GENERAL = { SW: 'CB', RCB: 'CB', LCB: 'CB', RDM: 'CDM', LDM: 'CDM', RCM: 'CM', LCM: 'CM', RAM: 'CAM', LAM: 'CAM', RF: 'CF', LF: 'CF', RS: 'ST', LS: 'ST' };
@@ -1068,7 +1074,7 @@
     aggregateListings, hotScore, rankHot,
     addHistory, summarizeHistory, isDiscordWebhook, discordPayload,
     squadRating, squadChemistry, topValues, rankUpgrades,
-    POS_NAMES, normPos, FORMATIONS, squadRatingExact, lineupScore, bestLineup, metaScore, readStats,
+    POS_NAMES, normPos, baseId, FORMATIONS, squadRatingExact, lineupScore, bestLineup, metaScore, readStats,
     fodderValue, playerCost, qualityOf, parseRequirements, solveSbc, sortItem,
     SAFETY, clampConfig, dayKey, usageFor, lockoutFor, formatDuration, canStart,
   };
@@ -1084,7 +1090,7 @@
 
   const w = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '1.6.0';
+  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '1.6.1';
   const errText = (e) => (e && e.message ? e.message : String(e));
   const fmt = (n) => Number(n || 0).toLocaleString();
 
@@ -1379,6 +1385,7 @@
       return { state, price: a.currentBid || a.buyNowPrice || 0, tradeId: a.tradeId };
     },
     async transferList() {
+      if (typeof w.services.Item.requestTransferItems !== 'function') return null;
       const res = await observe(w.services.Item.requestTransferItems());
       return res.success ? ((res.data && res.data.items) || []) : null;
     },
@@ -2362,22 +2369,39 @@
       return { slots, order, by };
     },
 
+    /**
+     * Every card you own: whole club (+ SBC storage), transfer list and
+     * unassigned, plus the squad. Returns { club (usable in squads), ownedBase }.
+     */
+    async ownedCards(slots = []) {
+      const asP = (item) => ({ ...fut.toPlayer(item), source: 'club' });
+      const read = await fut.clubPlayers((n) => engine.setStatus('pricing', `Checking your club… ${n}`));
+      jobs.check(read, 'reading your club');
+      const all = read.items.map(asP).filter((p) => p.player);
+      const club = all.filter((p) => !p.loan && !p.storage);
+      const storage = all.filter((p) => p.storage);
+      const transfer = ((await fut.transferList()) || []).map(asP).filter((p) => p.player);
+      const unassigned = ((await fut.unassigned()) || []).map(asP).filter((p) => p.player);
+      const squad = slots.map((x) => x.player).filter(Boolean);
+      const ownedBase = new Set([...all, ...transfer, ...unassigned, ...squad].map((p) => baseId(p.id)));
+      ui.log(`Owned: ${ownedBase.size} players (club ${club.length}, SBC storage ${storage.length}, transfer list ${transfer.length}, unassigned ${unassigned.length})`, 'muted');
+      return { club, ownedBase };
+    },
+
     async analyse() {
       await jobs.run('Analysing your team', async () => {
         const { slots, order, by } = await this.readSquad();
         this.results = order.slice(0, 3).map((i) => ({ slotIndex: i, position: slots[i].position, current: slots[i].player, options: [] }));
         ui.renderUpgrades();
 
-        // Candidates you already own.
-        const owned = await fut.clubPlayers((n) => engine.setStatus('pricing', `Checking your club… ${n}`));
-        jobs.check(owned, 'reading your club');
-        const club = owned.items.map((item) => ({ ...fut.toPlayer(item), source: 'club' })).filter((p) => p.player && !p.loan);
+        // Candidates you already own (and everything you own, so it's never suggested as a buy).
+        const { club, ownedBase } = await this.ownedCards(slots);
 
         const budget = engine.cfg.upgradeBudget || Math.max(0, fut.coins() - engine.cfg.minCoins);
         for (const res of this.results) {
           let candidates = club.slice();
           if (engine.cfg.upgradeMarket && budget >= 1000) {
-            candidates = candidates.concat(await this.market(res, budget));
+            candidates = candidates.concat((await this.market(res, budget)).filter((o) => !ownedBase.has(baseId(o.id))));
           }
           res.options = rankUpgrades(slots, res.slotIndex, candidates, { budget, by }).filter((o) => o.source === 'club' || o.price <= budget).slice(0, 4);
           res.done = true;
@@ -2442,7 +2466,10 @@
         const budget = listSpendable(cfg, fut.coins());
         if (budget < 1000) { ui.log('Not enough coins (or spend limit) left to fill the list', 'warn'); return; }
         const { slots, order, by } = await this.readSquad();
-        const listed = new Set(cfg.players.map((p) => p.id));
+        const listed = new Set(cfg.players.map((p) => baseId(p.id)));
+        // Everything you own — whole club, SBC storage, transfer list, unassigned
+        // (any version of a player counts) — is never bought again.
+        const { club, ownedBase } = await this.ownedCards(slots);
         const off = Math.max(0, Math.min(50, cfg.discount || 0)) / 100;
         // Look a bit above budget: a snipe at `discount`% under still fits.
         const searchBudget = roundPrice(budget / (1 - off));
@@ -2450,13 +2477,18 @@
         for (const idx of order.slice(0, 3)) {
           if (jobs.cancelled) break;
           const res = { slotIndex: idx, position: slots[idx].position };
-          const cands = await this.market(res, searchBudget, { searches: 3 });
-          const best = rankUpgrades(slots, idx, cands, { budget: searchBudget, by }).find((o) => !listed.has(o.id));
+          const market = (await this.market(res, searchBudget, { searches: 3 })).filter((o) => !ownedBase.has(baseId(o.id)));
+          const ranked = rankUpgrades(slots, idx, [...club, ...market], { budget: searchBudget, by });
+          if (ranked[0] && ranked[0].source === 'club') {
+            ui.log(`🧩 ${res.position}: you already own ${ranked[0].name} ${ranked[0].rating} — put him in your squad (no need to buy)`, 'ok');
+            continue;
+          }
+          const best = ranked.find((o) => o.source !== 'club' && !listed.has(baseId(o.id)));
           if (!best) { ui.log(`${res.position}: no affordable upgrade found`, 'muted'); continue; }
           const maxBuy = Math.min(roundPrice(best.price * (1 - off), 'down'), roundPrice(budget, 'down'));
           if (maxBuy < MIN_PRICE) continue;
           const entry = { id: best.id, name: best.name, rating: best.rating, manualMax: maxBuy, autofill: `${res.position} upgrade`, lowest: best.price };
-          listed.add(best.id);
+          listed.add(baseId(best.id));
           added.push(entry);
           ui.log(`🧩 ${res.position}: ${best.name} ${best.rating} — cheapest ${fmt(best.price)}, sniping ≤ ${fmt(maxBuy)}${best.chemGain > 0 ? ` · +${best.chemGain} chem` : ''}`, 'ok');
         }
@@ -2557,7 +2589,7 @@
     /** Send a suggestion to the sniper with its listed price as the max buy. */
     snipe(opt) {
       if (engine.running) return;
-      const players = engine.cfg.players.filter((p) => p.id !== opt.id);
+      const players = engine.cfg.players.filter((p) => baseId(p.id) !== baseId(opt.id));
       players.push({ id: opt.id, name: opt.name, rating: opt.rating, manualMax: opt.price ? roundPrice(opt.price) : 0 });
       engine.cfg.players = players;
       engine.save();

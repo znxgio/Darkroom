@@ -115,10 +115,10 @@ const idle = (p, ms = 150000) => p.waitForFunction(() => !document.querySelector
   await p.click('#fcs [data-a=autofill]');
   await idle(p, 200000);
   const filled = await p.evaluate(() => JSON.parse(localStorage.getItem('fc-sniper:config')).players.filter((x) => x.autofill));
-  check('auto-fill adds a snipe for the weak ST', filled.some((x) => /ST upgrade/.test(x.autofill)), JSON.stringify(filled.map((x) => [x.name, x.autofill, x.manualMax, x.lowest])));
-  check('auto-fill max buy is under the cheapest listing', filled.length && filled.every((x) => x.manualMax < x.lowest && x.manualMax <= 120000), JSON.stringify(filled.map((x) => [x.manualMax, x.lowest])));
-  const chipsText = await p.textContent('#fcs [data-r=chips]');
-  check('list shows 🧩 reason', /🧩 ST upgrade/.test(chipsText), chipsText.replace(/\s+/g, ' ').slice(0, 120));
+  const afLog = (await log(p)).filter((l) => /🧩|no affordable|No upgrades|Owned:/.test(l));
+  check('auto-fill never adds a card you own', !filled.some((x) => /Bench|Pacey|Starter|Fodder|Stored|Listed Striker/.test(x.name)), JSON.stringify(filled.map((x) => x.name)));
+  check('auto-fill points to an owned better player instead of buying', afLog.some((l) => /ST: you already own (Bench ST 19|Pacey Striker 84)/.test(l)), afLog.join(' | '));
+  check('auto-fill checks club, storage, transfer list and unassigned', afLog.some((l) => /Owned: \d+ players \(club \d+, SBC storage \d+, transfer list \d+, unassigned \d+\)/.test(l)), afLog.join(' | '));
 
   // ---- Formation coach
   await p.click('#fcs [data-tab=squad]');

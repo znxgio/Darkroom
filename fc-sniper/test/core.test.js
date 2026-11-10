@@ -640,3 +640,10 @@ test('rankUpgrades by meta finds stat upgrades and chemistry sidegrades', () => 
   assert.ok(r.find((x) => x.id === 101 && x.chemGain > 0), 'same level with more chemistry = sidegrade');
   assert.equal(c.rankUpgrades(squad, 10, [pacey, sameLeague], { budget: 20000 }).length, 1, 'by rating only the chem sidegrade counts');
 });
+
+test('baseId: every version of a player maps to the same base', () => {
+  assert.equal(c.baseId(231747), 231747);
+  assert.equal(c.baseId(50563395), 50563395 & 0xFFFFFF);
+  assert.equal(c.baseId((3 << 24) + 231747), 231747);
+  assert.equal(c.baseId(undefined), 0);
+});

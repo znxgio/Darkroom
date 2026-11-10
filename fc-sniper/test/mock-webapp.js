@@ -82,11 +82,15 @@ function installMock() {
           mk(800, 86, { pos: 'ST', league: 13, nation: 10, name: 'Same League ST 86', price: 45000 }),
           mk(801, 88, { pos: 'ST', league: 53, nation: 99, name: 'Other League ST 88', price: 60000 }),
           mk(802, 90, { pos: 'ST', league: 13, name: 'Too Pricey ST 90', price: 500000 }),
+          mk(619, 86, { pos: 25, league: 13, nation: 13, name: 'Bench ST 19', price: 30000 }), // a card you already own, listed cheap
+          mk(720, 85, { pos: 25, league: 13, nation: 10, name: 'Listed Striker 85', price: 20000 }), // on your transfer list
         ].filter((i) => !c.maxBuy || i._auction.buyNowPrice <= c.maxBuy) : [];
         return obs({ success: true, data: { items } });
       },
       searchStorageItems: () => obs({ success: true, data: { items: storage, endOfList: true } }),
       requestUnassignedItems: () => obs({ success: true, data: { items: T.unassigned.slice() } }),
+      // a striker you're selling on the transfer list (owned, listed cheap on the market below)
+      requestTransferItems: () => obs({ success: true, data: { items: [mk(720, 85, { pos: 25, league: 13, name: 'Listed Striker 85', untradeable: false })] } }),
       move(items, pile) {
         const key = { 1: 'club', 5: 'transfer', 6: 'storage' }[pile];
         items.forEach((it) => { T.unassigned = T.unassigned.filter((u) => u !== it); it.pile = pile; T.piles[key].push(it.rating); });
