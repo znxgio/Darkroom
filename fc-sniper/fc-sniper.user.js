@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FC Sniper
 // @namespace    https://github.com/znxgio/darkroom
-// @version      0.3.0
+// @version      0.4.0
 // @description  Transfer-market sniper / autobuyer for the EA SPORTS FC Ultimate Team Web App.
 // @match        https://www.ea.com/*ultimate-team/web-app*
 // @match        https://www.ea.com/ea-sports-fc/ultimate-team/web-app*
@@ -233,6 +233,75 @@
     return out;
   }
 
+  // ---- Safety limits ---------------------------------------------------------
+  // These keep the bot's request rate and session length closer to a normal
+  // player's, and back off hard when EA pushes back. They lower ban risk;
+  // they do not make the bot invisible to EA.
+
+  const SAFETY = {
+    minDelay: 3000, // never search faster than every 3 s
+    minSpread: 1500, // delay range must be at least this wide
+    maxPauseEvery: 60, // must rest at least every 60 searches
+    minPause: 20000, // rests last at least 20 s
+    maxSearchesPerDay: 1500,
+    maxSessionMinutes: 120,
+    maxConsecutiveErrors: 3,
+    lockMs: { captcha: 3 * 3600e3, throttled: 24 * 3600e3, errors: 30 * 60e3 },
+  };
+
+  /** Enforce the safety floors on a config. Returns { cfg, changed: [keys] }. */
+  function clampConfig(input) {
+    const cfg = { ...input };
+    const changed = [];
+    const set = (k, v) => { if (cfg[k] !== v) { cfg[k] = v; changed.push(k); } };
+    const num = (k) => Number(cfg[k]) || 0;
+    set('delayMin', Math.max(SAFETY.minDelay, num('delayMin')));
+    set('delayMax', Math.max(cfg.delayMin + SAFETY.minSpread, num('delayMax')));
+    set('pauseEvery', Math.min(SAFETY.maxPauseEvery, Math.max(1, num('pauseEvery') || SAFETY.maxPauseEvery)));
+    set('pauseMin', Math.max(SAFETY.minPause, num('pauseMin')));
+    set('pauseMax', Math.max(cfg.pauseMin, num('pauseMax')));
+    set('searchesPerDay', Math.min(SAFETY.maxSearchesPerDay, Math.max(1, num('searchesPerDay') || SAFETY.maxSearchesPerDay)));
+    set('buysPerDay', Math.max(1, num('buysPerDay') || 1));
+    set('sessionMinutes', Math.min(SAFETY.maxSessionMinutes, Math.max(1, num('sessionMinutes') || SAFETY.maxSessionMinutes)));
+    set('maxSearches', Math.max(1, num('maxSearches') || 1));
+    return { cfg, changed };
+  }
+
+  /** Local calendar day, e.g. "2026-11-10". */
+  function dayKey(now) {
+    const d = new Date(now);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  }
+
+  /** Today's usage counters (resets at local midnight). */
+  function usageFor(usage, now) {
+    const day = dayKey(now);
+    return usage && usage.day === day ? { ...usage } : { day, searches: 0, buys: 0 };
+  }
+
+  /** How long to refuse to start after a problem of this kind. */
+  function lockoutFor(kind) {
+    return SAFETY.lockMs[kind] || 0;
+  }
+
+  function formatDuration(ms) {
+    const m = Math.ceil(ms / 60e3);
+    if (m < 60) return `${m} min`;
+    const h = Math.floor(m / 60);
+    return m % 60 ? `${h} h ${m % 60} min` : `${h} h`;
+  }
+
+  /** Whether a run may start now. state = { usage, lockUntil, lockReason }. */
+  function canStart(state, cfg, now) {
+    if (state && state.lockUntil > now) {
+      return { ok: false, reason: `cooling down after ${state.lockReason || 'a warning'} — ${formatDuration(state.lockUntil - now)} left` };
+    }
+    const u = usageFor(state && state.usage, now);
+    if (u.searches >= cfg.searchesPerDay) return { ok: false, reason: `daily search limit reached (${u.searches}/${cfg.searchesPerDay}) — resets at midnight` };
+    if (u.buys >= cfg.buysPerDay) return { ok: false, reason: `daily buy limit reached (${u.buys}/${cfg.buysPerDay}) — resets at midnight` };
+    return { ok: true };
+  }
+
   const DEFAULT_CONFIG = {
     // search filters
     type: 'player',
@@ -252,14 +321,17 @@
     sellPrice: 0, // 0 = auto (break-even + minProfit)
     minProfit: 200,
     listDuration: 3600,
-    // pacing / safety
-    delayMin: 3500,
-    delayMax: 6500,
-    pauseEvery: 40, // searches
-    pauseMin: 30000,
-    pauseMax: 75000,
-    maxSearches: 400,
-    maxBuys: 10,
+    // pacing / safety (see SAFETY for the enforced floors)
+    delayMin: 4000,
+    delayMax: 8000,
+    pauseEvery: 30, // searches
+    pauseMin: 45000,
+    pauseMax: 120000,
+    maxSearches: 250, // per session
+    maxBuys: 10, // per session
+    sessionMinutes: 40,
+    searchesPerDay: 600,
+    buysPerDay: 40,
     minCoins: 0, // keep at least this many coins
     sound: true,
   };
@@ -269,6 +341,7 @@
     priceStep, roundPrice, nextPrice, prevPrice, afterTax, profit, breakEvenSell,
     cacheBustBid, jitter, pickTargets, planSellPrice, classifyStatus,
     normalizeName, parsePlayerDb, searchPlayers, playerForIteration, migrateConfig,
+    SAFETY, clampConfig, dayKey, usageFor, lockoutFor, formatDuration, canStart,
   };
 
   if (typeof module === 'object' && module.exports) {
@@ -397,6 +470,14 @@
     try { localStorage.setItem(STORE_KEY, JSON.stringify(cfg)); } catch { /* ignore */ }
   }
 
+  const SAFETY_KEY = 'fc-sniper:safety';
+  function loadSafety() {
+    try { return JSON.parse(localStorage.getItem(SAFETY_KEY) || '{}'); } catch { return {}; }
+  }
+  function saveSafety(state) {
+    try { localStorage.setItem(SAFETY_KEY, JSON.stringify(state)); } catch { /* ignore */ }
+  }
+
   // ---------------------------------------------------------------------------
   // Sniping engine
   // ---------------------------------------------------------------------------
@@ -413,6 +494,32 @@
       ui.renderStats();
     },
 
+    safety: loadSafety(),
+
+    countUsage(field) {
+      const u = usageFor(this.safety.usage, Date.now());
+      u[field]++;
+      this.safety.usage = u;
+      saveSafety(this.safety);
+      return u;
+    },
+
+    lock(kind, reason) {
+      const ms = lockoutFor(kind);
+      if (!ms) return;
+      this.safety.lockUntil = Date.now() + ms;
+      this.safety.lockReason = reason;
+      saveSafety(this.safety);
+      ui.log(`Safety lock: won't start again for ${formatDuration(ms)}`, 'err');
+    },
+
+    /** Stop because EA pushed back, and refuse to restart for a while. */
+    halt(kind, reason) {
+      this.stop(reason);
+      this.lock(kind, reason.split(' (')[0]);
+      alarm();
+    },
+
     stop(reason) {
       if (!this.running) return;
       this.running = false;
@@ -424,30 +531,52 @@
     async start() {
       if (this.running) return;
       if (!fut.ready()) { ui.log('Web App not ready — log in and open the Transfers tab first.', 'err'); return; }
-      this.cfg = ui.readForm();
+      const { cfg: safeCfg, changed } = clampConfig(ui.readForm());
+      if (changed.length) {
+        ui.writeForm(safeCfg);
+        ui.log(`Raised to safe minimums: ${changed.join(', ')}`, 'warn');
+      }
+      this.cfg = safeCfg;
       saveConfig(this.cfg);
+      this.safety = loadSafety();
+      const gate = canStart(this.safety, this.cfg, Date.now());
+      if (!gate.ok) { ui.log(`Can't start: ${gate.reason}`, 'err'); return; }
+      const today = usageFor(this.safety.usage, Date.now());
       this.running = true;
       ui.setRunning(true);
       keepAwake(true);
       const who = this.cfg.players.length ? this.cfg.players.map((p) => p.name).join(', ') : 'any player matching filters';
       ui.log(`Started — ${who}, max buy ${this.cfg.maxBuy.toLocaleString()} coins`);
+      ui.log(`Today: ${today.searches}/${this.cfg.searchesPerDay} searches, ${today.buys}/${this.cfg.buysPerDay} buys. Session ends after ${this.cfg.sessionMinutes} min.`, 'muted');
+      const sessionStart = Date.now();
+      const sessionSearches = this.stats.searches;
+      const sessionBuys = this.stats.buys;
+      let errors = 0;
       let i = 0;
       try {
         while (this.running) {
           const cfg = this.cfg;
-          if (this.stats.searches >= cfg.maxSearches) { this.stop('search limit reached'); break; }
-          if (this.stats.buys >= cfg.maxBuys) { this.stop('buy limit reached'); break; }
+          if (this.stats.searches - sessionSearches >= cfg.maxSearches) { this.stop('session search limit reached'); break; }
+          if (this.stats.buys - sessionBuys >= cfg.maxBuys) { this.stop('session buy limit reached'); break; }
+          if (Date.now() - sessionStart >= cfg.sessionMinutes * 60e3) { this.stop(`${cfg.sessionMinutes} min session limit — take a break`); break; }
+          const gate = canStart(this.safety, cfg, Date.now());
+          if (!gate.ok) { this.stop(gate.reason); break; }
           const available = fut.coins() - cfg.minCoins;
           if (available < MIN_PRICE) { this.stop('not enough coins'); break; }
 
           const res = await fut.search(fut.buildCriteria(cfg, i++));
           this.stats.searches++;
+          this.countUsage('searches');
           if (!res.ok) {
             const kind = classifyStatus(res.status);
-            if (kind === 'captcha') { this.stop(`EA verification required (${res.status}) — solve it in the Web App`); alarm(); break; }
-            if (kind === 'throttled' || kind === 'session') { this.stop(`market blocked / session issue (${res.status}) — take a break`); alarm(); break; }
-            ui.log(`Search error ${res.status}`, 'warn');
+            if (kind === 'captcha') { this.halt('captcha', `EA verification (${res.status}) — solve it in the Web App, then leave it alone`); break; }
+            if (kind === 'throttled') { this.halt('throttled', `transfer market limited (${res.status}) — stop for today`); break; }
+            if (kind === 'session') { this.stop(`logged out (${res.status}) — log in again`); alarm(); break; }
+            errors++;
+            ui.log(`Search error ${res.status} (${errors}/${SAFETY.maxConsecutiveErrors})`, 'warn');
+            if (errors >= SAFETY.maxConsecutiveErrors) { this.halt('errors', `${errors} errors in a row (${res.status})`); break; }
           } else {
+            errors = 0;
             const listings = res.items.map(fut.toListing);
             const targets = pickTargets(listings, cfg, available);
             for (const t of targets) {
@@ -476,12 +605,13 @@
       if (!r.ok) {
         const kind = classifyStatus(r.status);
         this.stats.missed++;
-        if (kind === 'captcha' || kind === 'throttled') { this.stop(`blocked while buying (${r.status})`); alarm(); return; }
+        if (kind === 'captcha' || kind === 'throttled') { this.halt(kind, `blocked while buying (${r.status})`); return; }
         if (kind === 'coins') { this.stop('not enough coins'); return; }
         ui.log(`Missed ${t.name} @ ${t.buyNowPrice.toLocaleString()} (${r.status})`, 'muted');
         return;
       }
       this.stats.buys++;
+      this.countUsage('buys');
       this.stats.spent += t.buyNowPrice;
       ui.log(`BOUGHT ${t.name} (${t.rating || '?'}) @ ${t.buyNowPrice.toLocaleString()}`, 'ok');
       if (cfg.sound) beep();
@@ -562,7 +692,7 @@
     ['Buy', [
       ['maxBuy', 'Max buy now', 'number'],
       ['maxBuysPerSearch', 'Buys / search', 'number'],
-      ['maxBuys', 'Stop after buys', 'number'],
+      ['maxBuys', 'Buys / session', 'number'],
       ['minCoins', 'Keep coins', 'number'],
     ]],
     ['Sell', [
@@ -571,13 +701,16 @@
       ['minProfit', 'Min profit', 'number'],
       ['listDuration', 'Duration (s)', 'select', ['3600', '10800', '21600', '43200', '86400', '259200']],
     ]],
-    ['Pacing', [
-      ['delayMin', 'Delay min (ms)', 'number'],
+    ['Safety', [
+      ['delayMin', 'Delay min (ms, ≥3000)', 'number'],
       ['delayMax', 'Delay max (ms)', 'number'],
-      ['pauseEvery', 'Rest every N', 'number'],
+      ['pauseEvery', 'Rest every N (≤60)', 'number'],
       ['pauseMin', 'Rest min (ms)', 'number'],
       ['pauseMax', 'Rest max (ms)', 'number'],
-      ['maxSearches', 'Stop after searches', 'number'],
+      ['sessionMinutes', 'Session length (min)', 'number'],
+      ['maxSearches', 'Searches / session', 'number'],
+      ['searchesPerDay', 'Searches / day', 'number'],
+      ['buysPerDay', 'Buys / day', 'number'],
       ['sound', 'Sound', 'checkbox'],
     ]],
   ];
@@ -672,6 +805,8 @@
       });
       if (isMobile()) root.classList.add('mob', 'min');
       this.log(isMobile() ? 'Ready. Tap ▶ to start, – to expand.' : 'Ready. Alt+S to start/stop.');
+      const gate = canStart(engine.safety, clampConfig(engine.cfg).cfg, Date.now());
+      if (!gate.ok) this.log(`Locked: ${gate.reason}`, 'err');
     },
     mountPlayerPicker() {
       const input = this.root.querySelector('.pq');
@@ -738,6 +873,12 @@
         else cfg[k] = el.value.trim();
       });
       return cfg;
+    },
+    writeForm(cfg) {
+      this.root.querySelectorAll('[data-k]').forEach((el) => {
+        const v = cfg[el.dataset.k];
+        if (el.type === 'checkbox') el.checked = !!v; else el.value = v ?? '';
+      });
     },
     setRunning(on) {
       this.root.querySelector('.dot').classList.toggle('on', on);

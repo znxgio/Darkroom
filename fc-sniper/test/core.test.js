@@ -145,3 +145,51 @@ test('migrateConfig converts old comma-separated IDs', () => {
   assert.equal(m.defId, undefined);
   assert.deepEqual(c.migrateConfig({}).players, []);
 });
+
+// ---- safety -----------------------------------------------------------------
+
+test('clampConfig enforces safety floors', () => {
+  const { cfg, changed } = c.clampConfig({ ...c.DEFAULT_CONFIG, delayMin: 500, delayMax: 600, pauseEvery: 0, pauseMin: 1000, pauseMax: 10, searchesPerDay: 99999, sessionMinutes: 999 });
+  assert.equal(cfg.delayMin, 3000);
+  assert.equal(cfg.delayMax, 4500);
+  assert.equal(cfg.pauseEvery, 60);
+  assert.equal(cfg.pauseMin, 20000);
+  assert.equal(cfg.pauseMax, 20000);
+  assert.equal(cfg.searchesPerDay, 1500);
+  assert.equal(cfg.sessionMinutes, 120);
+  assert.ok(changed.includes('delayMin') && changed.includes('sessionMinutes'));
+});
+
+test('default config already satisfies the safety floors', () => {
+  assert.deepEqual(c.clampConfig(c.DEFAULT_CONFIG).changed, []);
+});
+
+test('usage resets each day', () => {
+  const t = new Date(2026, 10, 10, 23, 0).getTime();
+  const u = c.usageFor({ day: c.dayKey(t), searches: 5, buys: 1 }, t);
+  assert.equal(u.searches, 5);
+  const next = c.usageFor(u, t + 2 * 3600e3);
+  assert.deepEqual([next.searches, next.buys], [0, 0]);
+  assert.deepEqual(c.usageFor(undefined, t).searches, 0);
+});
+
+test('canStart respects lockouts and daily limits', () => {
+  const now = Date.now();
+  const cfg = { searchesPerDay: 10, buysPerDay: 2 };
+  assert.equal(c.canStart({}, cfg, now).ok, true);
+  const locked = c.canStart({ lockUntil: now + 90 * 60e3, lockReason: 'EA verification' }, cfg, now);
+  assert.equal(locked.ok, false);
+  assert.match(locked.reason, /EA verification.*1 h 30 min/);
+  assert.equal(c.canStart({ lockUntil: now - 1 }, cfg, now).ok, true);
+  assert.equal(c.canStart({ usage: { day: c.dayKey(now), searches: 10, buys: 0 } }, cfg, now).ok, false);
+  assert.equal(c.canStart({ usage: { day: c.dayKey(now), searches: 0, buys: 2 } }, cfg, now).ok, false);
+});
+
+test('lockouts: captcha 3h, market limit 24h, repeated errors 30min', () => {
+  assert.equal(c.lockoutFor('captcha'), 3 * 3600e3);
+  assert.equal(c.lockoutFor('throttled'), 24 * 3600e3);
+  assert.equal(c.lockoutFor('errors'), 30 * 60e3);
+  assert.equal(c.lockoutFor('missed'), 0);
+  assert.equal(c.formatDuration(45 * 60e3), '45 min');
+  assert.equal(c.formatDuration(3 * 3600e3), '3 h');
+});

@@ -49,10 +49,31 @@ switch apps, and the bot pauses with them. It picks up again when you come back.
   or a soft ban (429/521/512), on a session expiry, when coins run out, or when it hits your
   search or buy limits. An alarm sounds when that happens.
 
-### Safety tips
-- Keep delays at 3–6 s or more and sessions short (a few hundred searches), then rest.
-- Don't run it around the clock. Long, regular sessions are what get accounts flagged.
-- If a captcha appears, solve it yourself and take a break before restarting.
+### Safety limits (built in)
+These lower the chance of a ban. They **don't make the bot undetectable**; nothing does,
+and EA bans users of every autobuyer, paid ones included.
+
+| Limit | Default | Enforced |
+|---|---|---|
+| Delay between searches | 4–8 s, random | at least 3 s, with at least 1.5 s of randomness |
+| Rest break | 45–120 s every 30 searches | at least 20 s, at least every 60 searches |
+| Session length | 40 min | at most 120 min |
+| Searches per session / per day | 250 / 600 | at most 1,500 per day |
+| Buys per session / per day | 10 / 40 | |
+
+If you type something below a minimum, it's raised back up when you press Start.
+Daily counts reset at midnight and survive page reloads.
+
+**Lockouts.** When EA pushes back, the bot stops and **won't start again** for a while,
+even after you reload the page:
+- captcha or verification prompt: **3 hours**
+- transfer market limited or soft-banned: **24 hours**
+- 3 errors in a row: **30 minutes**
+
+**Habits that matter most:**
+- Don't snipe every day for hours. A few short sessions a week is far safer.
+- When a captcha appears, solve it and stop for the day. Repeated captchas come right before bans.
+- Don't use this on an account you can't afford to lose.
 
 ## Develop
 
