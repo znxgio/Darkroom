@@ -148,6 +148,22 @@ const idle = (p, ms = 150000) => p.waitForFunction(() => !document.querySelector
   const brSub = await p.evaluate(() => T.submitted[T.submitted.length - 1]);
   check('Break Away submitted with players all ≤ 64', (await p.evaluate(() => T.submitted.length)) === subBefore + 1 && brSub.length === 11 && brSub.every((x) => x.r <= 64), JSON.stringify(brSub.map((x) => x.r)));
 
+  // ---- Hat-trick: a 3-player SBC → fills exactly 3, in the 3 open slots
+  await p.click('#fcs [data-a=sbc-set][data-i="4"]');
+  await p.waitForSelector('#fcs [data-a=sbc-solve][data-i="4"]');
+  await idle(p);
+  await p.click('#fcs [data-a=sbc-solve][data-i="4"]');
+  await p.waitForSelector('#fcs [data-a=sbc-submit]', { timeout: 200000 });
+  await idle(p);
+  const hatPlan = await p.textContent('#fcs [data-r=plan] .list');
+  const hatRows = await p.$$eval('#fcs [data-r=plan] .list .li', (els) => els.length);
+  check('3-player SBC plans 3 players', hatRows === 3 && (await log(p)).some((l) => /needs 3 players/.test(l)), `${hatRows} rows`);
+  const hatBefore = await p.evaluate(() => T.submitted.length);
+  await p.click('#fcs [data-a=sbc-submit]');
+  await idle(p, 200000);
+  const hat = await p.evaluate(() => ({ sub: T.submitted[T.submitted.length - 1], idx: T.hatIdx, n: T.submitted.length }));
+  check('3-player SBC submitted with 3 in the open slots', hat.n >= hatBefore + 1 && hat.sub.length === 3 && JSON.stringify(hat.idx) === '[5,6,7]', JSON.stringify(hat));
+
   check('active squad protected (starters)', !sub.flat().some((x) => x.def >= 100 && x.def <= 110));
   check('subs and reserves protected', !sub.flat().some((x) => x.def === 650 || x.def === 651));
   check('special cards not used', !sub.flat().some((x) => x.def >= 660 && x.def < 670));

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FC Sniper
 // @namespace    https://github.com/znxgio/darkroom
-// @version      1.7.3
+// @version      1.7.4
 // @description  Sniper, pack opener, SBC solver and team upgrade advisor for the EA SPORTS FC Ultimate Team Web App, with built-in safety limits.
 // @match        https://www.ea.com/*ultimate-team/web-app*
 // @match        https://www.ea.com/ea-sports-fc/ultimate-team/web-app*
@@ -1269,7 +1269,7 @@
 
   const w = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '1.7.3';
+  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '1.7.4';
   const errText = (e) => (e && e.message ? e.message : String(e));
   const fmt = (n) => Number(n || 0).toLocaleString();
 
@@ -1524,22 +1524,45 @@
       }
       return out;
     },
+    /** Is this squad slot blocked (a "brick")? EA exposes it as a method or a flag. */
+    isBrick(slot) {
+      if (!slot) return true;
+      if (typeof slot.isBrick === 'function') return !!slot.isBrick();
+      return !!(slot.isBrick || slot.brick || slot._brick || slot.isLocked === true);
+    },
+    /**
+     * The SBC squad's open slots, in fill order, trimmed to the number of
+     * players the challenge needs: [{ index, position }].
+     */
+    challengeOpen(ch) {
+      try {
+        const slots = ch.squad.getFieldPlayers();
+        let open = slots.filter((s) => !this.isBrick(s));
+        const need = this.requiredPlayers(ch);
+        if (open.length > need) open = open.slice(0, need);
+        debugLog.push(`sbc ${ch.name || ch.id}: ${slots.length} slots, ${open.length} open, needs ${need}; slot keys ${Object.keys(slots[0] || {}).slice(0, 20).join(',')}`);
+        return open.map((s) => ({ index: s.index, position: s.position ? normPos(s.position.typeName ?? s.position.id) : '?' }));
+      } catch { return Array.from({ length: this.requiredPlayers(ch) }, (_, index) => ({ index, position: '?' })); }
+    },
     /** Positions of the SBC squad's open slots, in the order they're filled. */
     challengeSlots(ch) {
-      try {
-        return ch.squad.getFieldPlayers()
-          .filter((s) => !(typeof s.isBrick === 'function' && s.isBrick()))
-          .map((s) => (s.position ? normPos(s.position.typeName ?? s.position.id) : '?'));
-      } catch { return new Array(this.requiredPlayers(ch)).fill('?'); }
+      return this.challengeOpen(ch).map((x) => x.position);
     },
+    /** Players the challenge needs: EA's own count, else its "number of players" rule, else 11. */
     requiredPlayers(ch) {
-      try { return ch.squad.getNumOfRequiredPlayers() || 11; } catch { return 11; }
+      try {
+        const n = ch.squad && ch.squad.getNumOfRequiredPlayers();
+        if (n > 0) return n;
+      } catch { /* not loaded yet */ }
+      const fromRule = this.requirements(ch).find((r) => r.key === 'PLAYER_COUNT');
+      const v = fromRule && Number(fromRule.values[0]);
+      return v > 0 && v <= 11 ? v : 11;
     },
     /** Put players into the challenge squad's open slots and save it. */
     async fillChallenge(ch, items) {
       const squad = ch.squad;
       const slots = squad.getFieldPlayers();
-      const open = slots.filter((s) => !(typeof s.isBrick === 'function' && s.isBrick())).map((s) => s.index);
+      const open = this.challengeOpen(ch).map((x) => x.index);
       const arr = new Array(Math.max(11, ...slots.map((s) => s.index + 1))).fill(null);
       open.slice(0, items.length).forEach((idx, i) => { arr[idx] = items[i]; });
       squad.removeAllItems();
@@ -2521,12 +2544,20 @@
 
     async solve(set, entry) {
       await jobs.run('Solving SBC', async () => {
-        const { challenge, parsed } = entry;
+        const { challenge } = entry;
+        let { parsed } = entry;
         if (parsed.unsupported.length) { ui.log(`Can't auto-solve yet: ${parsed.unsupported.join(', ')}`, 'warn'); return; }
         const cfg = engine.cfg;
         const load = await fut.loadChallenge(challenge);
         jobs.check(load, 'loading the challenge');
+        // The number of players is only known once the challenge is loaded.
+        entry.parsed = parseRequirements(entry.reqs, fut.requiredPlayers(challenge));
+        const parsedNow = entry.parsed;
         const slots = fut.challengeSlots(challenge);
+        if (parsedNow.constraints.players !== slots.length) parsedNow.constraints.players = slots.length;
+        parsed = parsedNow;
+        if (parsed.unsupported.length) { ui.log(`Can't auto-solve yet: ${parsed.unsupported.join(', ')}`, 'warn'); return; }
+        if (parsed.constraints.players < 11) ui.log(`This SBC needs ${parsed.constraints.players} player${parsed.constraints.players === 1 ? '' : 's'}`, 'muted');
         if (parsed.constraints.needsSearch && slots.some((x) => x === '?')) ui.log('Couldn’t read this SBC’s positions — chemistry may not work', 'warn');
         const club = await this.pool();
         this.club = club;

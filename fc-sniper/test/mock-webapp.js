@@ -74,7 +74,18 @@ function installMock() {
   const sets = [{ id: 1, name: '84+ Upgrade', description: 'Repeatable', isComplete: () => false, repeatable: true, timesCompleted: 0 },
     { id: 2, name: 'Hybrid Leagues', description: 'Chemistry', isComplete: () => false },
     { id: 3, name: 'Elite 87', description: 'Needs buys', isComplete: () => false },
-    { id: 4, name: 'Break Away', description: 'Bronze', isComplete: () => false }];
+    { id: 4, name: 'Break Away', description: 'Bronze', isComplete: () => false },
+    { id: 5, name: 'Hat-trick', description: '3 players', isComplete: () => false }];
+  // a 3-player SBC: player count only known after loading, unused slots flagged (not a method) as bricks
+  const hatSquad = {
+    loaded: false, players: [],
+    getNumOfRequiredPlayers() { if (!this.loaded) throw new Error('not loaded'); return 3; },
+    getFieldPlayers: () => ['GK', 'RB', 'CB', 'CB', 'LB', 'CM', 'CM', 'CM', 'RW', 'ST', 'LW'].map((typeName, index) => ({ index, isBrick: ![5, 6, 7].includes(index), position: { typeName } })),
+    removeAllItems() { this.players = []; },
+    setPlayers(arr) { this.players = arr.filter(Boolean); T.hatIdx = arr.map((x, i) => (x ? i : -1)).filter((i) => i >= 0); },
+  };
+  const hatChallenge = { id: 81, name: 'Hat-trick', squad: hatSquad, isCompleted: () => false,
+    eligibilityRequirements: [{ scope: 0, count: -1, kvPairs: { _collection: { 26: [75] } } }, { scope: 1, count: -1, kvPairs: { _collection: { 28: [84] } } }] };
   // every player ≤ 64: the club has no bronzes, so all come from the market
   const bronzeChallenge = { id: 80, name: 'Break Away', squad: sbcSquad, isCompleted: () => false,
     eligibilityRequirements: [{ scope: 1, count: -1, kvPairs: { _collection: { 28: [64] } } }] };
@@ -156,8 +167,8 @@ function installMock() {
       create(name, formation, items) { T.created = { name, formation, n: items.filter(Boolean).length, ratings: items.map((i) => i && i.rating) }; return obs({ success: true }); } },
     SBC: {
       requestSets: () => obs({ success: true, data: { sets } }),
-      requestChallengesForSet: (set) => obs({ success: true, data: { challenges: set.id === 1 ? (done < 2 ? [challenge()] : []) : set.id === 3 ? [eliteChallenge] : set.id === 4 ? [bronzeChallenge] : [chemChallenge] } }),
-      loadChallenge: () => obs({ success: true }),
+      requestChallengesForSet: (set) => obs({ success: true, data: { challenges: set.id === 1 ? (done < 2 ? [challenge()] : []) : set.id === 3 ? [eliteChallenge] : set.id === 4 ? [bronzeChallenge] : set.id === 5 ? [hatChallenge] : [chemChallenge] } }),
+      loadChallenge: (ch) => { if (ch && ch.squad && 'loaded' in ch.squad) ch.squad.loaded = true; return obs({ success: true }); },
       saveChallenge: () => obs({ success: true }),
       submitChallenge(ch) {
         T.submitted.push(ch.squad.players.map((p) => ({ id: p.id, def: p.definitionId, r: p.rating, rare: p.rareflag, pile: p.pile, untradeable: p.untradeable })));
