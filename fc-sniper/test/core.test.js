@@ -746,3 +746,13 @@ test('SBC fill-ins: spend the fewest coins, use your own players first', () => {
   const total = buys.reduce((a, p) => a + p.price, 0);
   assert.ok(total <= 9000, `spent ${total}`);
 });
+
+test('marketLevel: quality from rating limits', () => {
+  const lvl = (reqs) => c.marketLevel(c.parseRequirements(reqs).constraints);
+  assert.equal(lvl([{ key: 'PLAYER_MAX_OVR', scope: 'GREATER', values: [64] }]), 'bronze'); // "each ≤ 64" (Break Away)
+  assert.equal(lvl([{ key: 'PLAYER_MIN_OVR', values: [65] }, { key: 'PLAYER_MAX_OVR', values: [74] }]), 'silver'); // A Brace
+  assert.equal(lvl([{ key: 'PLAYER_MIN_OVR', values: [75] }, { key: 'PLAYER_MAX_OVR', values: [84] }]), 'gold');
+  assert.equal(lvl([{ key: 'TEAM_RATING', scope: 'GREATER', values: [84] }]), 'gold');
+  assert.equal(lvl([{ key: 'PLAYER_QUALITY', scope: 'LOWER', values: [2], count: -1 }]), 'silver');
+  assert.equal(lvl([]), null);
+});

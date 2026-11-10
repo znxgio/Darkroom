@@ -73,7 +73,11 @@ function installMock() {
     eligibilityRequirements: [{ scope: 0, count: -1, kvPairs: { _collection: { 19: [87] } } }] };
   const sets = [{ id: 1, name: '84+ Upgrade', description: 'Repeatable', isComplete: () => false, repeatable: true, timesCompleted: 0 },
     { id: 2, name: 'Hybrid Leagues', description: 'Chemistry', isComplete: () => false },
-    { id: 3, name: 'Elite 87', description: 'Needs buys', isComplete: () => false }];
+    { id: 3, name: 'Elite 87', description: 'Needs buys', isComplete: () => false },
+    { id: 4, name: 'Break Away', description: 'Bronze', isComplete: () => false }];
+  // every player ≤ 64: the club has no bronzes, so all come from the market
+  const bronzeChallenge = { id: 80, name: 'Break Away', squad: sbcSquad, isCompleted: () => false,
+    eligibilityRequirements: [{ scope: 1, count: -1, kvPairs: { _collection: { 28: [64] } } }] };
 
   window.services = {
     User: { getUser: () => ({ coins: { amount: 120000 } }) },
@@ -95,6 +99,20 @@ function installMock() {
           });
           return fod;
         };
+        if (!c._position && c.level === 'bronze') {
+          const br = [];
+          for (let k = 0; k < 20; k++) {
+            const it = mk(4500 + k, 55 + (k % 10), { pos: ['GK', 'CB', 'CM', 'ST', 'RB'][k % 5], league: 60 + k, untradeable: false, name: `Bronze ${k}`, price: 200 + (k % 5) * 50 });
+            it.gen = T.gen;
+            br.push(it);
+          }
+          return obs({ success: true, data: { items: br.filter((i) => (!c.maxBuy || i._auction.buyNowPrice <= c.maxBuy) && (!c.minBuy || i._auction.buyNowPrice >= c.minBuy)) } });
+        }
+        if (c.maskedDefId >= 4500 && c.maskedDefId < 4520) {
+          const it = mk(c.maskedDefId, 55 + ((c.maskedDefId - 4500) % 10), { untradeable: false, name: `Bronze ${c.maskedDefId - 4500}`, price: 250 });
+          it.gen = T.gen;
+          return obs({ success: true, data: { items: [it] } });
+        }
         if (!c._position && c.level === 'gold') {
           return obs({ success: true, data: { items: fodder().filter((i) => (!c.maxBuy || i._auction.buyNowPrice <= c.maxBuy) && (!c.minBuy || i._auction.buyNowPrice >= c.minBuy)) } });
         }
@@ -134,7 +152,7 @@ function installMock() {
       create(name, formation, items) { T.created = { name, formation, n: items.filter(Boolean).length, ratings: items.map((i) => i && i.rating) }; return obs({ success: true }); } },
     SBC: {
       requestSets: () => obs({ success: true, data: { sets } }),
-      requestChallengesForSet: (set) => obs({ success: true, data: { challenges: set.id === 1 ? (done < 2 ? [challenge()] : []) : set.id === 3 ? [eliteChallenge] : [chemChallenge] } }),
+      requestChallengesForSet: (set) => obs({ success: true, data: { challenges: set.id === 1 ? (done < 2 ? [challenge()] : []) : set.id === 3 ? [eliteChallenge] : set.id === 4 ? [bronzeChallenge] : [chemChallenge] } }),
       loadChallenge: () => obs({ success: true }),
       saveChallenge: () => obs({ success: true }),
       submitChallenge(ch) {

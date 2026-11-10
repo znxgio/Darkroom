@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FC Sniper
 // @namespace    https://github.com/znxgio/darkroom
-// @version      1.7.1
+// @version      1.7.2
 // @description  Sniper, pack opener, SBC solver and team upgrade advisor for the EA SPORTS FC Ultimate Team Web App, with built-in safety limits.
 // @match        https://www.ea.com/*ultimate-team/web-app*
 // @match        https://www.ea.com/ea-sports-fc/ultimate-team/web-app*
@@ -904,6 +904,20 @@
 
   const GROUP_KEY = { league: 'leagueId', nation: 'nationId', club: 'teamId' };
 
+  /**
+   * Which card quality to look for on the market for an SBC — from its quality
+   * rules or its rating limits ("each ≤ 64" means bronze, "65–74" silver).
+   */
+  function marketLevel(k) {
+    const maxQ = Math.min(k.maxQuality ?? 9, k.maxOvr < 99 ? qualityOf(k.maxOvr) : 9);
+    const minQ = Math.max(k.minQuality || 0, k.minOvr > 0 ? qualityOf(k.minOvr) : 0, k.teamRating >= 75 ? 3 : 0);
+    if (minQ >= 3) return 'gold';
+    if (maxQ === 1) return 'bronze';
+    if (maxQ === 2) return 'silver';
+    if (minQ === 2) return 'silver';
+    return null;
+  }
+
   /** Does a player count toward an id requirement? */
   function matchesReq(p, r) {
     if (r.type === 'quality') return qualityOf(p.rating) >= r.ids[0];
@@ -1240,7 +1254,7 @@
     addHistory, summarizeHistory, isDiscordWebhook, discordPayload,
     squadRating, squadChemistry, topValues, rankUpgrades,
     POS_NAMES, normPos, baseId, FORMATIONS, squadRatingExact, lineupScore, bestLineup, metaScore, readStats,
-    fodderValue, playerCost, qualityOf, COIN_WEIGHT, parseRequirements, solveSbc, sortItem, sbcCheck, solveSbcSearch, matchesReq,
+    fodderValue, playerCost, qualityOf, COIN_WEIGHT, parseRequirements, solveSbc, sortItem, sbcCheck, solveSbcSearch, matchesReq, marketLevel,
     SAFETY, clampConfig, dayKey, usageFor, lockoutFor, formatDuration, canStart,
   };
 
@@ -1255,7 +1269,7 @@
 
   const w = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '1.7.1';
+  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '1.7.2';
   const errText = (e) => (e && e.message ? e.message : String(e));
   const fmt = (n) => Number(n || 0).toLocaleString();
 
@@ -2454,9 +2468,13 @@
      */
     async marketPool(k, ownedBase) {
       const cfg = engine.cfg;
-      const level = k.minQuality >= 3 || k.minOvr >= 75 || k.teamRating >= 75 ? 'gold' : k.maxQuality === 1 ? 'bronze' : k.maxQuality === 2 || k.minQuality === 2 ? 'silver' : null;
-      const perPlayer = Math.max(1000, Math.min(cfg.sbcBuyLimit || 20000, k.teamRating ? fodderValue(k.teamRating + 3) * 2 : 4000));
-      const searches = [0, 0.2, 0.5].map((f) => ({ min: f ? roundPrice(perPlayer * f) : 0 }));
+      const level = marketLevel(k);
+      const cheapLevel = level === 'bronze' || level === 'silver';
+      const perPlayer = cheapLevel ? Math.min(cfg.sbcBuyLimit || 20000, 3000)
+        : Math.max(1000, Math.min(cfg.sbcBuyLimit || 20000, k.teamRating ? fodderValue(k.teamRating + 3) * 2 : 4000));
+      // Several low price levels for bronzes/silvers (they're cheap), wider ones for golds.
+      const mins = level === 'bronze' ? [0, 200, 300, 450] : level === 'silver' ? [0, 250, 400, 650] : [0, 0.2, 0.5].map((f) => (f ? roundPrice(perPlayer * f) : 0));
+      const searches = mins.map((min) => ({ min }));
       if (k.rareMin) searches.push({ min: 0, rare: true });
       const leagues = topValues((this.club || []), 'leagueId', 2).map((x) => x.value);
       if (k.needsSearch) leagues.forEach((league) => searches.push({ min: 0, league }));
@@ -2472,12 +2490,13 @@
         if (q.nation) c.nation = q.nation;
         if (q.club) c.club = q.club;
         c.maxBuy = roundPrice(perPlayer);
-        if (q.min >= 200) c.minBuy = q.min;
+        if (q.min >= 200) c.minBuy = roundPrice(q.min);
         const r = await fut.search(c);
         engine.countUsage('searches');
         jobs.check(r, 'market search');
         for (const l of r.listings) {
           const p = fut.toPlayer(l.item);
+          if (p.rating < k.minOvr || p.rating > k.maxOvr) continue;
           if (!p.player || !l.buyNowPrice || out.has(l.tradeId) || ownedBase.has(baseId(p.id))) continue;
           if (p.special && !cfg.sbcUseSpecials) continue;
           if ((perCard.get(p.id) || 0) >= 3) continue;
@@ -2488,7 +2507,7 @@
         }
         await jobs.pause(cfg.delayMin, cfg.delayMax);
       }
-      ui.log(`Market: ${out.size} cheap listings to fill gaps`, 'muted');
+      ui.log(`Market: ${out.size} cheap ${level ? `${level} ` : ''}listings to fill gaps`, 'muted');
       return [...out.values()];
     },
 
@@ -2511,6 +2530,7 @@
           ui.log('Not possible from your club alone — checking the market for cheap fill-ins…', 'muted');
           const ownedBase = new Set([...(this.raw || []).map((p) => baseId(p.defId ?? p.id)), ...(this.guard ? [...this.guard.defIds].map(baseId) : [])]);
           const market = await this.marketPool(parsed.constraints, ownedBase);
+          this.lastMarket = market;
           engine.setStatus('pricing', 'Solving with market fill-ins…');
           await sleep(30);
           solution = this.solveWith([...club, ...market], entry, slots);
@@ -2520,7 +2540,15 @@
             if (total > (cfg.sbcBuyLimit || 0)) { ui.log(`Cheapest solution needs ${fmt(total)} of buys — over your limit of ${fmt(cfg.sbcBuyLimit)}`, 'warn'); solution = null; buys = []; }
           }
         }
-        if (!solution) { ui.log(`No solution for ${challenge.name || set.name}${cfg.sbcBuyMissing ? '' : ' from your club (turn on “Buy missing players”)'}`, 'warn'); this.plan = null; ui.renderSbc(); return; }
+        if (!solution) {
+          const k = parsed.constraints;
+          const fits = (p) => p.rating >= k.minOvr && p.rating <= k.maxOvr && qualityOf(p.rating) >= (k.minQuality || 0) && qualityOf(p.rating) <= (k.maxQuality || 9);
+          const nClub = club.filter(fits).length;
+          const nMarket = (this.lastMarket || []).filter(fits).length;
+          const range = k.maxOvr < 99 || k.minOvr > 0 ? ` rated ${k.minOvr || 0}–${k.maxOvr}` : '';
+          ui.log(`No solution for ${challenge.name || set.name}: ${nClub + nMarket < k.players ? `only ${nClub + nMarket} of ${k.players} needed players${range} (club ${nClub}, market ${nMarket})` : 'the requirements couldn’t all be met together'}${cfg.sbcBuyMissing ? '' : ' — turn on “Buy missing players”'}`, 'warn');
+          this.plan = null; ui.renderSbc(); return;
+        }
         const buyTotal = buys.reduce((a, p) => a + p.price, 0);
         this.plan = { set, entry, solution, slots, buys, buyTotal };
         ui.log(`Solution: ${solution.players.length} players · rating ${solution.rating || '—'}${parsed.constraints.needsSearch ? ` · chemistry ${solution.chem ?? '—'}` : ''}${buys.length ? ` · buy ${buys.length} for ${fmt(buyTotal)}` : ''} — review it, then submit`, 'ok');

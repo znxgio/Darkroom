@@ -123,6 +123,21 @@ const idle = (p, ms = 150000) => p.waitForFunction(() => !document.querySelector
   check('Elite 87 submitted at ≥ 87', T2.submitted.length === before + 1 && rating(last.map((x) => x.r)) >= 87, last && rating(last.map((x) => x.r)));
   check('fill-ins never include a card you own', !last.some((x) => x.def >= 100 && x.def <= 110));
 
+  // ---- Break Away: every player ≤ 64 → searches bronzes, buys them, submits
+  await p.click('#fcs [data-a=sbc-set][data-i="3"]');
+  await p.waitForSelector('#fcs [data-a=sbc-solve][data-i="3"]');
+  await idle(p);
+  await p.click('#fcs [data-a=sbc-solve][data-i="3"]');
+  await p.waitForSelector('#fcs [data-a=sbc-submit]', { timeout: 200000 });
+  await idle(p);
+  const brLog = (await log(p)).filter((l) => /Market:/.test(l)).pop();
+  check('rating limit ≤ 64 searches bronzes', /cheap bronze listings/.test(brLog || ''), brLog);
+  const subBefore = await p.evaluate(() => T.submitted.length);
+  await p.click('#fcs [data-a=sbc-submit]');
+  await idle(p, 200000);
+  const brSub = await p.evaluate(() => T.submitted[T.submitted.length - 1]);
+  check('Break Away submitted with players all ≤ 64', (await p.evaluate(() => T.submitted.length)) === subBefore + 1 && brSub.length === 11 && brSub.every((x) => x.r <= 64), JSON.stringify(brSub.map((x) => x.r)));
+
   check('active squad protected (starters)', !sub.flat().some((x) => x.def >= 100 && x.def <= 110));
   check('subs and reserves protected', !sub.flat().some((x) => x.def === 650 || x.def === 651));
   check('special cards not used', !sub.flat().some((x) => x.def >= 660 && x.def < 670));
