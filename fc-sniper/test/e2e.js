@@ -1,0 +1,145 @@
+// End-to-end test: runs the userscript in Chromium against a mocked Web App.
+// Usage: npm run e2e [screenshot-dir]   (needs Playwright; takes ~2 minutes)
+const { chromium, devices } = require('playwright');
+const fs = require('fs');
+const S = process.argv[2] || require('os').tmpdir();
+const SCRIPT = fs.readFileSync(require('path').join(__dirname, '..', 'fc-sniper.user.js'), 'utf8');
+const DB = { Players: [
+  { id: 231747, f: 'Kylian', l: 'Mbappé Lottin', c: 'Mbappé', r: 91 },
+  { id: 239085, f: 'Erling', l: 'Haaland', r: 91 } ] };
+const DB_PATH = '/ea-sports-fc/ultimate-team/web-app/content/G/2027/fut/items/web/players.json';
+const results = [];
+const check = (name, ok, info = '') => { results.push(`${ok ? 'PASS' : 'FAIL'}  ${name}${info ? `  — ${info}` : ''}`); };
+
+async function page(b, mobile) {
+  const ctx = await b.newContext(mobile ? devices['iPhone 13'] : { viewport: { width: 1280, height: 860 }, deviceScaleFactor: 2 });
+  const p = await ctx.newPage();
+  p.errors = [];
+  p.on('pageerror', (e) => p.errors.push(e.message));
+  p.on('dialog', (d) => d.type() === 'prompt' ? d.accept(p.nextPrompt || '') : d.accept());
+  p.discord = [];
+  await p.route('https://discord.com/**', (r) => { p.discord.push(r.request().postData()); r.fulfill({ status: 204 }); });
+  await p.route('http://fake.test/**', (r) => r.request().url().endsWith('players.json')
+    ? r.fulfill({ contentType: 'application/json', body: JSON.stringify(DB) })
+    : r.fulfill({ contentType: 'text/html', body: `<html><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"></head><body style="margin:0;background:#2b3a4a;font-family:system-ui"><div style="color:#fff;padding:20px;font-size:20px">EA SPORTS FC — Ultimate Team Web App (mock)</div><script>fetch('${DB_PATH}')</script></body></html>` }));
+  await p.goto('http://fake.test/ea-sports-fc/ultimate-team/web-app/');
+  await p.evaluate(() => {
+    const obs = (res) => ({ observe(ctx, cb) { setTimeout(() => cb({ unobserve() {} }, res), 5); } });
+    const market = [];
+    for (let i = 0; i < 60; i++) market.push({ id: i, def: 231747, bin: 50000 + i * 1000 });
+    for (let i = 0; i < 30; i++) market.push({ id: 100 + i, def: 239085, bin: 80000 + i * 1000 });
+    window.T = { coins: 1000000, calls: [], bought: [], listed: [], snipe: false, failNext: 0, tidy: 0 };
+    window.UTSearchCriteriaDTO = function () {}; window.ItemPile = { TRANSFER: 5 };
+    window.services = { User: { getUser: () => ({ coins: { amount: T.coins } }) }, Item: {
+      searchTransferMarket(c) {
+        T.calls.push({ def: c.maskedDefId, max: c.maxBuy || 0 });
+        if (T.failNext) { const s = T.failNext; T.failNext = 0; return obs({ success: false, status: s }); }
+        let hits = market.slice();
+        if (T.snipe) hits.push({ id: 777, def: 231747, bin: 26000 });
+        hits = hits.filter((m) => (!c.maskedDefId || m.def === c.maskedDefId) && (!c.maxBuy || m.bin <= c.maxBuy));
+        const items = hits.sort((a, b) => (a.id * 7919) % 101 - (b.id * 7919) % 101).slice(0, 20)
+          .map((m) => ({ definitionId: m.def, rating: 91, _staticData: { name: m.def === 231747 ? 'Mbappé' : 'Haaland' }, _auction: { tradeId: m.id, buyNowPrice: m.bin } }));
+        return obs({ success: true, data: { items } });
+      },
+      bid(item, price) { T.bought.push(price); T.coins -= price; return obs({ success: true }); },
+      move() { return obs({ success: true }); },
+      list(item, s, bn) { T.listed.push(bn); return obs({ success: true }); },
+      relistExpiredAuctions() { T.tidy++; return obs({ success: true }); },
+      clearSoldItems() { T.tidy++; return obs({ success: true }); } } };
+  });
+  await p.addScriptTag({ content: SCRIPT });
+  await p.waitForSelector('#fcs');
+  return p;
+}
+const log = (p) => p.evaluate(() => [...document.querySelectorAll('#fcs [data-r=log] div')].reverse().map((d) => d.textContent.replace(/^\d\d:\d\d:\d\d\s*/, '')));
+const idle = (p) => p.waitForFunction(() => !document.querySelector('#fcs [data-a=toggle]').classList.contains('on') && !document.querySelector('#fcs [data-a=toggle]').disabled, null, { timeout: 90000 });
+
+(async () => {
+  const b = await chromium.launch();
+
+  // ---------- desktop: full flow
+  const p = await page(b, false);
+  await p.fill('#fcs [data-r=pq]', 'mbappe');
+  await p.click('#fcs .sugg [data-pick]');
+  await p.waitForFunction(() => /avg/.test(document.querySelector('#fcs .chip small')?.textContent || ''), null, { timeout: 60000 });
+  await idle(p);
+  check('name search + auto price check', (await p.textContent('#fcs .chip .mx')).includes('46,750'), await p.textContent('#fcs .chip'));
+  await p.fill('#fcs [data-r=pq]', 'haal');
+  await p.press('#fcs [data-r=pq]', 'Enter');
+  await p.waitForFunction(() => document.querySelectorAll('#fcs .chip').length === 2 && /avg/.test(document.querySelectorAll('#fcs .chip small')[1].textContent), null, { timeout: 60000 });
+  await idle(p);
+  // manual max for Haaland
+  p.nextPrompt = '70,000';
+  await p.click('#fcs .chip:nth-child(2) .mx');
+  check('manual max buy via tap', (await p.textContent('#fcs .chip:nth-child(2) .mx')).includes('70,000'));
+  // selling: market avg + relist, discord webhook
+  await p.click('#fcs [data-tab=sell]');
+  await p.selectOption('#fcs [data-k=sellMode]', 'market');
+  await p.click('#fcs [data-k=autoRelist] + i');
+  await p.click('#fcs [data-tab=safety]');
+  await p.fill('#fcs [data-k=discordWebhook]', 'https://discord.com/api/webhooks/1/abc');
+  await p.click('#fcs [data-a=discord-test]');
+  await p.waitForTimeout(300);
+  check('discord test notification', p.discord.length === 1 && p.discord[0].includes('FC Sniper connected'));
+  await p.screenshot({ path: `${S}/v1-desktop-safety.png` });
+  await p.click('#fcs [data-tab=snipe]');
+  await p.fill('#fcs [data-k=maxBuys]', '1');
+  await p.evaluate(() => { T.snipe = true; T.calls.length = 0; });
+  await p.click('#fcs [data-a=toggle]');
+  await idle(p);
+  const t = await p.evaluate(() => T);
+  check('relist/clear on start', t.tidy === 2);
+  check('bought the 26k snipe', t.bought.join() === '26000', `bought ${t.bought}`);
+  check('listed at market avg', t.listed.join() === '52000', `listed ${t.listed}`);
+  check('searched with per-player max', t.calls[0] && t.calls[0].max === 46750, JSON.stringify(t.calls));
+  check('discord buy notification', p.discord.some((d) => d.includes('Bought Mbappé')));
+  await p.screenshot({ path: `${S}/v1-desktop-snipe.png` });
+  await p.click('#fcs [data-tab=history]');
+  check('history recorded', (await p.textContent('#fcs [data-r=hist]')).includes('listed 52,000'), (await p.textContent('#fcs [data-r=hist]')).trim().slice(0, 80));
+  await p.screenshot({ path: `${S}/v1-desktop-history.png` });
+  console.log('desktop log:\n  ' + (await log(p)).join('\n  '));
+
+  // alert mode: should not buy
+  await p.click('#fcs [data-tab=snipe]');
+  await p.click('#fcs .seg [data-v=alert]');
+  await p.click('#fcs [data-tab=safety]');
+  await p.fill('#fcs [data-k=maxSearches]', '2');
+  await p.click('#fcs [data-tab=snipe]');
+  await p.evaluate(() => { T.bought.length = 0; });
+  await p.click('#fcs [data-a=toggle]');
+  await idle(p);
+  const t2 = await p.evaluate(() => T);
+  const lg = await log(p);
+  check('alert mode notifies without buying', t2.bought.length === 0 && lg.some((l) => l.includes('👀 Mbappé')), lg.slice(-4).join(' | '));
+  check('alert stopped at session search limit (raised to safe min if needed)', lg.some((l) => /session search limit/.test(l)));
+
+  // captcha lock
+  await p.click('#fcs .seg [data-v=buy]');
+  await p.evaluate(() => { T.failNext = 458; });
+  await p.click('#fcs [data-tab=safety]');
+  await p.fill('#fcs [data-k=maxSearches]', '50');
+  await p.click('#fcs [data-tab=snipe]');
+  await p.click('#fcs [data-a=toggle]');
+  await idle(p);
+  const lg2 = await log(p);
+  check('captcha → stop + 3h lock', lg2.some((l) => /3 h/.test(l)) && (await p.textContent('#fcs [data-r=pill]')) === 'Locked');
+  check('no page errors (desktop)', p.errors.length === 0, p.errors.join('; '));
+
+  // ---------- mobile look
+  const m = await page(b, true);
+  await m.screenshot({ path: `${S}/v1-mobile-min.png` });
+  await m.tap('#fcs [data-a=fold]');
+  await m.fill('#fcs [data-r=pq]', 'mbap');
+  await m.waitForSelector('#fcs .sugg [data-pick]');
+  await m.screenshot({ path: `${S}/v1-mobile-search.png` });
+  await m.tap('#fcs .sugg [data-pick]');
+  await m.waitForFunction(() => /avg/.test(document.querySelector('#fcs .chip small')?.textContent || ''), null, { timeout: 60000 });
+  await m.waitForTimeout(400);
+  await m.screenshot({ path: `${S}/v1-mobile-snipe.png` });
+  await m.tap('#fcs [data-tab=sell]');
+  await m.screenshot({ path: `${S}/v1-mobile-sell.png` });
+  check('no page errors (mobile)', m.errors.length === 0, m.errors.join('; '));
+
+  await b.close();
+  console.log('\n' + results.join('\n'));
+})().catch((e) => { console.error(e); console.log('\n' + results.join('\n')); process.exit(1); }).then(() => { if (results.some((r) => r.startsWith('FAIL'))) process.exit(1); });

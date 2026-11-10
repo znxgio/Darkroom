@@ -62,10 +62,56 @@ test('pickTargets filters by price, rating and coins', () => {
   assert.deepEqual(c.pickTargets(listings, cfg, 850).map((l) => l.tradeId), [4]);
 });
 
-test('planSellPrice', () => {
-  assert.equal(c.planSellPrice(1000, { autoList: false }), 0);
-  assert.equal(c.planSellPrice(1000, { autoList: true, sellPrice: 1520 }), 1500);
-  assert.ok(c.profit(1000, c.planSellPrice(1000, { autoList: true, minProfit: 200 })) >= 200);
+test('planSellPrice modes', () => {
+  assert.equal(c.planSellPrice(1000, { sellMode: 'off' }), 0);
+  assert.equal(c.planSellPrice(1000, {}), 0);
+  assert.equal(c.planSellPrice(1000, { sellMode: 'fixed', sellPrice: 1520 }), 1500);
+  assert.ok(c.profit(1000, c.planSellPrice(1000, { sellMode: 'profit', minProfit: 200 })) >= 200);
+  // market: list at the player's avg, but never below the profit floor
+  assert.equal(c.planSellPrice(40000, { sellMode: 'market', minProfit: 0 }, { avg: 52000 }), 52000);
+  const floor = c.breakEvenSell(50000, 1000);
+  assert.equal(c.planSellPrice(50000, { sellMode: 'market', minProfit: 1000 }, { avg: 51000 }), floor);
+  assert.equal(c.planSellPrice(50000, { sellMode: 'market', minProfit: 1000 }, null), floor);
+});
+
+test('effectiveMaxBuy prefers manual, then price check, then default', () => {
+  const cfg = { maxBuy: 1000 };
+  assert.equal(c.effectiveMaxBuy({ manualMax: 40000, maxBuy: 46750 }, cfg), 40000);
+  assert.equal(c.effectiveMaxBuy({ maxBuy: 46750 }, cfg), 46750);
+  assert.equal(c.effectiveMaxBuy({}, cfg), 1000);
+  assert.equal(c.effectiveMaxBuy(null, cfg), 1000);
+});
+
+test('migrateConfig converts old selling options', () => {
+  assert.equal(c.migrateConfig({ autoList: true, sellPrice: 5000 }).sellMode, 'fixed');
+  assert.equal(c.migrateConfig({ autoList: true, sellPrice: 0 }).sellMode, 'profit');
+  assert.equal(c.migrateConfig({ autoList: false }).sellMode, 'off');
+  assert.equal(c.migrateConfig({ sellMode: 'market', autoList: true }).sellMode, 'market');
+  assert.equal('autoList' in c.migrateConfig({ autoList: true }), false);
+});
+
+test('history: newest first, capped, with totals', () => {
+  const now = new Date(2026, 10, 10, 18, 0).getTime();
+  let h = [];
+  h = c.addHistory(h, { at: now - 48 * 3600e3, price: 10000, sell: 12000 });
+  h = c.addHistory(h, { at: now - 3600e3, price: 40000, sell: 0 });
+  h = c.addHistory(h, { at: now, price: 1000, sell: 1500 });
+  assert.equal(h[0].price, 1000);
+  const sum = c.summarizeHistory(h, now);
+  assert.deepEqual(sum.today, { buys: 2, spent: 41000, profit: 425 });
+  assert.deepEqual(sum.all, { buys: 3, spent: 51000, profit: 425 + 1400 });
+  assert.equal(c.addHistory(Array(300).fill({}), { at: 1 }).length, 300);
+});
+
+test('discord helpers', () => {
+  assert.ok(c.isDiscordWebhook('https://discord.com/api/webhooks/123456/abc-DEF_9'));
+  assert.ok(c.isDiscordWebhook(' https://discordapp.com/api/webhooks/1/x '));
+  assert.ok(!c.isDiscordWebhook('https://evil.example/api/webhooks/1/x'));
+  assert.ok(!c.isDiscordWebhook(''));
+  const buy = c.discordPayload('buy', { name: 'Mbappé', price: 26000, sell: 30000, rating: 91, at: 0 });
+  assert.match(buy.embeds[0].title, /Mbappé/);
+  assert.match(buy.embeds[0].description, /26,000.*\n.*30,000/s);
+  assert.equal(c.discordPayload('stop', { reason: 'x' }).embeds[0].description, 'x');
 });
 
 test('classifyStatus', () => {
