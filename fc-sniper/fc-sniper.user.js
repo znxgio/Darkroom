@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FC Sniper
 // @namespace    https://github.com/znxgio/darkroom
-// @version      1.2.3
+// @version      1.2.4
 // @description  Sniper, pack opener, SBC solver and team upgrade advisor for the EA SPORTS FC Ultimate Team Web App, with built-in safety limits.
 // @match        https://www.ea.com/*ultimate-team/web-app*
 // @match        https://www.ea.com/ea-sports-fc/ultimate-team/web-app*
@@ -865,7 +865,7 @@
 
   const w = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '1.2.3';
+  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '1.2.4';
   const errText = (e) => (e && e.message ? e.message : String(e));
   const fmt = (n) => Number(n || 0).toLocaleString();
 
@@ -910,7 +910,14 @@
       observable.observe(w, (sender, response) => {
         clearTimeout(timer);
         if (typeof sender?.unobserve === 'function') sender.unobserve(w);
-        resolve(response || { success: false });
+        const r = response || { success: false };
+        // EA puts results in `response` for some calls (club, packs…) and in
+        // `data` for others (market): read whichever is there, like the Web App does.
+        resolve({
+          ...r,
+          data: r.success ? (r.response ?? r.data) : r.data,
+          status: r.status ?? (r.error && r.error.code),
+        });
       });
     });
   }

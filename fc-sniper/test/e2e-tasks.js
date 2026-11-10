@@ -102,9 +102,10 @@ function installMock() {
       discard(items) { items.forEach((it) => { T.unassigned = T.unassigned.filter((u) => u !== it); T.piles.discarded.push(it.rating); }); return obs({ success: true }); },
     },
     Club: {
-      search(c) { const page = club.slice(c.offset, c.offset + c.count); return obs({ success: true, data: { items: page, retrievedAll: c.offset + c.count >= club.length } }); },
+      // the real Web App returns club results in `response`, not `data`
+      search(c) { const page = club.slice(c.offset, c.offset + c.count); return obs({ success: true, response: { items: page, retrievedAll: c.offset + c.count >= club.length } }); },
     },
-    Store: { getPacks: () => obs({ success: true, data: { packs: myPacks.slice(T.opened) } }) },
+    Store: { getPacks: () => obs({ success: true, response: { packs: myPacks.slice(T.opened) } }) },
     Squad: { getActiveSquadId: () => 1, requestSquadById: () => obs({ success: true, data: { squad } }),
       create(name, formation, items) { T.created = { name, formation, n: items.filter(Boolean).length, ratings: items.map((i) => i && i.rating) }; return obs({ success: true }); } },
     SBC: {
