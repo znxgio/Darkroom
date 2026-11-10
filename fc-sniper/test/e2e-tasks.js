@@ -38,7 +38,11 @@ function installMock() {
   const posList = ['GK', 'RB', 'CB', 'CB', 'LB', 'CM', 'CM', 'CM', 'CAM', 'ST', 'ST'];
   const squadItems = posList.map((pos, i) => mk(100 + i, i === 10 ? 75 : 85, { pos, nation: 10 + (i % 4), league: 13, name: i === 10 ? 'Weak Striker' : `Starter ${pos}${i}` }));
   squadItems.forEach((it) => { owned.add(it.definitionId); club.push(it); });
-  club.push(mk(700, 80, { pos: 'ST', league: 13, name: 'Bench Striker 80' }));
+  club.push(mk(700, 80, { pos: 25, league: 13, name: 'Bench Striker 80' })); // EA sends position ids
+  // a bench covering every position, so formations can be built (numeric ids like the real app)
+  const ids = { GK: 0, RB: 3, CB: 5, LB: 7, RWB: 2, LWB: 8, CDM: 10, CM: 14, CAM: 18, RM: 12, LM: 16, RW: 23, LW: 27, CF: 21, ST: 25 };
+  ['GK', 'RB', 'CB', 'CB', 'CB', 'LB', 'RWB', 'LWB', 'CDM', 'CDM', 'CM', 'CAM', 'CAM', 'RM', 'LM', 'RW', 'LW', 'CF', 'CF', 'ST', 'ST']
+    .forEach((pos, i) => club.push(mk(600 + i, 83 + (i % 4), { pos: ids[pos], league: 13, nation: 10 + (i % 4), name: `Bench ${pos} ${i}` })));
   window.T = { piles: { club: [], storage: [], transfer: [], discarded: [] }, unassigned: [], submitted: [], searches: [], opened: 0 };
   const squad = {
     getFieldPlayers: () => squadItems.map((item, index) => ({ index, item, position: { typeName: posList[index] } })),
@@ -95,7 +99,8 @@ function installMock() {
       search(c) { const page = club.slice(c.offset, c.offset + c.count); return obs({ success: true, data: { items: page, retrievedAll: c.offset + c.count >= club.length } }); },
     },
     Store: { getPacks: () => obs({ success: true, data: { packs: myPacks.slice(T.opened) } }) },
-    Squad: { getActiveSquadId: () => 1, requestSquadById: () => obs({ success: true, data: { squad } }) },
+    Squad: { getActiveSquadId: () => 1, requestSquadById: () => obs({ success: true, data: { squad } }),
+      create(name, formation, items) { T.created = { name, formation, n: items.filter(Boolean).length, ratings: items.map((i) => i && i.rating) }; return obs({ success: true }); } },
     SBC: {
       requestSets: () => obs({ success: true, data: { sets } }),
       requestChallengesForSet: (set) => obs({ success: true, data: { challenges: set.id === 1 ? (done < 2 ? [challenge()] : []) : [chemChallenge] } }),
@@ -197,7 +202,8 @@ const idle = (p, ms = 150000) => p.waitForFunction(() => !document.querySelector
   const firstSlot = await p.textContent('#fcs [data-r=upg] .card');
   check('weakest slot is the 75 striker', /ST — now Weak Striker 75/.test(firstSlot), firstSlot.slice(0, 60));
   const order = await p.$$eval('#fcs [data-r=upg] .card:first-child .li b', (els) => els.map((e) => e.textContent));
-  check('best suggestion keeps chemistry', order[0].startsWith('Same League ST 86'), order.join(' | '));
+  check('owned equal upgrade ranks above buying one', order[0].startsWith('Bench ST'), order.join(' | '));
+  check('best market suggestion keeps chemistry', order.find((o) => !o.startsWith('Bench')).startsWith('Same League ST 86'), order.join(' | '));
   check('owned bench striker suggested', order.some((o) => o.startsWith('Bench Striker 80')), order.join(' | '));
   check('over-budget card excluded', !order.some((o) => /Too Pricey/.test(o)));
   const srch = await p.evaluate(() => T.searches.filter((x) => x.pos === 'ST'));
@@ -205,6 +211,26 @@ const idle = (p, ms = 150000) => p.waitForFunction(() => !document.querySelector
   await p.click('#fcs [data-r=upg] .card:first-child [data-a=snipe-opt]');
   const chips = await p.textContent('#fcs [data-r=chips]');
   check('Snipe adds player with listed price as max', /Same League ST 86/.test(chips) && /45,000/.test(chips), chips.replace(/\s+/g, ' ').trim());
+  // ---- Formation coach
+  await p.click('#fcs [data-tab=upgrades]');
+  await p.click('#fcs [data-a=forms]');
+  await idle(p, 120000);
+  const forms = await p.$$eval('#fcs [data-r=forms] .li b', (els) => els.map((e) => e.textContent));
+  check('formations compared', forms.length >= 4 && forms.some((f) => /yours now/.test(f)), forms.join(' | '));
+  await p.click('#fcs [data-a=form-view]');
+  const xi = await p.$$eval('#fcs [data-r=forms] .sub .li b', (els) => els.map((e) => e.textContent));
+  check('lineup view lists 11 slots', xi.length === 11, xi.slice(0, 3).join(' | '));
+  await p.click('#fcs [data-a=form-create]');
+  await idle(p);
+  const created = await p.evaluate(() => T.created);
+  check('creates a new squad with 11 players', created && created.n === 11 && /^f\d/.test(created.formation), JSON.stringify(created));
+  await p.screenshot({ path: `${S}/t-forms.png` });
+
+  // copy log works (falls back to prompt if clipboard is blocked)
+  await p.click('#fcs [data-tab=snipe]');
+  p.once('dialog', (d) => d.accept());
+  await p.click('#fcs [data-a=copy-log]');
+
   check('no page errors (desktop)', p.errors.length === 0, p.errors.join('; '));
 
   // ---- phone screenshots

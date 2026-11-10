@@ -425,3 +425,46 @@ test('sortItem', () => {
   assert.equal(c.sortItem({ duplicate: true, player: true, untradeable: true, rating: 70, special: true }, { quickSellBelow: 75 }), 'storage');
   assert.equal(c.sortItem({ duplicate: true, player: false, untradeable: true }), 'keep');
 });
+
+// ---- positions & lineups ----------------------------------------------------------
+
+test('normPos maps EA ids and side positions', () => {
+  assert.equal(c.normPos(25), 'ST');
+  assert.equal(c.normPos(4), 'CB');
+  assert.equal(c.normPos('LCM'), 'CM');
+  assert.equal(c.normPos('rs'), 'ST');
+  assert.equal(c.normPos(27), 'LW');
+  assert.equal(c.normPos('RWB'), 'RWB');
+});
+
+test('every formation has 11 slots with a keeper first', () => {
+  for (const [id, f] of Object.entries(c.FORMATIONS)) {
+    assert.equal(f.slots.length, 11, id);
+    assert.equal(f.slots[0], 'GK', id);
+  }
+});
+
+test('bestLineup fills every slot in position and uses chemistry', () => {
+  let id = 0;
+  const mk = (pos, rating, leagueId = 13, nationId = 1) => ({ id: ++id, rating, positions: [pos], leagueId, nationId, teamId: id });
+  const players = [
+    mk('GK', 84), mk('RB', 83), mk('CB', 85), mk('CB', 84), mk('CB', 80), mk('LB', 82),
+    mk('CDM', 84), mk('CDM', 83), mk('CM', 86), mk('CM', 85), mk('CM', 82), mk('CAM', 87),
+    mk('RM', 81), mk('LM', 80), mk('ST', 88), mk('ST', 85), mk('RW', 84), mk('LW', 83),
+    mk('ST', 89, 53, 9), // better striker, but other league & nation
+  ];
+  const f = c.FORMATIONS.f4231;
+  const r = c.bestLineup(players, f.slots);
+  assert.equal(r.filled, 11);
+  r.lineup.forEach((p, i) => assert.ok(p.positions.includes(f.slots[i]), `slot ${f.slots[i]}`));
+  assert.equal(new Set(r.lineup.map((p) => p.id)).size, 11);
+  assert.ok(r.chem >= 25, `chem ${r.chem}`);
+  // 4-1-2-1-2 needs two strikers → both used
+  const r2 = c.bestLineup(players, c.FORMATIONS.f41212a.slots);
+  assert.equal(r2.lineup.filter((p) => p.positions.includes('ST')).length, 2);
+});
+
+test('bestLineup leaves a slot empty when nobody fits', () => {
+  const r = c.bestLineup([{ id: 1, rating: 80, positions: ['GK'] }], c.FORMATIONS.f442.slots);
+  assert.equal(r.filled, 1);
+});

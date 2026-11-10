@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FC Sniper
 // @namespace    https://github.com/znxgio/darkroom
-// @version      1.1.0
+// @version      1.2.0
 // @description  Sniper, pack opener, SBC solver and team upgrade advisor for the EA SPORTS FC Ultimate Team Web App, with built-in safety limits.
 // @match        https://www.ea.com/*ultimate-team/web-app*
 // @match        https://www.ea.com/ea-sports-fc/ultimate-team/web-app*
@@ -496,6 +496,89 @@
       .sort((a, b) => b.score - a.score);
   }
 
+  // ---- Positions, formations & best lineup -------------------------------------------
+
+  /** EA position ids → names. */
+  const POS_NAMES = { 0: 'GK', 1: 'SW', 2: 'RWB', 3: 'RB', 4: 'RCB', 5: 'CB', 6: 'LCB', 7: 'LB', 8: 'LWB', 9: 'RDM', 10: 'CDM', 11: 'LDM', 12: 'RM', 13: 'RCM', 14: 'CM', 15: 'LCM', 16: 'LM', 17: 'RAM', 18: 'CAM', 19: 'LAM', 20: 'RF', 21: 'CF', 22: 'LF', 23: 'RW', 24: 'RS', 25: 'ST', 26: 'LS', 27: 'LW' };
+  const POS_GENERAL = { SW: 'CB', RCB: 'CB', LCB: 'CB', RDM: 'CDM', LDM: 'CDM', RCM: 'CM', LCM: 'CM', RAM: 'CAM', LAM: 'CAM', RF: 'CF', LF: 'CF', RS: 'ST', LS: 'ST' };
+
+  /** Position id or name → the general position players are listed with ("RCB" → "CB"). */
+  function normPos(p) {
+    const name = typeof p === 'number' ? POS_NAMES[p] : String(p || '').toUpperCase();
+    return POS_GENERAL[name] || name;
+  }
+
+  /**
+   * Popular competitive formations (built in, not live data). Slots are in EA's
+   * order: keeper, defence right→left, midfield right→left, attack right→left.
+   */
+  const FORMATIONS = {
+    f4231: { label: '4-2-3-1', slots: ['GK', 'RB', 'CB', 'CB', 'LB', 'CDM', 'CDM', 'RM', 'CAM', 'LM', 'ST'] },
+    f4321: { label: '4-3-2-1', slots: ['GK', 'RB', 'CB', 'CB', 'LB', 'CM', 'CM', 'CM', 'CF', 'CF', 'ST'] },
+    f41212a: { label: '4-1-2-1-2 (2)', slots: ['GK', 'RB', 'CB', 'CB', 'LB', 'CDM', 'CM', 'CM', 'CAM', 'ST', 'ST'] },
+    f4312: { label: '4-3-1-2', slots: ['GK', 'RB', 'CB', 'CB', 'LB', 'CM', 'CM', 'CM', 'CAM', 'ST', 'ST'] },
+    f433: { label: '4-3-3', slots: ['GK', 'RB', 'CB', 'CB', 'LB', 'CM', 'CM', 'CM', 'RW', 'ST', 'LW'] },
+    f442: { label: '4-4-2', slots: ['GK', 'RB', 'CB', 'CB', 'LB', 'RM', 'CM', 'CM', 'LM', 'ST', 'ST'] },
+    f4222: { label: '4-2-2-2', slots: ['GK', 'RB', 'CB', 'CB', 'LB', 'CDM', 'CDM', 'CAM', 'CAM', 'ST', 'ST'] },
+    f5212: { label: '5-2-1-2', slots: ['GK', 'RWB', 'CB', 'CB', 'CB', 'LWB', 'CM', 'CM', 'CAM', 'ST', 'ST'] },
+    f3421: { label: '3-4-2-1', slots: ['GK', 'CB', 'CB', 'CB', 'RM', 'CM', 'CM', 'LM', 'CF', 'CF', 'ST'] },
+  };
+
+  /** Squad rating with decimals (no rounding) — smooth enough to optimise against. */
+  function squadRatingExact(ratings, size = 11) {
+    const list = ratings.filter((r) => r > 0);
+    if (!list.length) return 0;
+    const sum = list.reduce((a, b) => a + b, 0);
+    const avg = sum / size;
+    return (sum + list.reduce((a, r) => a + Math.max(0, r - avg), 0)) / size;
+  }
+
+  /** Score of a lineup: rating matters most, chemistry next. */
+  function lineupScore(lineup, slots, chemWeight = 0.6) {
+    const ratings = lineup.map((p) => (p ? p.rating : 0));
+    const chem = squadChemistry(lineup.map((p, i) => p && { ...p, inPosition: p.positions.includes(slots[i]) })).total;
+    return { score: squadRatingExact(ratings) * 3 + chem * chemWeight, rating: squadRating(ratings), chem };
+  }
+
+  /**
+   * Best XI from your players for a formation: fills each slot with an
+   * in-position player, then keeps swapping while rating + chemistry improves.
+   * players: [{ id, rating, positions: [general names], nationId, leagueId, teamId }]
+   */
+  function bestLineup(players, slots, opts = {}) {
+    const pool = players.filter((p) => p && p.rating > 0);
+    const fits = slots.map((pos) => pool.filter((p) => p.positions.includes(pos)).sort((a, b) => b.rating - a.rating).slice(0, opts.depth || 12));
+    // Fill the scarcest positions first so a rare position isn't left empty.
+    const order = slots.map((_, i) => i).sort((a, b) => fits[a].length - fits[b].length);
+    const lineup = new Array(slots.length).fill(null);
+    const used = new Set();
+    for (const i of order) {
+      const p = fits[i].find((x) => !used.has(x.id));
+      if (p) { lineup[i] = p; used.add(p.id); }
+    }
+    let best = lineupScore(lineup, slots, opts.chemWeight);
+    for (let round = 0; round < 6; round++) {
+      let improved = false;
+      for (let i = 0; i < slots.length; i++) {
+        for (const cand of fits[i]) {
+          if (lineup[i] && cand.id === lineup[i].id) continue;
+          const j = lineup.findIndex((x) => x && x.id === cand.id);
+          const next = lineup.slice();
+          if (j >= 0) {
+            // swap two players if both still fit
+            if (!lineup[i] || !lineup[i].positions.includes(slots[j])) continue;
+            next[j] = lineup[i];
+          }
+          next[i] = cand;
+          const sc = lineupScore(next, slots, opts.chemWeight);
+          if (sc.score > best.score + 1e-9) { lineup.splice(0, lineup.length, ...next); best = sc; improved = true; }
+        }
+      }
+      if (!improved) break;
+    }
+    return { lineup, rating: best.rating, chem: best.chem, score: best.score, filled: lineup.filter(Boolean).length };
+  }
+
   // ---- SBC solving ------------------------------------------------------------------
 
   /** Rough coin value of a player by rating — used to spend the cheapest players first. */
@@ -750,6 +833,7 @@
     findMarketPrice, planMaxBuy, effectiveMaxBuy,
     addHistory, summarizeHistory, isDiscordWebhook, discordPayload,
     squadRating, squadChemistry, topValues, rankUpgrades,
+    POS_NAMES, normPos, FORMATIONS, squadRatingExact, lineupScore, bestLineup,
     fodderValue, playerCost, qualityOf, parseRequirements, solveSbc, sortItem,
     SAFETY, clampConfig, dayKey, usageFor, lockoutFor, formatDuration, canStart,
   };
@@ -765,6 +849,7 @@
 
   const w = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '1.2.0';
   const errText = (e) => (e && e.message ? e.message : String(e));
   const fmt = (n) => Number(n || 0).toLocaleString();
 
@@ -870,12 +955,8 @@
     /** Normalise a Web App item into the plain shape the pure logic uses. */
     toPlayer(item) {
       const sd = item._staticData || (typeof item.getStaticData === 'function' && item.getStaticData()) || {};
-      const posName = (p) => {
-        if (typeof p !== 'number') return p;
-        try { return w.UTLocalizationUtil.positionIdToName(p); } catch { return p; }
-      };
       const positions = [...new Set([item.preferredPosition, ...(item.possiblePositions || [])]
-        .filter((p) => p !== undefined && p !== null).map(posName))];
+        .filter((p) => p !== undefined && p !== null).map(normPos))];
       const auction = item._auction || {};
       return {
         id: item.definitionId,
@@ -904,15 +985,26 @@
       return c;
     },
     /** Every player in your club (paged), plus SBC storage. */
-    async clubPlayers(onPage) {
+    /** Search criteria the way the Web App's own club screen builds them. */
+    clubCriteria() {
+      try {
+        if (w.UTBucketedItemSearchViewModel) {
+          const c = new w.UTBucketedItemSearchViewModel().searchCriteria;
+          if (c) return c;
+        }
+      } catch { /* fall back */ }
+      return this.newCriteria();
+    },
+    async clubPlayers(onPage, { storage = true } = {}) {
       const out = [];
-      const page = async (fn) => {
-        const c = this.newCriteria();
-        c.count = 91;
+      try { w.services.Club.clubDao.resetStatsCache(); w.services.Club.getStats(); } catch { /* optional */ }
+      const page = async (fn, criteria) => {
+        const c = criteria;
+        c.count = 90;
         c.offset = 0;
         for (let i = 0; i < 40; i++) {
           const res = await observe(fn(c));
-          if (!res.success) return { ok: false, status: res.status };
+          if (!res.success) return { ok: false, status: res.status ?? (res.error && (res.error.code || res.error.message)) };
           const d = res.data || {};
           out.push(...(d.items || []));
           if (onPage) onPage(out.length);
@@ -922,9 +1014,12 @@
         }
         return { ok: true };
       };
-      const club = await page((c) => w.services.Club.search(c));
-      if (!club.ok) return club;
-      if (typeof w.services.Item.searchStorageItems === 'function') await page((c) => w.services.Item.searchStorageItems(c));
+      const club = await page((c) => w.services.Club.search(c), this.clubCriteria());
+      if (!club.ok) return { ...club, what: 'club search' };
+      if (storage && typeof w.services.Item.searchStorageItems === 'function') {
+        const st = await page((c) => w.services.Item.searchStorageItems(c), this.newCriteria());
+        if (!st.ok) ui.log(`SBC storage couldn't be read (${st.status}) — using club only`, 'warn');
+      }
       return { ok: true, items: out };
     },
     async unassigned() {
@@ -1003,6 +1098,10 @@
       squad.removeAllItems();
       squad.setPlayers(arr, true);
       const res = await observe(w.services.SBC.saveChallenge(ch));
+      return { ok: !!res.success, status: res.status };
+    },
+    async createSquad(name, formation, items) {
+      const res = await observe(w.services.Squad.create(name, formation, items));
       return { ok: !!res.success, status: res.status };
     },
     async submitChallenge(ch, set) {
@@ -1253,6 +1352,7 @@
       const hasFilter = cfg.level !== 'any' || cfg.rarity || cfg.position || cfg.nation || cfg.league || cfg.club || cfg.minRating > 0;
       if (!cfg.players.length && !hasFilter) {
         ui.log('Add a player (or set a filter) first — otherwise it would buy any card under your max', 'warn');
+        ui.toast('Add a player first — ▶ starts the sniper', 'alert');
         return;
       }
       this.safety = store.get(KEYS.safety, {});
@@ -1404,6 +1504,8 @@
   // a captcha or market limit stops the task and sets the same safety lock.
 
   class Stopped extends Error {}
+  const debugLog = []; // technical details for "Copy log"
+
 
   const jobs = {
     current: null,
@@ -1421,7 +1523,10 @@
       try {
         await fn();
       } catch (e) {
-        if (!(e instanceof Stopped)) ui.log(`${name}: ${errText(e)}`, 'err');
+        if (!(e instanceof Stopped)) {
+          ui.log(`${name} stopped: ${errText(e)}`, 'err');
+          if (e && e.stack) debugLog.push(`${new Date().toISOString()} ${name}: ${e.stack.split('\n').slice(0, 3).join(' | ')}`);
+        }
       } finally {
         this.current = null;
         ui.setJob(null);
@@ -1456,7 +1561,7 @@
         throw new Stopped();
       }
       if (kind === 'session') { ui.log(`Logged out (${status}) — log in again`, 'err'); throw new Stopped(); }
-      throw new Error(`${what} failed (${status})`);
+      throw new Error(`${what} failed (EA status ${status ?? 'unknown'})`);
     },
   };
 
@@ -1686,7 +1791,7 @@
         const squad = await fut.activeSquad();
         if (!squad) throw new Error('could not read your active squad');
         const slots = squad.getFieldPlayers().slice(0, 11).map((s) => ({
-          position: (s.position && (s.position.typeName || s.position.id)) || '?',
+          position: s.position ? normPos(s.position.typeName ?? s.position.id) : '?',
           player: s.item && s.item.definitionId ? fut.toPlayer(s.item) : null,
         }));
         this.squad = slots;
@@ -1697,7 +1802,11 @@
           rating: squadRating(slots.map((s) => (s.player ? s.player.rating : 0))),
           chem: chem.total,
           eachChem: chem.each,
-          formation: typeof squad.getFormation === 'function' ? (squad.getFormation().name || squad.getFormation().typeName || '') : '',
+          formation: (() => {
+            const f = typeof squad.getFormation === 'function' && squad.getFormation();
+            const id = f ? (f.name || f.typeName || '') : '';
+            return (FORMATIONS[id] && FORMATIONS[id].label) || id.replace(/^f/, '');
+          })(),
           leagues: topValues(players, 'leagueId', 2),
           nations: topValues(players, 'nationId', 2),
         };
@@ -1756,6 +1865,54 @@
       const best = new Map();
       for (const p of out) if (!best.has(p.id) || best.get(p.id).price > p.price) best.set(p.id, p);
       return [...best.values()];
+    },
+
+    // -- formation coach --
+    formations: [], // [{ id, label, rating, chem, lineup, slots, current }]
+
+    async compareFormations() {
+      await jobs.run('Comparing formations', async () => {
+        engine.setStatus('pricing', 'Reading your squad…');
+        const squad = await fut.activeSquad();
+        if (!squad) throw new Error('could not read your active squad');
+        const fieldSlots = squad.getFieldPlayers().slice(0, 11);
+        const curSlots = fieldSlots.map((s) => (s.position ? normPos(s.position.typeName ?? s.position.id) : '?'));
+        const curPlayers = fieldSlots.map((s) => (s.item && s.item.definitionId ? { ...fut.toPlayer(s.item), itemId: s.item.id } : null));
+        const curFormation = (typeof squad.getFormation === 'function' && squad.getFormation() && squad.getFormation().name) || '';
+        const cur = lineupScore(curPlayers, curSlots);
+
+        const owned = await fut.clubPlayers((n) => engine.setStatus('pricing', `Reading your club… ${n}`), { storage: false });
+        jobs.check(owned, 'reading your club');
+        const club = owned.items.map((item) => ({ ...fut.toPlayer(item), itemId: item.id, id: item.definitionId }))
+          .filter((p) => p.player && !p.loan);
+        engine.setStatus('pricing', 'Building the best XI for each formation…');
+        await sleep(30);
+        const list = [{ id: curFormation, label: `${(FORMATIONS[curFormation] || {}).label || curFormation || 'Current'} (yours now)`, rating: cur.rating, chem: cur.chem, score: cur.score, lineup: curPlayers, slots: curSlots, current: true }];
+        for (const [id, f] of Object.entries(FORMATIONS)) {
+          const best = bestLineup(club, f.slots);
+          if (best.filled < 11) continue;
+          list.push({ id, label: f.label, rating: best.rating, chem: best.chem, score: best.score, lineup: best.lineup, slots: f.slots });
+        }
+        list.sort((a, b) => b.score - a.score);
+        this.formations = list;
+        this.currentIds = new Set(curPlayers.filter(Boolean).map((p) => p.id));
+        ui.renderFormations();
+        const top = list[0];
+        ui.log(top.current ? 'Your current lineup is already the best of the formations compared' : `Best: ${top.label} — rating ${top.rating}, chemistry ${top.chem}/33 (now ${cur.rating} / ${cur.chem})`, 'ok');
+      });
+    },
+
+    async createSquad(idx) {
+      const f = this.formations[idx];
+      if (!f || f.current) return;
+      await jobs.run('Creating squad', async () => {
+        const name = `FC Sniper ${f.label}`.slice(0, 20);
+        const items = f.lineup.map((p) => p && p.item);
+        const r = await fut.createSquad(name, f.id, items);
+        jobs.check(r, 'creating the squad');
+        ui.log(`Created squad "${name}" — open Squads in the Web App to check it and set it active`, 'ok');
+        ui.toast(`Squad created: ${name}`, 'ok');
+      });
     },
 
     /** Send a suggestion to the sniper with its listed price as the max buy. */
@@ -2048,12 +2205,16 @@
                 <div><b data-s="spent">0</b>Spent</div><div><b data-s="listed">0</b>Listed</div><div><b data-s="profit">0</b>Est. profit</div>
               </div>
             </div>
-            <div class="card"><h4>Activity</h4><div class="log" data-r="log"></div></div>
+            <div class="card"><h4>Activity</h4><div class="log" data-r="log"></div>
+              <button class="btn" data-a="copy-log">Copy log (to send for help)</button></div>
           </section>
           <section class="pane" data-pane="upgrades">
             <div class="card"><h4>Your team</h4><div data-r="team"><p class="empty">Reads your active squad and finds the best upgrades for your weakest spots.</p></div>
               <button class="btn blue" data-a="analyse">Analyse my team</button></div>
             <div data-r="upg"></div>
+            <div class="card"><h4>Formation coach</h4><div data-r="forms"><p class="empty">Compares your lineup with popular competitive formations, built from players you own.</p></div>
+              <button class="btn blue" data-a="forms">Compare formations</button>
+              <p class="note">Formations are a built-in list of popular competitive setups, not live pro data. “Create squad” makes a new squad, so your current one isn’t touched.</p></div>
             <div class="card">${FIELDS.upgrades.map(fieldHtml).join('')}
               <p class="note">Owned players are suggested first. Market suggestions match your squad’s main league or nation so you keep chemistry, and cost a few searches.</p></div>
           </section>
@@ -2119,6 +2280,10 @@
           case 'fold': return root.classList.toggle('min');
           case 'price': return engine.checkPricesNow();
           case 'analyse': return upgrades.analyse();
+          case 'forms': return upgrades.compareFormations();
+          case 'form-view': this.formOpen = this.formOpen === Number(btn.dataset.i) ? -1 : Number(btn.dataset.i); return this.renderFormations();
+          case 'form-create': return upgrades.createSquad(Number(btn.dataset.i));
+          case 'copy-log': return this.copyLog();
           case 'snipe-opt': {
             const r = upgrades.results[Number(btn.dataset.s)];
             return r && upgrades.snipe(r.options[Number(btn.dataset.o)]);
@@ -2366,6 +2531,26 @@
         <button class="btn" data-a="sbc-submit" style="background:var(--green);color:var(--green-ink);border-color:var(--green)">Submit${engine.cfg.sbcRepeat > 1 ? ` (up to ${engine.cfg.sbcRepeat}×)` : ''}</button>
         <button class="btn" data-a="sbc-fill">Fill squad only (check it in the Web App)</button>
         <button class="btn red" data-a="sbc-discard">Discard</button>`;
+    },
+
+    renderFormations() {
+      const list = upgrades.formations;
+      const curIds = upgrades.currentIds || new Set();
+      this.q('[data-r=forms]').innerHTML = list.length ? `<div class="list">${list.map((f, i) => `
+        <div class="li"><span class="t"><b>${i === 0 ? '⭐ ' : ''}${esc(f.label)}</b><small>rating ${f.rating} · chemistry ${f.chem}/33</small></span>
+          <button class="mini" data-a="form-view" data-i="${i}">${this.formOpen === i ? 'Hide' : 'View'}</button>
+          ${f.current ? '' : `<button class="mini go2" data-a="form-create" data-i="${i}">Create squad</button>`}</div>
+        ${this.formOpen === i ? `<div class="sub">${f.lineup.map((p, k) => `<div class="li"><span class="t"><b>${esc(f.slots[k])} · ${p ? esc(p.name) : '—'}</b>
+          <small>${p ? `${p.rating}${!f.current && !curIds.has(p.id) ? ' · <span class="up">new in XI</span>' : ''}` : 'nobody fits'}</small></span></div>`).join('')}</div>` : ''}`).join('')}</div>`
+        : '<p class="empty">Compares your lineup with popular competitive formations, built from players you own.</p>';
+    },
+
+    async copyLog() {
+      const lines = this.qa('[data-r=log] div').map((d) => d.textContent).reverse();
+      const text = [`FC Sniper ${VERSION} · ${navigator.userAgent}`, ...lines, '--- details ---', ...debugLog.slice(-20)].join('\n');
+      try { await navigator.clipboard.writeText(text); this.toast('Log copied — paste it in the chat', 'ok'); } catch {
+        w.prompt('Copy this log:', text);
+      }
     },
 
     renderUpgrades() {

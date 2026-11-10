@@ -36,6 +36,7 @@ the Companion app. Updates install automatically.
 | **History** | Every buy with time, price and listed price. Totals for today and all time. |
 | **Phone layout** | Bottom sheet with large controls, keeps the screen awake while running. |
 | **Upgrade advisor** | Reads your active squad, finds the 3 weakest spots, and suggests upgrades that raise your rating without breaking chemistry. Players you own come first, then market cards in your squad's main league or nation within budget. One tap sends a card to the sniper. |
+| **Formation coach** | Builds the best XI from players you own for 9 popular competitive formations (4-2-3-1, 4-3-2-1, 4-1-2-1-2, 4-3-1-2, 4-3-3, 4-4-2, 4-2-2-2, 5-2-1-2, 3-4-2-1), compares rating and chemistry with your current lineup, shows who comes in, and can create it as a new squad. Built-in formations, not live pro data. |
 | **Pack opener** | Lists your unopened packs and opens one, a type, or all. Sorts each pack: new items to your club, untradeable duplicates to SBC storage, tradeable duplicates to the transfer list, and optionally quick-sells duplicates rated below a number you set. Shows your best pulls. |
 | **SBC solver** | Loads SBCs, marks which it can solve, and builds the cheapest squad from your club: SBC storage and duplicates first, then untradeables, never your active squad or players rated above your limit. Review, then submit, or just fill the squad and check it in the Web App. Repeats repeatable SBCs. |
 | **Safety** | Enforced pacing, session and daily limits, and lockouts after EA warnings (below). Shared by every feature. |
@@ -60,6 +61,10 @@ A name matches every version of the card; set **Min rating** (Filters) to aim at
 - **SBC tab → Load SBCs → View → Solve.** Challenges tagged **auto** can be solved:
   team rating, min/max/exact player rating, Bronze/Silver/Gold, and rare count.
   Chemistry and league/nation/club count requirements show as **manual** for now.
+
+### Something not working?
+Tap **Copy log** (Snipe tab, under Activity) and paste it in the chat. It includes
+the exact EA response for whatever failed.
 
 ### Discord alerts
 In Discord: Server Settings → Integrations → Webhooks → New Webhook → Copy URL. Paste it
@@ -91,12 +96,13 @@ skipping captchas, and hiding the script from EA.
 ## Roadmap
 
 Researched and possible next, roughly in order of value:
-1. **Chemistry & league/nation/club SBCs** — extend the solver with the chemistry model
+1. **Live lineup data** — pro/meta lineups if a source without bot protection is found.
+2. **Chemistry & league/nation/club SBCs** — extend the solver with the chemistry model
    already used by the upgrade advisor, so "Hybrid Leagues"-style SBCs can be solved.
-2. **Open SBC reward packs automatically** after submitting, and sort them.
-3. **Claim objectives / rewards** in one tap.
-4. **Evolutions helper** — list which of your players qualify for active evolutions.
-5. **Price data in the upgrade advisor** — show each suggestion's market average.
+3. **Open SBC reward packs automatically** after submitting, and sort them.
+4. **Claim objectives / rewards** in one tap.
+5. **Evolutions helper** — list which of your players qualify for active evolutions.
+6. **Price data in the upgrade advisor** — show each suggestion's market average.
 
 ## Develop
 
