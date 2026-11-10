@@ -79,16 +79,27 @@ function installMock() {
     User: { getUser: () => ({ coins: { amount: 120000 } }) },
     Localization: { localize: (x) => x },
     Item: {
-      clearTransferMarketCache() {},
+      clearTransferMarketCache() { T.gen = (T.gen || 0) + 1; },
       searchTransferMarket(c) {
         T.searches.push({ league: c.league, nation: c.nation, pos: c._position, max: c.maxBuy, min: c.minBuy });
-        if (!c._position && c.level === 'gold') {
-          // cheap tradeable gold fodder on the market, a few of each rating
+        // cheap tradeable gold fodder on the market, a few of each rating; listings are
+        // tagged with the cache generation — buying one after the cache was cleared fails (403)
+        const fodder = () => {
           const fod = [];
           [[84, 900], [85, 1400], [86, 2200], [87, 3200], [88, 5000], [89, 9000]].forEach(([r, price]) => {
-            for (let k = 0; k < 3; k++) fod.push(mk(4000 + r * 10 + k, r, { pos: ['CB', 'CM', 'ST'][k], league: 53 + k, nation: 30 + k, untradeable: false, name: `Market ${r}-${k}`, price: price + k * 100 }));
+            for (let k = 0; k < 3; k++) {
+              const it = mk(4000 + r * 10 + k, r, { pos: ['CB', 'CM', 'ST'][k], league: 53 + k, nation: 30 + k, untradeable: false, name: `Market ${r}-${k}`, price: price + k * 100 });
+              it.gen = T.gen;
+              fod.push(it);
+            }
           });
-          return obs({ success: true, data: { items: fod.filter((i) => (!c.maxBuy || i._auction.buyNowPrice <= c.maxBuy) && (!c.minBuy || i._auction.buyNowPrice >= c.minBuy)) } });
+          return fod;
+        };
+        if (!c._position && c.level === 'gold') {
+          return obs({ success: true, data: { items: fodder().filter((i) => (!c.maxBuy || i._auction.buyNowPrice <= c.maxBuy) && (!c.minBuy || i._auction.buyNowPrice >= c.minBuy)) } });
+        }
+        if (c.maskedDefId >= 4840 && c.maskedDefId < 4900) {
+          return obs({ success: true, data: { items: fodder().filter((i) => i.definitionId === c.maskedDefId && (!c.maxBuy || i._auction.buyNowPrice <= c.maxBuy)) } });
         }
         const items = c._position === 'ST' ? [
           mk(800, 86, { pos: 'ST', league: 13, nation: 10, name: 'Same League ST 86', price: 45000 }),
@@ -108,7 +119,10 @@ function installMock() {
         items.forEach((it) => { T.unassigned = T.unassigned.filter((u) => u !== it); it.pile = pile; T.piles[key].push(it.rating); });
         return obs({ success: true });
       },
-      bid(item, price) { T.sbcBought = (T.sbcBought || []).concat([{ r: item.rating, price }]); T.coins -= price; return obs({ success: true }); },
+      bid(item, price) {
+        if (item.gen !== undefined && item.gen !== T.gen) { T.stale = (T.stale || 0) + 1; return obs({ success: false, status: 403 }); }
+        T.sbcBought = (T.sbcBought || []).concat([{ r: item.rating, price }]); T.coins -= price; return obs({ success: true });
+      },
       discard(items) { items.forEach((it) => { T.unassigned = T.unassigned.filter((u) => u !== it); T.piles.discarded.push(it.rating); }); return obs({ success: true }); },
     },
     Club: {

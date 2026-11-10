@@ -118,6 +118,7 @@ const idle = (p, ms = 150000) => p.waitForFunction(() => !document.querySelector
   const last = T2.submitted[T2.submitted.length - 1];
   check('bought the fill-ins within the limit', T2.sbcBought.length >= 1 && T2.sbcBought.reduce((a, x) => a + x.price, 0) <= 50000, JSON.stringify(T2.sbcBought));
   check('moved them to the club', T2.club.length >= T2.sbcBought.length);
+  check('fill-ins bought from a fresh search (no stale 403)', (await p.evaluate(() => T.stale || 0)) === 0 && !(await log(p)).some((l) => /Logged out/.test(l)));
   check('uses your own players first, buys only the gaps', T2.sbcBought.length < 11 && last.some((x) => x.untradeable), `${T2.sbcBought.length} bought, ${last.filter((x) => x.untradeable).length} from club`);
   check('Elite 87 submitted at ≥ 87', T2.submitted.length === before + 1 && rating(last.map((x) => x.r)) >= 87, last && rating(last.map((x) => x.r)));
   check('fill-ins never include a card you own', !last.some((x) => x.def >= 100 && x.def <= 110));

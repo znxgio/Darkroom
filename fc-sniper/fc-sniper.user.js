@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FC Sniper
 // @namespace    https://github.com/znxgio/darkroom
-// @version      1.7.0
+// @version      1.7.1
 // @description  Sniper, pack opener, SBC solver and team upgrade advisor for the EA SPORTS FC Ultimate Team Web App, with built-in safety limits.
 // @match        https://www.ea.com/*ultimate-team/web-app*
 // @match        https://www.ea.com/ea-sports-fc/ultimate-team/web-app*
@@ -1255,7 +1255,7 @@
 
   const w = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '1.7.0';
+  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '1.7.1';
   const errText = (e) => (e && e.message ? e.message : String(e));
   const fmt = (n) => Number(n || 0).toLocaleString();
 
@@ -2528,41 +2528,49 @@
       });
     },
 
-    /** Buy the planned market fill-ins; a sold listing is replaced by the next cheapest copy. */
+    /**
+     * Buy the planned fill-ins. Listings from the price check go stale once the
+     * market cache is cleared (EA answers 403), so each card is searched again
+     * right before buying and the cheapest fresh listing is taken (up to 15%
+     * above plan). A listing that's gone is replaced by the next one.
+     */
     async buyFillIns(plan) {
       const cfg = engine.cfg;
       if (fut.coins() - cfg.minCoins < plan.buyTotal) throw new Error(`not enough coins for the fill-ins (${fmt(plan.buyTotal)})`);
       const bought = [];
+      const cap = Math.round((cfg.sbcBuyLimit || plan.buyTotal) * 1.15);
+      let spent = 0;
       for (const p of plan.buys) {
         engine.setStatus('pricing', `Buying ${p.name} (${bought.length + 1}/${plan.buys.length})…`);
-        let r = await fut.buy(p.listing);
-        let item = p.listing.item;
-        let price = p.price;
-        if (!r.ok) {
+        const maxPrice = roundPrice(Math.max(p.price * 1.15, p.price + 100), 'up');
+        const fresh = await fut.search(fut.criteria({}, { id: p.defId }, maxPrice));
+        engine.countUsage('searches');
+        jobs.check(fresh, 'market search');
+        const options = fresh.listings.filter((l) => l.defId === p.defId && l.buyNowPrice && l.buyNowPrice <= maxPrice)
+          .sort((x, y) => x.buyNowPrice - y.buyNowPrice);
+        let got = null;
+        for (const l of options.slice(0, 3)) {
+          if (spent + l.buyNowPrice > cap) break;
+          const r = await fut.buy(l);
+          if (r.ok) { got = l; break; }
           const kind = classifyStatus(r.status);
-          if (kind === 'captcha' || kind === 'throttled' || kind === 'session') jobs.check(r, 'buying a fill-in');
-          // Sold already: try the next cheapest copy of the same card.
-          await jobs.pause(cfg.delayMin, cfg.delayMax);
-          const again = await fut.search(fut.criteria({}, { id: p.defId }, roundPrice(p.price * 1.3)));
-          engine.countUsage('searches');
-          jobs.check(again, 'market search');
-          const alt = again.listings.filter((l) => l.defId === p.defId && l.buyNowPrice).sort((a, b) => a.buyNowPrice - b.buyNowPrice)[0];
-          if (!alt) throw new Error(`${p.name} sold out — bought ${bought.length} of ${plan.buys.length}, they're in your club`);
-          r = await fut.buy(alt);
-          if (!r.ok) throw new Error(`couldn't buy ${p.name} (${r.status}) — bought ${bought.length} of ${plan.buys.length}, they're in your club`);
-          item = alt.item;
-          price = alt.buyNowPrice;
+          if (kind === 'captcha' || kind === 'throttled') jobs.check(r, 'buying a fill-in');
+          if (kind === 'coins') throw new Error('not enough coins for the fill-ins');
+          ui.log(`${p.name} at ${fmt(l.buyNowPrice)} was gone (${r.status}) — trying the next one`, 'muted');
+          await jobs.pause(900, 1600);
         }
+        if (!got) throw new Error(`couldn't get ${p.name} at ≤ ${fmt(maxPrice)} — bought ${bought.length} of ${plan.buys.length}, they're in your club`);
         engine.countUsage('buys');
-        p.item = item;
-        bought.push({ p, item, price });
-        engine.history = addHistory(engine.history, { at: Date.now(), id: p.defId, itemId: item && item.id, name: p.name, rating: p.rating, price, via: 'sbc' });
+        spent += got.buyNowPrice;
+        p.item = got.item;
+        bought.push({ p, item: got.item, price: got.buyNowPrice });
+        engine.history = addHistory(engine.history, { at: Date.now(), id: p.defId, itemId: got.item && got.item.id, name: p.name, rating: p.rating, price: got.buyNowPrice, via: 'sbc' });
         store.set(KEYS.history, engine.history);
-        ui.log(`Bought ${p.name} ${p.rating} for ${fmt(price)} (SBC fill-in)`, 'ok');
-        await jobs.pause(900, 1600);
+        ui.log(`Bought ${p.name} ${p.rating} for ${fmt(got.buyNowPrice)} (SBC fill-in)`, 'ok');
+        await jobs.pause(cfg.delayMin, cfg.delayMax);
       }
       if (bought.length) {
-        const moved = await fut.move(bought.map((b) => b.item), w.ItemPile.CLUB);
+        const moved = await fut.move(bought.map((x) => x.item), w.ItemPile.CLUB);
         if (!moved) ui.log('Couldn’t move the fill-ins to your club — they’re in unassigned', 'warn');
         await jobs.pause(900, 1600);
       }
