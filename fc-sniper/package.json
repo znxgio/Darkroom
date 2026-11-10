@@ -1,6 +1,6 @@
 {
   "name": "fc-sniper",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "private": true,
   "description": "Sniper, pack opener, SBC solver and upgrade advisor userscript for the EA SPORTS FC Ultimate Team Web App",
   "scripts": {

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FC Sniper
 // @namespace    https://github.com/znxgio/darkroom
-// @version      1.2.0
+// @version      1.2.1
 // @description  Sniper, pack opener, SBC solver and team upgrade advisor for the EA SPORTS FC Ultimate Team Web App, with built-in safety limits.
 // @match        https://www.ea.com/*ultimate-team/web-app*
 // @match        https://www.ea.com/ea-sports-fc/ultimate-team/web-app*
@@ -817,6 +817,7 @@
     quickSellBelow: 0, // quick-sell duplicate players rated below this (0 = never)
     // SBC
     sbcUseTradeables: false, // let the solver use tradeable players
+    sbcUseSpecials: false, // let the solver use special cards (TOTW, promos…)
     sbcMaxRating: 86, // never use players rated above this
     sbcProtectSquad: true, // never use players from your active squad
     sbcRepeat: 1, // times to repeat a repeatable SBC
@@ -960,6 +961,7 @@
       const auction = item._auction || {};
       return {
         id: item.definitionId,
+        defId: item.definitionId,
         name: sd.name || item.name || `#${item.definitionId}`,
         rating: item.rating || 0,
         nationId: item.nationId,
@@ -1699,24 +1701,47 @@
       });
     },
 
-    /** Club + storage players the solver may use. */
+    raw: null, // club + storage players, read once per session
+    guard: null, // { itemIds, defIds } of your whole active squad
+
+    /**
+     * Club + storage players the solver may use. Never: anyone in your active
+     * squad (starters, subs and reserves), loans, evolution players, players
+     * above your max rating, specials (unless allowed) or tradeables (unless allowed).
+     */
     async pool(force) {
-      if (this.club && !force) return this.club;
-      engine.setStatus('pricing', 'Reading your club…');
-      const r = await fut.clubPlayers((n) => engine.setStatus('pricing', `Reading your club… ${n}`));
-      jobs.check(r, 'reading your club');
-      let protectedIds = new Set();
-      if (engine.cfg.sbcProtectSquad) {
-        const squad = await fut.activeSquad();
-        if (squad) protectedIds = new Set(squad.getFieldPlayers().map((s) => s.item && s.item.id).filter(Boolean));
+      if (!this.raw || force) {
+        engine.setStatus('pricing', 'Reading your club…');
+        const r = await fut.clubPlayers((n) => engine.setStatus('pricing', `Reading your club… ${n}`));
+        jobs.check(r, 'reading your club');
+        this.raw = r.items.map((item) => ({ ...fut.toPlayer(item), itemId: item.id }));
       }
       const cfg = engine.cfg;
-      this.club = r.items.map((item) => ({ ...fut.toPlayer(item), itemId: item.id }))
-        .filter((p) => p.player && !p.loan && !p.evo && !protectedIds.has(p.itemId)
-          && p.rating <= cfg.sbcMaxRating && (p.untradeable || p.storage || cfg.sbcUseTradeables))
+      this.guard = { itemIds: new Set(), defIds: new Set() };
+      if (cfg.sbcProtectSquad) {
+        const squad = await fut.activeSquad();
+        if (!squad) throw new Error("couldn't read your active squad, so nothing was used — try again, or turn off “Never use my active squad”");
+        const slots = typeof squad.getPlayers === 'function' ? squad.getPlayers() : squad.getFieldPlayers();
+        for (const s of slots) {
+          const it = s && (s.item || s);
+          if (it && it.definitionId) { this.guard.itemIds.add(it.id); this.guard.defIds.add(it.definitionId); }
+        }
+      }
+      const usable = this.raw
+        .filter((p) => p.player && !p.loan && !p.evo && this.allowed(p))
         .map((p) => ({ ...p, id: p.itemId, cost: playerCost(p) }));
-      ui.log(`Club: ${this.club.length} players available for SBCs`, 'muted');
-      return this.club;
+      ui.log(`Club: ${usable.length} players usable for SBCs · ${this.guard.itemIds.size} squad players protected`, 'muted');
+      return usable;
+    },
+
+    /** The same rules, checked again on every player right before sending. */
+    allowed(p) {
+      const cfg = engine.cfg;
+      if (this.guard && (this.guard.itemIds.has(p.itemId ?? p.id) || this.guard.defIds.has(p.defId ?? p.item?.definitionId))) return false;
+      if (p.rating > cfg.sbcMaxRating) return false;
+      if (p.special && !cfg.sbcUseSpecials) return false;
+      if (!(p.untradeable || p.storage || cfg.sbcUseTradeables)) return false;
+      return true;
     },
 
     async solve(set, entry) {
@@ -1724,6 +1749,7 @@
         const { challenge, parsed } = entry;
         if (parsed.unsupported.length) { ui.log(`Can't auto-solve yet: ${parsed.unsupported.join(', ')}`, 'warn'); return; }
         const pool = await this.pool();
+        this.club = pool;
         engine.setStatus('pricing', 'Solving…');
         await sleep(30);
         const solution = solveSbc(pool, parsed.constraints);
@@ -1746,6 +1772,11 @@
           const load = await fut.loadChallenge(entry.challenge);
           jobs.check(load, 'loading the challenge');
           await jobs.pause(800, 1500);
+          const bad = solution.players.filter((p) => !this.allowed(p));
+          if (bad.length) {
+            ui.log(`Safety check blocked this squad: ${bad.map((p) => `${p.name} ${p.rating}`).join(', ')} — nothing was sent`, 'err');
+            return;
+          }
           const items = solution.players.map((p) => p.item);
           const fill = await fut.fillChallenge(entry.challenge, items);
           jobs.check(fill, 'filling the squad');
@@ -1754,7 +1785,8 @@
           const sub = await fut.submitChallenge(entry.challenge, set);
           jobs.check(sub, 'submitting');
           const used = new Set(solution.players.map((p) => p.id));
-          this.club = (this.club || []).filter((p) => !used.has(p.id));
+          this.raw = (this.raw || []).filter((p) => !used.has(p.itemId));
+          this.club = (await this.pool()).filter((p) => !used.has(p.id));
           ui.log(`✅ Submitted ${set.name}${entry.challenge.name && entry.challenge.name !== set.name ? ` — ${entry.challenge.name}` : ''}`, 'ok');
           ui.toast(`SBC done: ${set.name}`, 'ok');
           sounds.buy();
@@ -1770,6 +1802,7 @@
           const reqs = fut.requirements(next);
           const parsed = parseRequirements(reqs, fut.requiredPlayers(next));
           const sol = !parsed.unsupported.length && solveSbc(this.club, parsed.constraints);
+          if (sol && sol.players.some((p) => !this.allowed(p))) { ui.log('Safety check stopped the repeat', 'err'); break; }
           if (!sol) { ui.log('Out of suitable players for another repeat', 'muted'); break; }
           current = { set, entry: { challenge: next, reqs, parsed }, solution: sol };
         }
@@ -1963,6 +1996,7 @@
     sbc: [
       ['sbcProtectSquad', 'Never use my active squad', 'toggle'],
       ['sbcUseTradeables', 'Use tradeable players', 'toggle'],
+      ['sbcUseSpecials', 'Use special cards', 'toggle'],
       ['sbcMaxRating', 'Max player rating to use', 'number'],
       ['sbcRepeat', 'Repeat repeatable SBCs', 'number'],
     ],
@@ -2229,7 +2263,7 @@
             <div class="card"><h4>Squad Building Challenges</h4><div data-r="sbc"><p class="empty">Load SBCs to see which ones can be solved from your club.</p></div>
               <button class="btn blue" data-a="sbc-load">Load SBCs</button></div>
             <div class="card">${FIELDS.sbc.map(fieldHtml).join('')}
-              <p class="note">Uses your cheapest fodder first: SBC storage and duplicates, then untradeables. Solves rating, quality, rare and min/max rating requirements; chemistry and league/nation/club counts aren’t automatic yet.</p></div>
+              <p class="note">Never uses your active squad (starters, subs, reserves), loans, evolutions, specials or tradeables unless you allow them, or anyone above your max rating — and checks every player again right before sending. Uses your cheapest fodder first: SBC storage and duplicates, then untradeables. Solves rating, quality, rare and min/max rating requirements; chemistry and league/nation/club counts aren’t automatic yet.</p></div>
           </section>
           <section class="pane" data-pane="filters"><div class="card">${FIELDS.filters.map(fieldHtml).join('')}
             <p class="note">Players match every version of the card. Use Min rating to target one version.</p></div></section>
@@ -2526,6 +2560,7 @@
       if (!p) return;
       const tag = (x) => (x.storage ? '<span class="tag">storage</span>' : x.duplicate ? '<span class="tag">duplicate</span>' : x.untradeable ? '<span class="tag">untradeable</span>' : '<span class="tag no">tradeable</span>');
       plan.innerHTML = `<h4>Solution — ${esc(p.set.name)}</h4>
+        <p class="note" style="margin:0 0 8px">✓ none from your squad (${sbc.guard ? sbc.guard.itemIds.size : 0} protected) · ✓ all ≤ ${engine.cfg.sbcMaxRating}${engine.cfg.sbcUseSpecials ? '' : ' · ✓ no specials'}${engine.cfg.sbcUseTradeables ? '' : ' · ✓ untradeables only'}</p>
         <div class="kpi"><div><b>${p.solution.players.length}</b>Players</div><div><b>${p.solution.rating || '—'}</b>Rating</div><div><b>${p.solution.players.filter((x) => x.rare).length}</b>Rares</div></div>
         <div class="list">${p.solution.players.slice().sort((a, b) => b.rating - a.rating).map((x) => `<div class="li"><span class="t"><b>${esc(x.name)}${tag(x)}</b></span><b>${x.rating}</b></div>`).join('')}</div>
         <button class="btn" data-a="sbc-submit" style="background:var(--green);color:var(--green-ink);border-color:var(--green)">Submit${engine.cfg.sbcRepeat > 1 ? ` (up to ${engine.cfg.sbcRepeat}×)` : ''}</button>

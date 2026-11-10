@@ -38,6 +38,11 @@ function installMock() {
   const posList = ['GK', 'RB', 'CB', 'CB', 'LB', 'CM', 'CM', 'CM', 'CAM', 'ST', 'ST'];
   const squadItems = posList.map((pos, i) => mk(100 + i, i === 10 ? 75 : 85, { pos, nation: 10 + (i % 4), league: 13, name: i === 10 ? 'Weak Striker' : `Starter ${pos}${i}` }));
   squadItems.forEach((it) => { owned.add(it.definitionId); club.push(it); });
+  // subs/reserves that look like perfect fodder (83, untradeable, rare) — must never be used
+  const benchItems = [mk(650, 83, { rare: true, name: 'My Sub 83' }), mk(651, 84, { name: 'My Reserve 84' })];
+  benchItems.forEach((it) => club.push(it));
+  // untradeable specials — must not be used unless allowed
+  for (let i = 0; i < 6; i++) club.push(mk(660 + i, 83, { special: true, name: `Special 83 ${i}` }));
   club.push(mk(700, 80, { pos: 25, league: 13, name: 'Bench Striker 80' })); // EA sends position ids
   // a bench covering every position, so formations can be built (numeric ids like the real app)
   const ids = { GK: 0, RB: 3, CB: 5, LB: 7, RWB: 2, LWB: 8, CDM: 10, CM: 14, CAM: 18, RM: 12, LM: 16, RW: 23, LW: 27, CF: 21, ST: 25 };
@@ -46,6 +51,7 @@ function installMock() {
   window.T = { piles: { club: [], storage: [], transfer: [], discarded: [] }, unassigned: [], submitted: [], searches: [], opened: 0 };
   const squad = {
     getFieldPlayers: () => squadItems.map((item, index) => ({ index, item, position: { typeName: posList[index] } })),
+    getPlayers: () => [...squadItems, ...benchItems].map((item, index) => ({ index, item })),
     getFormation: () => ({ name: '4-3-1-2' }),
   };
   // --- packs
@@ -180,6 +186,8 @@ const idle = (p, ms = 150000) => p.waitForFunction(() => !document.querySelector
   await p.waitForSelector('#fcs [data-a=sbc-submit]', { timeout: 60000 });
   await idle(p);
   await p.screenshot({ path: `${S}/t-sbc-plan.png` });
+  const note = await p.textContent('#fcs [data-r=plan] .note');
+  check('solution shows safety summary', /13 protected/.test(note) && /no specials/.test(note) && /≤ 86/.test(note), note);
   await p.click('#fcs [data-a=sbc-submit]');
   await idle(p);
   const sub = await p.evaluate(() => T.submitted);
@@ -190,7 +198,9 @@ const idle = (p, ms = 150000) => p.waitForFunction(() => !document.querySelector
   check('no player used twice', new Set(sub.flat().map((x) => x.id)).size === sub.flat().length);
   check('never uses tradeables', sub.flat().every((x) => x.untradeable) && !sub.flat().some((x) => x.r === 87));
   check('storage players used first', sub[0].filter((x) => x.pile === 6).length === 2, `${sub[0].filter((x) => x.pile === 6).length} storage`);
-  check('active squad protected', !sub.flat().some((x) => x.def >= 100 && x.def <= 110));
+  check('active squad protected (starters)', !sub.flat().some((x) => x.def >= 100 && x.def <= 110));
+  check('subs and reserves protected', !sub.flat().some((x) => x.def === 650 || x.def === 651));
+  check('special cards not used', !sub.flat().some((x) => x.def >= 660 && x.def < 670));
 
   // ---- Upgrades
   await p.click('#fcs [data-tab=upgrades]');
