@@ -80,6 +80,47 @@ function installTradeMock() {
   }));
 }
 
+
+function installHotMock() {
+  const obs = (res, ms = 5) => ({ observe(ctx, cb) { setTimeout(() => cb({ unobserve() {} }, res), ms); } });
+  window.ItemPile = { CLUB: 1, PURCHASED: 3, TRANSFER: 5, STORAGE: 6 };
+  window.UTSearchCriteriaDTO = function () {};
+  let tid = 1;
+  // listings keep their trade id across searches, like the real market
+  const card = (defId, name, bin, bid = 0, key = tid++) => ({ id: `${defId}-${key}`, definitionId: defId, rating: 84, rareflag: 1, _staticData: { name }, isPlayer: () => true,
+    _auction: { tradeId: `${defId}-${key}`, buyNowPrice: bin, currentBid: bid, startingBid: 150, expires: 3000, _tradeState: 'active' } });
+  window.H = { scans: [], checks: [] };
+  window.services = {
+    User: { getUser: () => ({ coins: { amount: 50000 } }) },
+    Item: {
+      clearTransferMarketCache() {},
+      searchTransferMarket(c) {
+        let items = [];
+        if (c.league) {
+          H.scans.push({ league: c.league, level: c.level, rarities: c.rarities, maxBuy: c.maxBuy, minBuy: c.minBuy });
+          for (let i = 0; i < 10; i++) items.push(card(300, 'Hot Card', 9500 + i * 300, i < 6 ? 8000 : 0, `s${i}`));
+          for (let i = 0; i < 10; i++) items.push(card(301, 'Cold Card', 9800 + i * 20, 0, `s${i}`));
+          items.push(card(302, 'Thin Card', 4000, 3000, 's0'), card(302, 'Thin Card', 4200, 3000, 's1'));
+          items.push(card(303, 'Pricey Card', 80000, 70000, 's0'));
+        } else if (c.maskedDefId) {
+          H.checks.push(c.maskedDefId);
+          const base = c.maskedDefId === 300 ? 10000 : 10000;
+          for (let i = 0; i < 20; i++) items.push(card(c.maskedDefId, c.maskedDefId === 300 ? 'Hot Card' : 'Cold Card', base + i * 100));
+          if (c.minBid !== undefined && c.maskedDefId === 300) items.push(card(300, 'Hot Card', 8500)); // a snipe while trading
+        }
+        return obs({ success: true, data: { items: items.filter((x) => (!c.maxBuy || x._auction.buyNowPrice <= c.maxBuy) && (!c.minBuy || x._auction.buyNowPrice >= c.minBuy)) } });
+      },
+      bid(item, amount) { H.bought = (H.bought || 0) + 1; return obs({ success: true }); },
+      move: () => obs({ success: true }),
+      list: () => obs({ success: true }),
+      requestTransferItems: () => obs({ success: true, data: { items: [] } }),
+      requestWatchedItems: () => obs({ success: true, data: { items: [] } }),
+    },
+  };
+  window.repositories = { Item: { getPileSize: () => 100, numItemsInCache: () => 0, isPileFull: () => false } };
+  localStorage.setItem('fc-sniper:config', JSON.stringify({ players: [], hotAuto: true, hotPick: 1, maxBuys: 1, delayMin: 3000, delayMax: 3500 }));
+}
+
 (async () => {
   const b = await chromium.launch();
   const p = await (await b.newContext(devices['iPhone 13'])).newPage();
@@ -123,6 +164,33 @@ function installTradeMock() {
   const plans = await p.textContent('#fcs [data-r=tplans]');
   check('Trade tab shows the flip plan', /buy ≤/.test(plans) && /sell/.test(plans), plans.replace(/\s+/g, ' ').slice(0, 120));
   await p.screenshot({ path: `${S}/trade-1.png` });
+
+  // ---------- Hot cards: scan, rank, auto-pick and start trading
+  const h = await (await b.newContext(devices['iPhone 13'])).newPage();
+  h.on('pageerror', (e) => errors.push(e.message));
+  await h.route('http://fake.test/**', (r) => r.fulfill({ contentType: 'text/html', body: '<html><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"></head><body style="margin:0;background:#1d2b3a"></body></html>' }));
+  await h.goto('http://fake.test/');
+  await h.evaluate(installHotMock);
+  await h.addScriptTag({ content: SCRIPT });
+  await h.waitForSelector('#fcs');
+  await h.tap('#fcs [data-a=fold]');
+  await h.tap('#fcs [data-tab=trade]');
+  await h.tap('#fcs [data-a=trade-start]');
+  // scan + price checks, then trading starts on its own
+  await h.waitForFunction(() => document.querySelector('#fcs [data-a=toggle]').classList.contains('on') && JSON.parse(localStorage.getItem('fc-sniper:config')).players.length, null, { timeout: 240000 });
+  await h.waitForTimeout(500);
+  const H = await h.evaluate(() => window.H);
+  const hlog = await h.evaluate(() => [...document.querySelectorAll('#fcs [data-r=log] div')].reverse().map((d) => d.textContent.replace(/^\d\d:\d\d:\d\d\s*/, '')));
+  const players = await h.evaluate(() => JSON.parse(localStorage.getItem('fc-sniper:config')).players);
+  check('scan covers the 5 leagues, gold rares within budget', new Set(H.scans.map((x) => x.league)).size === 5 && H.scans.every((x) => x.level === 'gold' && x.rarities[0] === 1 && x.maxBuy <= 50000), JSON.stringify(H.scans[0]));
+  check('scan uses several price bands', new Set(H.scans.map((x) => x.minBuy)).size >= 2, [...new Set(H.scans.map((x) => x.minBuy))].join(','));
+  const hotText = await h.textContent('#fcs [data-r=hot]');
+  check('hot list ranks the card with demand first', /^\s*Hot Card/.test(hotText.replace(/\s+/g, ' ')), hotText.replace(/\s+/g, ' ').slice(0, 140));
+  check('thin and over-budget cards dropped', !/Thin Card|Pricey Card/.test(hotText));
+  check('price-checked the top cards', H.checks.includes(300), H.checks.join(','));
+  check('auto-picked the hot card and started trading', players.length === 1 && players[0].id === 300 && players[0].hot && players[0].avg > 0 && hlog.some((l) => /Trading Hot Card/.test(l)), hlog.filter((l) => /Hot|Trading/.test(l)).join(' | '));
+  await h.screenshot({ path: `${S}/trade-hot.png` });
+  await h.tap('#fcs [data-a=toggle]');
   check('no page errors', errors.length === 0, errors.join('; '));
   console.log('log:\n  ' + lines.join('\n  '));
   await b.close();

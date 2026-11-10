@@ -542,3 +542,30 @@ test('tradeOpts: min profit is the larger of coins and % of price', () => {
   const p = c.flipPlan(1868000, c.tradeOpts(1868000, { minProfit: 200, minProfitPct: 3, undercut: 3 }));
   assert.ok(p && p.profit >= 0.03 * 1868000 * 0.95, `profit ${p && p.profit}`);
 });
+
+// ---- market scanner ---------------------------------------------------------------
+
+test('aggregateListings groups by card and counts bids', () => {
+  const L = [
+    { tradeId: 1, defId: 10, name: 'A', rating: 84, buyNowPrice: 5000, currentBid: 0 },
+    { tradeId: 2, defId: 10, name: 'A', rating: 84, buyNowPrice: 4000, currentBid: 3000 },
+    { tradeId: 3, defId: 10, name: 'A', rating: 84, buyNowPrice: 6000, currentBid: 0 },
+    { tradeId: 3, defId: 10, name: 'A', rating: 84, buyNowPrice: 6000, currentBid: 0 }, // duplicate listing
+    { tradeId: 4, defId: 11, name: 'B', rating: 85, buyNowPrice: 9000, currentBid: 0 },
+  ];
+  const r = c.aggregateListings(L);
+  const a = r.find((x) => x.id === 10);
+  assert.deepEqual([a.count, a.bids, a.minBin, a.medianBin], [3, 1, 4000, 5000]);
+});
+
+test('rankHot: demand and supply win, over-budget and thin cards drop out', () => {
+  const cards = [
+    { id: 1, name: 'Busy', count: 12, bids: 8, minBin: 9000, medianBin: 10000 },
+    { id: 2, name: 'Quiet', count: 12, bids: 0, minBin: 9900, medianBin: 10000 },
+    { id: 3, name: 'Thin', count: 2, bids: 2, minBin: 5000, medianBin: 6000 },
+    { id: 4, name: 'Pricey', count: 15, bids: 10, minBin: 300000, medianBin: 320000 },
+  ];
+  const r = c.rankHot(cards, { budget: 100000, minListings: 3 });
+  assert.deepEqual(r.map((x) => x.name), ['Busy', 'Quiet']);
+  assert.ok(r[0].score > r[1].score);
+});

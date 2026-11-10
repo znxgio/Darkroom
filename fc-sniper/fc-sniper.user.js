@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FC Sniper
 // @namespace    https://github.com/znxgio/darkroom
-// @version      1.3.0
+// @version      1.4.0
 // @description  Sniper, pack opener, SBC solver and team upgrade advisor for the EA SPORTS FC Ultimate Team Web App, with built-in safety limits.
 // @match        https://www.ea.com/*ultimate-team/web-app*
 // @match        https://www.ea.com/ea-sports-fc/ultimate-team/web-app*
@@ -189,6 +189,47 @@
       return { ...e, soldFor, soldAt: now };
     });
     return { history: out, realized, matched };
+  }
+
+  // ---- Market scanner: what's hot right now ---------------------------------------
+
+  /**
+   * Groups market listings by card. listings: [{ defId, name, rating, buyNowPrice, currentBid, tradeId }]
+   * → [{ id, name, rating, count, bids, minBin, medianBin }]
+   */
+  function aggregateListings(listings) {
+    const m = new Map();
+    const seen = new Set();
+    for (const l of listings) {
+      if (!l || !l.defId || !l.buyNowPrice || seen.has(l.tradeId)) continue;
+      seen.add(l.tradeId);
+      if (!m.has(l.defId)) m.set(l.defId, { id: l.defId, name: l.name, rating: l.rating, bins: [], bids: 0 });
+      const c = m.get(l.defId);
+      c.bins.push(l.buyNowPrice);
+      if (l.currentBid > 0) c.bids++;
+    }
+    return [...m.values()].map((c) => {
+      const bins = c.bins.sort((a, b) => a - b);
+      return { id: c.id, name: c.name, rating: c.rating, count: bins.length, bids: c.bids, minBin: bins[0], medianBin: bins[Math.floor(bins.length / 2)] };
+    });
+  }
+
+  /**
+   * How "hot" a card is right now: demand (listings with live bids), supply
+   * (lots of copies listed = easy to buy and sell), and room to profit (gap
+   * between the cheapest and the typical listing). Cards outside the budget score 0.
+   */
+  function hotScore(c, opts = {}) {
+    const budget = opts.budget || Infinity;
+    if (!c.count || c.minBin > budget || c.count < (opts.minListings || 3)) return 0;
+    const demand = c.bids / c.count; // share of listings people are bidding on
+    const supply = Math.min(1, c.count / 12);
+    const gap = c.medianBin > 0 ? Math.max(0, (c.medianBin - c.minBin) / c.medianBin) : 0;
+    return Math.round((demand * 50 + supply * 30 + Math.min(gap, 0.2) * 100) * 10) / 10;
+  }
+
+  function rankHot(cards, opts = {}) {
+    return cards.map((c) => ({ ...c, score: hotScore(c, opts) })).filter((c) => c.score > 0).sort((a, b) => b.score - a.score);
   }
 
   /** Trade settings for a card: Min profit, or Min profit % of the price, whichever is higher. */
@@ -875,6 +916,11 @@
     // trading (resell)
     undercut: 3, // list this % under the market average so it sells
     minProfitPct: 3, // and make at least this % of the sell price (as well as Min profit)
+    hotLeagues: '13,53,19,31,16', // leagues to scan for hot cards (Premier League, LaLiga, Bundesliga, Serie A, Ligue 1)
+    hotPick: 3, // how many hot cards to trade
+    hotRareOnly: true,
+    hotAuto: false, // pick hot cards automatically when trading starts
+    tradeBudget: 0, // max coins per card for trading (0 = your coins minus Keep coins)
     upkeepMinutes: 5, // check the transfer list this often while trading
     // selling
     sellMode: 'off', // off | profit | market | fixed
@@ -916,6 +962,7 @@
     cacheBustBid, jitter, pickTargets, planSellPrice, classifyStatus,
     normalizeName, parsePlayerDb, searchPlayers, playerForIteration, migrateConfig,
     findMarketPrice, planMaxBuy, effectiveMaxBuy, flipPlan, tradeOpts, bidAmount, settleSales,
+    aggregateListings, hotScore, rankHot,
     addHistory, summarizeHistory, isDiscordWebhook, discordPayload,
     squadRating, squadChemistry, topValues, rankUpgrades,
     POS_NAMES, normPos, FORMATIONS, squadRatingExact, lineupScore, bestLineup,
@@ -934,7 +981,7 @@
 
   const w = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '1.3.0';
+  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '1.4.0';
   const errText = (e) => (e && e.message ? e.message : String(e));
   const fmt = (n) => Number(n || 0).toLocaleString();
 
@@ -2333,6 +2380,87 @@
     },
   };
 
+  // ---- Hot cards (market scanner) ---------------------------------------------------
+
+  const hot = {
+    list: [], // [{ id, name, rating, count, bids, score, avg, lowest, plan }]
+    scannedAt: 0,
+
+    budget() {
+      const cfg = engine.cfg;
+      return cfg.tradeBudget || Math.max(0, fut.coins() - cfg.minCoins);
+    },
+
+    /** Scan the live market, score cards, price-check the best and keep profitable ones. */
+    async scan(autoAdd) {
+      let added = false;
+      await jobs.run('Finding hot cards', async () => {
+        const cfg = engine.cfg;
+        const budget = this.budget();
+        if (budget < 1000) { ui.log('Not enough coins to trade', 'warn'); return; }
+        const leagues = String(cfg.hotLeagues || '').split(',').map((x) => parseInt(x, 10)).filter(Boolean);
+        const bands = [0.4, 0.12, 0.03].map((f) => roundPrice(budget * f));
+        const segments = (leagues.length ? leagues : [0]).flatMap((league, i) => [{ league, min: bands[i % bands.length] }, { league, min: bands[(i + 1) % bands.length] }]).slice(0, 10);
+        const all = [];
+        for (const [n, seg] of segments.entries()) {
+          engine.setStatus('pricing', `Scanning the market… ${n + 1}/${segments.length}`);
+          const c = fut.newCriteria();
+          if (seg.league) c.league = seg.league;
+          c.level = 'gold';
+          if (cfg.hotRareOnly) c.rarities = [1];
+          c.maxBuy = roundPrice(budget);
+          if (seg.min >= 200) c.minBuy = seg.min;
+          const r = await fut.search(c);
+          engine.countUsage('searches');
+          jobs.check(r, 'market scan');
+          all.push(...r.listings);
+          await jobs.pause(cfg.delayMin, cfg.delayMax);
+        }
+        const ranked = rankHot(aggregateListings(all), { budget, minListings: 3 });
+        ui.log(`Scanned ${all.length} listings · ${ranked.length} cards with activity`, 'muted');
+        const out = [];
+        for (const card of ranked.slice(0, Math.max(3, (cfg.hotPick || 3) + 2))) {
+          if (jobs.cancelled) break;
+          engine.setStatus('pricing', `Pricing ${card.name}…`);
+          const r = await findMarketPrice(engine.priceSearch(card), { defId: card.id });
+          jobs.check(r, 'price check');
+          if (r.count) {
+            const plan = flipPlan(r.avg, tradeOpts(r.avg, cfg));
+            out.push({ ...card, avg: r.avg, lowest: r.lowest, listed: r.count, plan });
+          }
+          await jobs.pause(cfg.delayMin, cfg.delayMax);
+        }
+        // Best first: has a profitable plan, then hotness × profit.
+        out.sort((a, b) => (!!b.plan - !!a.plan) || (b.score * (b.plan ? b.plan.profit : 0)) - (a.score * (a.plan ? a.plan.profit : 0)));
+        this.list = out;
+        this.scannedAt = Date.now();
+        ui.renderHot();
+        const good = out.filter((x) => x.plan);
+        ui.log(good.length ? `🔥 Hot: ${good.slice(0, 3).map((x) => `${x.name} ${x.rating} (+${fmt(x.plan.profit)})`).join(', ')}` : 'No hot card has a profitable flip right now — try a bigger budget or lower min profit', good.length ? 'ok' : 'warn');
+        if (autoAdd && good.length) { this.addTop(); added = true; }
+      });
+      return added;
+    },
+
+    add(card) {
+      if (!card || engine.running) return;
+      const players = engine.cfg.players.filter((p) => p.id !== card.id);
+      players.push({ id: card.id, name: card.name, rating: card.rating, avg: card.avg, lowest: card.lowest, checkedAt: Date.now(), hot: true });
+      engine.cfg.players = players;
+      engine.save();
+      ui.renderPlayers(); ui.renderTrade(); ui.renderHot();
+    },
+
+    /** Replace earlier hot picks with the current top ones (your own players stay). */
+    addTop() {
+      const n = Math.max(1, engine.cfg.hotPick || 3);
+      const picks = this.list.filter((x) => x.plan).slice(0, n);
+      engine.cfg.players = engine.cfg.players.filter((p) => !p.hot);
+      picks.forEach((c) => this.add(c));
+      ui.log(`Trading hot cards: ${picks.map((c) => c.name).join(', ')}`, 'ok');
+    },
+  };
+
   // ---- UI -----------------------------------------------------------------------
 
   const ICON = {
@@ -2370,6 +2498,13 @@
       ['listDuration', 'List for', 'select', DURATIONS],
       ['upkeepMinutes', 'Check transfer list every (min)', 'number'],
       ['repriceMinutes', 'Refresh prices every (min)', 'number'],
+      ['tradeBudget', 'Max coins per card (0 = my coins)', 'number'],
+    ],
+    hot: [
+      ['hotAuto', 'Pick hot cards when I start trading', 'toggle'],
+      ['hotPick', 'How many hot cards to trade', 'number'],
+      ['hotRareOnly', 'Rare golds only', 'toggle'],
+      ['hotLeagues', 'Leagues to scan (IDs)', 'text', '13,53,19,31,16'],
     ],
     squad: [
       ['upgradeBudget', 'Budget (0 = my coins)', 'number'],
@@ -2640,6 +2775,9 @@
             </div>
           </section>
           <section class="pane" data-pane="trade">
+            <div class="card"><h4>🔥 Hot right now</h4><div data-r="hot"><p class="empty">Scans the live market for cards people are buying and bidding on, then keeps the ones you can flip for profit.</p></div>
+              <button class="btn blue" data-a="hot-scan">Find hot cards</button>
+              <p class="note">Based on what’s listed and being bid on in EA’s market right now (about 10 searches plus a price check per card). Trend sites like Futbin block bots, so this is live market data instead.</p></div>
             <div class="card"><h4>Resell bot</h4>
               <div class="kpi" data-r="tkpi"></div>
               <div data-r="tplans"></div>
@@ -2647,6 +2785,8 @@
               <button class="btn" data-a="upkeep">Check transfer list now</button>
               <p class="note">For each player on the Snipe tab it lists a little under the market average so cards sell, and only buys low enough to keep your min profit after EA’s 5% tax. Every few minutes it records sales, clears sold items, relists expired ones, and pauses buying when your transfer list is full. Same safety limits as sniping.</p></div>
             <div class="card"><h4>Trade settings</h4>${FIELDS.trade.map(fieldHtml).join('')}</div>
+            <div class="card"><h4>Hot card settings</h4>${FIELDS.hot.map(fieldHtml).join('')}
+              <p class="note">League IDs: 13 Premier League, 53 LaLiga, 19 Bundesliga, 31 Serie A, 16 Ligue 1.</p></div>
           </section>
           <section class="pane" data-pane="squad">
             <div class="card"><h4>Your team</h4><div data-r="team"><p class="empty">Reads your active squad and finds the best upgrades for your weakest spots.</p></div>
@@ -2724,11 +2864,20 @@
           case 'fold': return root.classList.toggle('min');
           case 'price': return engine.checkPricesNow();
           case 'analyse': return upgrades.analyse();
+          case 'hot-scan': return hot.scan(false);
+          case 'hot-add': return hot.add(hot.list[Number(btn.dataset.i)]);
+          case 'hot-top': return hot.addTop();
           case 'trade-start':
-            if (engine.running) return;
+            if (engine.running || jobs.current) return;
             this.commit();
             engine.cfg = { ...engine.cfg, mode: 'trade' };
             engine.save(); this.syncForm();
+            if (engine.cfg.hotAuto) {
+              return hot.scan(true).then((ok) => {
+                if (ok || engine.cfg.players.length) engine.start();
+                else this.log('No profitable hot cards found — nothing started', 'warn');
+              });
+            }
             if (!engine.cfg.players.length) { this.showTab('snipe'); this.log('Add the players you want to trade on the Snipe tab first', 'warn'); this.toast('Add players to trade first', 'alert'); return; }
             return engine.start();
           case 'upkeep': return engine.upkeepNow();
@@ -2914,7 +3063,7 @@
       const cfg = engine.cfg;
       this.q('[data-r=chips]').innerHTML = cfg.players.map((p) => {
         const max = effectiveMaxBuy(p, cfg);
-        const sub = p.manualMax ? 'your max' : p.avg ? `avg ${fmt(p.avg)}` : p.checkedAt ? 'none listed' : 'not priced yet';
+        const sub = `${p.hot ? '🔥 ' : ''}${p.manualMax ? 'your max' : p.avg ? `avg ${fmt(p.avg)}` : p.checkedAt ? 'none listed' : 'not priced yet'}`;
         return `<div class="chip"><span class="ovr">${p.rating || ''}</span>
           <span class="nm">${esc(p.name)}<small>${sub}</small></span>
           <button class="mx${p.manualMax ? ' manual' : ''}" data-max="${p.id}">≤ ${fmt(max)}</button>
@@ -2988,6 +3137,19 @@
         <button class="btn" data-a="sbc-submit" style="background:var(--green);color:var(--green-ink);border-color:var(--green)">Submit${engine.cfg.sbcRepeat > 1 ? ` (up to ${engine.cfg.sbcRepeat}×)` : ''}</button>
         <button class="btn" data-a="sbc-fill">Fill squad only (check it in the Web App)</button>
         <button class="btn red" data-a="sbc-discard">Discard</button>`;
+    },
+
+    renderHot() {
+      const box = this.q('[data-r=hot]');
+      if (!box || !hot.list.length) return;
+      const mine = new Set(engine.cfg.players.map((p) => p.id));
+      const ago = Math.round((Date.now() - hot.scannedAt) / 60e3);
+      box.innerHTML = `<div class="list">${hot.list.map((c, i) => `<div class="li">
+          <span class="t"><b>${esc(c.name)} ${c.rating || ''}${c.bids ? ` <span class="tag ok">${c.bids} bid${c.bids === 1 ? '' : 's'}</span>` : ''}</b>
+          <small>${c.listed} listed · avg ${fmt(c.avg)}${c.plan ? ` · buy ≤ ${fmt(c.plan.maxBuy)} → sell ${fmt(c.plan.sell)} <span class="up">+${fmt(c.plan.profit)}</span>` : ' · <span class="down">no profit at your settings</span>'}</small></span>
+          ${c.plan ? (mine.has(c.id) ? '<span class="tag ok">added</span>' : `<button class="mini" data-a="hot-add" data-i="${i}">Add</button>`) : ''}</div>`).join('')}</div>
+        ${hot.list.some((c) => c.plan) ? `<button class="btn go-btn" data-a="hot-top">Trade the top ${Math.min(engine.cfg.hotPick || 3, hot.list.filter((c) => c.plan).length)}</button>` : ''}
+        <p class="note">Scanned ${ago < 1 ? 'just now' : `${ago} min ago`}.</p>`;
     },
 
     renderTrade() {
@@ -3123,6 +3285,9 @@
       go.setAttribute('aria-label', on ? 'Stop' : 'Start');
       this.tick();
       this.qa('[data-k] , [data-k] button, [data-r=pq], [data-a=price]').forEach((el) => { el.disabled = on; });
+      this.qa('[data-a=trade-start], [data-a=hot-scan], [data-a=hot-top], [data-a=hot-add]').forEach((el) => { el.disabled = on; });
+      const ts = this.q('[data-a=trade-start]');
+      if (ts) ts.textContent = on ? (engine.cfg.mode === 'trade' ? 'Trading… (■ to stop)' : 'Sniping… (■ to stop)') : 'Start trading';
       this.renderStatus();
     },
 

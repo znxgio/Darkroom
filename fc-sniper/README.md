@@ -30,6 +30,7 @@ the Companion app. Updates install automatically.
 | **Auto max buy** | Snipes a set % under the average (default 10%), never more than your coins minus *Keep coins*. Tap a price to set your own. |
 | **Buy, Trade or Alert** | *Buy* snipes instantly. *Trade* runs the resell bot (below). *Alert* notifies you and never spends coins. |
 | **Resell bot (Trade)** | For each player: lists a set % under the market average so cards sell, and only buys low enough to keep your minimum profit after EA's 5% tax (the larger of a coin amount and a % of the price). Every few minutes it records sales and real profit, clears sold items, relists expired ones, and pauses buying when your transfer list is full. |
+| **Hot cards** | Scans EA's live market (top 5 leagues, gold rares within your budget, several price levels) and ranks cards by demand (listings with live bids), supply and price gap. Price-checks the best and keeps only those you can flip for profit. Add them one by one, trade the top N, or let it pick hot cards every time you start trading. |
 | **Auction bidding** | Optional: also bids on auctions in their last seconds when the next bid is under your max, collects what you win (listed again in Trade mode, sent to your club otherwise) and clears what you lose. |
 | **Fresh prices** | Re-checks each player's market price during long sessions (every 15 min by default). |
 | **Auto-selling** | Keep the card, list for a minimum profit, list at the market average, or list at your price. Profit is after EA's 5% tax. |
@@ -59,6 +60,11 @@ Prices refresh on start if they're older than 15 minutes, or when you tap **Chec
 A name matches every version of the card; set **Min rating** (Filters) to aim at one version.
 
 ### Trading (resell bot)
+**Easiest:** Trade tab → **Find hot cards** → **Trade the top 3**, or turn on *Pick hot cards
+when I start trading* and just tap **Start trading**. "Hot" is measured from EA's live market
+(what's listed and being bid on right now); trend sites like Futbin block bots.
+
+**Your own picks:**
 1. Add the players you want to flip on the **Snipe** tab and tap **Check prices**.
 2. **Trade** tab: each player shows its plan, e.g. `avg 52,000 · buy ≤ 45,750 · sell 50,000 · +1,560`.
    Adjust *List % under market avg*, *Min profit* and *Min profit %*.
