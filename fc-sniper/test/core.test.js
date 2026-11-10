@@ -193,3 +193,57 @@ test('lockouts: captcha 3h, market limit 24h, repeated errors 30min', () => {
   assert.equal(c.formatDuration(45 * 60e3), '45 min');
   assert.equal(c.formatDuration(3 * 3600e3), '3 h');
 });
+
+// ---- price check ------------------------------------------------------------
+
+/** Fake market: returns listings with buyNowPrice <= maxBuy, at most `page` per search. */
+function fakeMarket(listings, { page = 20, failAt = 0, status = 458 } = {}) {
+  const calls = [];
+  const search = async (maxBuy) => {
+    calls.push(maxBuy);
+    if (failAt && calls.length === failAt) return { ok: false, status, listings: [] };
+    const hits = listings.filter((l) => !maxBuy || l.buyNowPrice <= maxBuy);
+    // the market returns results by expiry, not price — shuffle deterministically
+    const shuffled = hits.slice().sort((a, b) => (a.tradeId * 7919) % 101 - (b.tradeId * 7919) % 101);
+    return { ok: true, listings: shuffled.slice(0, page) };
+  };
+  return { search, calls };
+}
+
+test('findMarketPrice walks down to the cheapest listings', async () => {
+  const listings = [];
+  for (let i = 0; i < 60; i++) listings.push({ tradeId: i, defId: 231747, buyNowPrice: 50000 + i * 1000 });
+  listings.push({ tradeId: 900, defId: 999999, buyNowPrice: 20000 }); // another version of the player
+  const m = fakeMarket(listings);
+  const r = await c.findMarketPrice(m.search, { defId: 231747 });
+  assert.equal(r.ok, true);
+  assert.equal(r.lowest, 50000);
+  assert.equal(r.avg, 52000); // mean of 50k..54k
+  assert.ok(r.steps <= 7);
+  assert.equal(m.calls[0], 0); // first search has no price cap
+});
+
+test('findMarketPrice handles no listings and EA errors', async () => {
+  const empty = await c.findMarketPrice(fakeMarket([]).search, { defId: 1 });
+  assert.deepEqual([empty.ok, empty.count, empty.avg], [true, 0, 0]);
+  const listings = Array.from({ length: 40 }, (_, i) => ({ tradeId: i, defId: 1, buyNowPrice: 10000 + i * 500 }));
+  const failed = await c.findMarketPrice(fakeMarket(listings, { failAt: 2 }).search, { defId: 1 });
+  assert.deepEqual([failed.ok, failed.status], [false, 458]);
+});
+
+test('findMarketPrice stops at the maximum number of searches', async () => {
+  const listings = Array.from({ length: 300 }, (_, i) => ({ tradeId: i, defId: 1, buyNowPrice: 2000 + i * 100 }));
+  const m = fakeMarket(listings);
+  const r = await c.findMarketPrice(m.search, { defId: 1, maxSteps: 3 });
+  assert.ok(m.calls.length <= 4);
+  assert.ok(r.ok && r.lowest > 0);
+});
+
+test('planMaxBuy: discount under avg, capped by coins', () => {
+  assert.deepEqual(c.planMaxBuy(52000, 10, 1e6), { maxBuy: 46750, cappedByCoins: false });
+  assert.deepEqual(c.planMaxBuy(52000, 10, 30000), { maxBuy: 30000, cappedByCoins: true });
+  assert.deepEqual(c.planMaxBuy(52000, 10, 31234), { maxBuy: 31000, cappedByCoins: true });
+  assert.deepEqual(c.planMaxBuy(52000, 10, 100), { maxBuy: 0, cappedByCoins: false });
+  assert.deepEqual(c.planMaxBuy(0, 10, 1e6), { maxBuy: 0, cappedByCoins: false });
+  assert.equal(c.planMaxBuy(1000, 0, 1e6).maxBuy, 1000);
+});

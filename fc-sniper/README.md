@@ -36,7 +36,16 @@ switch apps, and the bot pauses with them. It picks up again when you come back.
      Web App's own search. Use **Min rating** or **Rarity** to target one card.
    - Names come from EA's own player list, the same file the Web App uses for its search
      box. If it says the list isn't found, open **Transfers → Search** once and try again.
-2. **Max buy now:** the most you'll pay. Anything listed at or below this gets bought instantly.
+2. **Price check / max buy:** when you add a player, the bot checks their price on the
+   transfer market, the same way the Web App's *Compare Price* does. It takes a few
+   searches about 4–8 s apart.
+   - **Avg** = the average of the 5 cheapest Buy Now listings of the player's base card.
+   - **Max buy** = avg minus **Snipe % under avg** (default 10%), but never more than
+     your coins minus **Keep coins**. It shows on the player's tag, e.g. `Mbappé 91 ≤ 46,750`.
+   - Prices refresh automatically on Start if they're over 15 minutes old, or when you
+     tap **Check prices**. Price-check searches count toward your daily limits.
+   - Turn off **Auto max buy from price** to use your own **Max buy (no price)** instead.
+     That number is also used for a player with nothing listed.
 3. *(Optional)* tick **Auto-list** to relist bought items automatically, either at a fixed
    **Sell price** or automatically at break-even after EA's 5% tax plus **Min profit**.
 4. Press **Start** (or **Alt+S** on desktop, **▶** on phone).

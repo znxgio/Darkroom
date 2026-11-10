@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FC Sniper
 // @namespace    https://github.com/znxgio/darkroom
-// @version      0.4.0
+// @version      0.5.0
 // @description  Transfer-market sniper / autobuyer for the EA SPORTS FC Ultimate Team Web App.
 // @match        https://www.ea.com/*ultimate-team/web-app*
 // @match        https://www.ea.com/ea-sports-fc/ultimate-team/web-app*
@@ -233,6 +233,64 @@
     return out;
   }
 
+  // ---- Market price check ----------------------------------------------------
+
+  /**
+   * Finds the current market price of one card by searching the transfer
+   * market and lowering the max-buy filter until nothing cheaper is listed.
+   *
+   * search(maxBuy) -> Promise<{ ok, status, listings: [{ tradeId, buyNowPrice, defId }] }>
+   * Only listings whose defId === opts.defId count (the exact card, not its
+   * special versions). Returns { ok, lowest, avg, count, steps } where avg is
+   * the average of the `sample` cheapest Buy Now prices, rounded to a valid price.
+   */
+  async function findMarketPrice(search, opts) {
+    const { defId, maxSteps = 6, sample = 5 } = opts;
+    const seen = new Map();
+    let maxBuy = 0;
+    let steps = 0;
+    while (steps < maxSteps) {
+      const res = await search(maxBuy);
+      steps++;
+      if (!res.ok) return { ok: false, status: res.status, steps };
+      const mine = res.listings.filter((l) => l.buyNowPrice > 0 && (!defId || l.defId === defId));
+      mine.forEach((l) => seen.set(l.tradeId, l.buyNowPrice));
+      if (!mine.length) break;
+      const min = Math.min(...mine.map((l) => l.buyNowPrice));
+      if (min <= MIN_PRICE) break;
+      const next = prevPrice(min);
+      if (maxBuy && next >= maxBuy) break;
+      maxBuy = next;
+    }
+    let prices = [...seen.values()].sort((a, b) => a - b);
+    if (!prices.length) return { ok: true, count: 0, lowest: 0, avg: 0, steps };
+    // Stepping down skips listings just above the lowest one. If we haven't
+    // seen enough near the bottom, take one more look at that price range.
+    const band = roundPrice(prices[0] * 1.15, 'up');
+    if (prices.filter((p) => p <= band).length < sample && steps < maxSteps + 1) {
+      const res = await search(band);
+      steps++;
+      if (!res.ok) return { ok: false, status: res.status, steps };
+      res.listings.filter((l) => l.buyNowPrice > 0 && (!defId || l.defId === defId))
+        .forEach((l) => seen.set(l.tradeId, l.buyNowPrice));
+      prices = [...seen.values()].sort((a, b) => a - b);
+    }
+    const cheapest = prices.slice(0, sample);
+    const mean = cheapest.reduce((a, b) => a + b, 0) / cheapest.length;
+    return { ok: true, count: prices.length, lowest: prices[0], avg: roundPrice(mean, 'nearest'), steps };
+  }
+
+  /**
+   * Max buy for a player: `discountPct` under the market average, but never
+   * more than the coins you can spend. Returns { maxBuy, cappedByCoins }.
+   */
+  function planMaxBuy(avg, discountPct, spendable) {
+    if (!avg || spendable < MIN_PRICE) return { maxBuy: 0, cappedByCoins: false };
+    const target = roundPrice(avg * (1 - Math.max(0, Math.min(90, discountPct || 0)) / 100), 'down');
+    const cap = roundPrice(spendable, 'down');
+    return target > cap ? { maxBuy: cap, cappedByCoins: true } : { maxBuy: target, cappedByCoins: false };
+  }
+
   // ---- Safety limits ---------------------------------------------------------
   // These keep the bot's request rate and session length closer to a normal
   // player's, and back off hard when EA pushes back. They lower ban risk;
@@ -313,7 +371,9 @@
     league: '',
     club: '',
     // buying
-    maxBuy: 1000,
+    maxBuy: 1000, // used when a player has no price-checked max buy
+    autoPrice: true, // price-check players and set their max buy automatically
+    discount: 10, // % under the market average to snipe at
     minRating: 0,
     maxBuysPerSearch: 1,
     // selling
@@ -341,6 +401,7 @@
     priceStep, roundPrice, nextPrice, prevPrice, afterTax, profit, breakEvenSell,
     cacheBustBid, jitter, pickTargets, planSellPrice, classifyStatus,
     normalizeName, parsePlayerDb, searchPlayers, playerForIteration, migrateConfig,
+    findMarketPrice, planMaxBuy,
     SAFETY, clampConfig, dayKey, usageFor, lockoutFor, formatDuration, canStart,
   };
 
@@ -528,8 +589,71 @@
       ui.setRunning(false);
     },
 
+    busy: false,
+
+    /** Search function for findMarketPrice: paced, counted, base card only. */
+    priceSearch(player, cfg) {
+      let first = true;
+      return async (maxBuy) => {
+        if (!first) await sleep(jitter(cfg.delayMin, cfg.delayMax));
+        first = false;
+        const c = new w.UTSearchCriteriaDTO();
+        c.type = 'player';
+        c.maskedDefId = player.id;
+        if (maxBuy) c.maxBuy = maxBuy;
+        const res = await fut.search(c);
+        this.countUsage('searches');
+        return { ok: res.ok, status: res.status, listings: res.items.map(fut.toListing) };
+      };
+    },
+
+    /** Price-check players and set each one's max buy. Returns false if stopped by EA. */
+    async priceCheck(players, cfg) {
+      for (const player of players) {
+        const gate = canStart(this.safety, cfg, Date.now());
+        if (!gate.ok) { ui.log(`Price check skipped: ${gate.reason}`, 'err'); return false; }
+        ui.log(`Checking ${player.name}'s price…`, 'muted');
+        const r = await findMarketPrice(this.priceSearch(player, cfg), { defId: player.id });
+        if (!r.ok) {
+          const kind = classifyStatus(r.status);
+          if (kind === 'captcha' || kind === 'throttled') { this.lock(kind, `EA pushback during price check (${r.status})`); alarm(); return false; }
+          ui.log(`Price check failed for ${player.name} (${r.status})`, 'warn');
+          continue;
+        }
+        player.checkedAt = Date.now();
+        if (!r.count) {
+          player.avg = 0; player.lowest = 0; player.maxBuy = 0;
+          ui.log(`${player.name}: none listed right now — using your Max buy now (${cfg.maxBuy.toLocaleString()})`, 'warn');
+          continue;
+        }
+        const plan = planMaxBuy(r.avg, cfg.discount, fut.coins() - cfg.minCoins);
+        Object.assign(player, { avg: r.avg, lowest: r.lowest, maxBuy: plan.maxBuy });
+        ui.log(`${player.name}: avg ${r.avg.toLocaleString()} (lowest ${r.lowest.toLocaleString()}, ${r.count} listed) → max buy ${plan.maxBuy.toLocaleString()}`
+          + (plan.cappedByCoins ? ' (all your coins)' : ` (${cfg.discount}% under)`), 'ok');
+      }
+      return true;
+    },
+
+    /** "Check prices" button / auto check after adding a player. */
+    async runPriceCheck(players) {
+      if (this.running || this.busy) return;
+      if (!fut.ready()) { ui.log('Web App not ready — log in first.', 'err'); return; }
+      const { cfg } = clampConfig(ui.readForm());
+      this.busy = true; ui.setBusy(true);
+      this.safety = loadSafety();
+      try {
+        await this.priceCheck(players, cfg);
+        engine.cfg.players = engine.cfg.players.map((p) => players.find((x) => x.id === p.id) || p);
+        saveConfig(ui.readForm());
+      } catch (e) {
+        ui.log(`Price check error: ${e && e.message ? e.message : e}`, 'err');
+      } finally {
+        this.busy = false; ui.setBusy(false); ui.renderChips();
+      }
+    },
+
     async start() {
-      if (this.running) return;
+      if (this.running || this.busy) return;
       if (!fut.ready()) { ui.log('Web App not ready — log in and open the Transfers tab first.', 'err'); return; }
       const { cfg: safeCfg, changed } = clampConfig(ui.readForm());
       if (changed.length) {
@@ -545,8 +669,22 @@
       this.running = true;
       ui.setRunning(true);
       keepAwake(true);
-      const who = this.cfg.players.length ? this.cfg.players.map((p) => p.name).join(', ') : 'any player matching filters';
-      ui.log(`Started — ${who}, max buy ${this.cfg.maxBuy.toLocaleString()} coins`);
+      if (this.cfg.autoPrice && this.cfg.players.length) {
+        const stale = this.cfg.players.filter((p) => !p.checkedAt || Date.now() - p.checkedAt > 15 * 60e3);
+        if (stale.length) {
+          let ok = false;
+          try { ok = await this.priceCheck(stale, this.cfg); } catch (e) { ui.log(`Price check error: ${e && e.message ? e.message : e}`, 'err'); }
+          saveConfig(this.cfg); ui.renderChips();
+          if (!this.running) return;
+          if (!ok) { this.stop('price check stopped — see above'); return; }
+          await sleep(jitter(this.cfg.delayMin, this.cfg.delayMax));
+          if (!this.running) return;
+        }
+      }
+      const who = this.cfg.players.length
+        ? this.cfg.players.map((p) => `${p.name} ≤ ${(p.maxBuy || this.cfg.maxBuy).toLocaleString()}`).join(', ')
+        : `any player matching filters ≤ ${this.cfg.maxBuy.toLocaleString()}`;
+      ui.log(`Started — ${who}`);
       ui.log(`Today: ${today.searches}/${this.cfg.searchesPerDay} searches, ${today.buys}/${this.cfg.buysPerDay} buys. Session ends after ${this.cfg.sessionMinutes} min.`, 'muted');
       const sessionStart = Date.now();
       const sessionSearches = this.stats.searches;
@@ -564,7 +702,9 @@
           const available = fut.coins() - cfg.minCoins;
           if (available < MIN_PRICE) { this.stop('not enough coins'); break; }
 
-          const res = await fut.search(fut.buildCriteria(cfg, i++));
+          const player = playerForIteration(cfg.players, i);
+          const pcfg = player && player.maxBuy ? { ...cfg, maxBuy: player.maxBuy } : cfg;
+          const res = await fut.search(fut.buildCriteria(pcfg, i++));
           this.stats.searches++;
           this.countUsage('searches');
           if (!res.ok) {
@@ -578,7 +718,7 @@
           } else {
             errors = 0;
             const listings = res.items.map(fut.toListing);
-            const targets = pickTargets(listings, cfg, available);
+            const targets = pickTargets(listings, pcfg, available);
             for (const t of targets) {
               if (!this.running) break;
               await this.attempt(t, cfg);
@@ -690,7 +830,9 @@
       ['minRating', 'Min rating', 'number'],
     ]],
     ['Buy', [
-      ['maxBuy', 'Max buy now', 'number'],
+      ['autoPrice', 'Auto max buy from price', 'checkbox'],
+      ['discount', 'Snipe % under avg', 'number'],
+      ['maxBuy', 'Max buy (no price)', 'number'],
       ['maxBuysPerSearch', 'Buys / search', 'number'],
       ['maxBuys', 'Buys / session', 'number'],
       ['minCoins', 'Keep coins', 'number'],
@@ -740,6 +882,9 @@
   #fcs .chip b{font-weight:700;color:#3ddc84}#fcs .chip button{flex:0;padding:0 6px;background:none;color:inherit;font-size:14px;line-height:1}
   #fcs .sugg{position:absolute;left:0;right:0;top:100%;z-index:2;background:#1a2027;border:1px solid #2f3842;border-radius:6px;margin-top:2px;max-height:240px;overflow:auto}
   #fcs .sugg:empty{display:none}
+  #fcs .chip em{font-style:normal;color:#ffd166}
+  #fcs button.pc{width:100%;margin-top:6px;background:#22303c;color:#9fd3ff}
+  #fcs button:disabled{opacity:.5;cursor:default}
   #fcs .sugg button{display:flex;width:100%;justify-content:space-between;background:none;border-radius:0;padding:7px 8px;font-weight:400;text-align:left}
   #fcs .sugg button:hover,#fcs .sugg button:focus{background:#2a323b}#fcs .sugg small{color:#6c7783}
   #fcs .sugg .note{padding:7px 8px;color:#9fb3c8}
@@ -770,7 +915,8 @@
       const sections = FIELDS.map(([title, fields], idx) => `
         <details ${idx < 2 ? 'open' : ''}><summary>${title}</summary>
         ${idx === 0 ? `<div class="pp"><div class="chips"></div>
-          <input class="pq" type="search" autocomplete="off" placeholder="Add player — type a name or ID"><div class="sugg"></div></div>` : ''}
+          <input class="pq" type="search" autocomplete="off" placeholder="Add player — type a name or ID"><div class="sugg"></div>
+          <button class="pc" data-a="price">Check prices</button></div>` : ''}
         ${fields.map(([key, label, type, extra]) => {
           const v = cfg[key];
           if (type === 'select') return `<label>${label}<select data-k="${key}">${extra.map((o) => `<option ${String(v) === o ? 'selected' : ''}>${o}</option>`).join('')}</select></label>`;
@@ -794,6 +940,7 @@
         const a = e.target.closest('button')?.dataset.a;
         if (a === 'start') engine.running ? engine.stop('stopped by user') : engine.start();
         if (a === 'reset') engine.reset();
+        if (a === 'price') engine.runPriceCheck(engine.cfg.players.map((p) => ({ ...p })));
         if (a === 'min') root.classList.toggle('min');
       });
       root.addEventListener('change', () => { if (!engine.running) saveConfig(this.readForm()); });
@@ -817,14 +964,19 @@
       let timer;
 
       const renderChips = () => {
-        chips.innerHTML = engine.cfg.players.map((p, i) =>
-          `<span class="chip">${esc(p.name)}${p.rating ? ` <b>${p.rating}</b>` : ''}<button data-rm="${i}" aria-label="Remove">×</button></span>`).join('');
+        chips.innerHTML = engine.cfg.players.map((p, i) => {
+          const price = p.maxBuy ? ` <em title="avg ${(p.avg || 0).toLocaleString()}, lowest ${(p.lowest || 0).toLocaleString()}">≤ ${p.maxBuy.toLocaleString()}</em>` : '';
+          return `<span class="chip">${esc(p.name)}${p.rating ? ` <b>${p.rating}</b>` : ''}${price}<button data-rm="${i}" aria-label="Remove">×</button></span>`;
+        }).join('');
       };
+      this.renderChips = renderChips;
       const add = (p) => {
         if (!engine.cfg.players.some((x) => x.id === p.id)) {
-          engine.cfg.players = [...engine.cfg.players, { id: p.id, name: p.name, rating: p.rating }];
+          const entry = { id: p.id, name: p.name, rating: p.rating };
+          engine.cfg.players = [...engine.cfg.players, entry];
           saveConfig(this.readForm());
           this.log(`Added ${p.name}${p.rating ? ` (${p.rating})` : ''} — id ${p.id}`);
+          if (this.readForm().autoPrice) engine.runPriceCheck([{ ...entry }]);
         }
         input.value = ''; sugg.innerHTML = ''; renderChips();
       };
@@ -873,6 +1025,12 @@
         else cfg[k] = el.value.trim();
       });
       return cfg;
+    },
+    renderChips() {},
+    setBusy(on) {
+      this.root.querySelectorAll('[data-a=start], [data-a=price]').forEach((b) => { b.disabled = on; });
+      const pc = this.root.querySelector('[data-a=price]');
+      if (pc) pc.textContent = on ? 'Checking prices…' : 'Check prices';
     },
     writeForm(cfg) {
       this.root.querySelectorAll('[data-k]').forEach((el) => {
