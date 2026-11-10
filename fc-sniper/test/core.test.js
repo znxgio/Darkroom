@@ -82,3 +82,66 @@ test('jitter stays in range', () => {
   assert.equal(c.jitter(100, 200, () => 1), 200);
   assert.equal(c.jitter(200, 100, () => 0.5), 150);
 });
+
+// ---- player name lookup -----------------------------------------------------
+
+const DB_JSON = {
+  LegendsPlayers: [{ id: 190042, f: 'Zinedine', l: 'Zidane', r: 96 }],
+  Players: [
+    { id: 231747, f: 'Kylian', l: 'Mbappé Lottin', c: 'Mbappé', r: 91 },
+    { id: 209331, f: 'Mohamed', l: 'Salah', r: 89 },
+    { id: 239085, f: 'Erling', l: 'Haaland', r: 91 },
+    { id: 20801, f: 'Cristiano Ronaldo', l: 'dos Santos Aveiro', c: 'Cristiano Ronaldo', r: 86 },
+    { id: 999001, f: 'Ronaldo', l: 'Nazário', c: 'Ronaldo', r: 94 },
+    { id: 999002, f: 'Martin', l: 'Ødegaard', r: 89 },
+    { id: 231747, f: 'Dup', l: 'Entry', r: 1 },
+  ],
+};
+
+test('normalizeName strips accents and punctuation', () => {
+  assert.equal(c.normalizeName('Mbappé'), 'mbappe');
+  assert.equal(c.normalizeName('Ødegaard'), 'odegaard');
+  assert.equal(c.normalizeName("N'Golo  Kanté"), 'n golo kante');
+});
+
+test('parsePlayerDb reads every list and dedupes ids', () => {
+  const db = c.parsePlayerDb(DB_JSON);
+  assert.equal(db.length, 7);
+  const kyl = db.find((p) => p.id === 231747);
+  assert.equal(kyl.name, 'Mbappé');
+  assert.equal(kyl.rating, 91);
+  assert.equal(db.find((p) => p.id === 209331).name, 'Mohamed Salah');
+  assert.deepEqual(c.parsePlayerDb(null), []);
+});
+
+test('searchPlayers matches names without accents, by any name word', () => {
+  const db = c.parsePlayerDb(DB_JSON);
+  assert.equal(c.searchPlayers(db, 'mbappe')[0].id, 231747);
+  assert.equal(c.searchPlayers(db, 'kylian')[0].id, 231747);
+  assert.equal(c.searchPlayers(db, 'odeg')[0].id, 999002);
+  assert.equal(c.searchPlayers(db, 'zidane')[0].id, 190042);
+  assert.equal(c.searchPlayers(db, 'mo sal')[0].id, 209331);
+  assert.deepEqual(c.searchPlayers(db, 'zzz'), []);
+  assert.deepEqual(c.searchPlayers(db, '  '), []);
+});
+
+test('searchPlayers ranks exact common-name match first', () => {
+  const db = c.parsePlayerDb(DB_JSON);
+  const r = c.searchPlayers(db, 'ronaldo');
+  assert.equal(r[0].id, 999001); // "Ronaldo" exact beats higher-scoring partials
+  assert.equal(r[1].id, 20801);
+  assert.equal(c.searchPlayers(db, 'm', 2).length, 2);
+});
+
+test('playerForIteration rotates through players', () => {
+  const ps = [{ id: 1 }, { id: 2 }, { id: 3 }];
+  assert.deepEqual([0, 1, 2, 3, 4].map((i) => c.playerForIteration(ps, i).id), [1, 2, 3, 1, 2]);
+  assert.equal(c.playerForIteration([], 0), null);
+});
+
+test('migrateConfig converts old comma-separated IDs', () => {
+  const m = c.migrateConfig({ defId: '123, 456', maxBuy: 5 });
+  assert.deepEqual(m.players.map((p) => p.id), [123, 456]);
+  assert.equal(m.defId, undefined);
+  assert.deepEqual(c.migrateConfig({}).players, []);
+});

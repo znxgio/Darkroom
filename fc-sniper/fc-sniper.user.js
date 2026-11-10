@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FC Sniper
 // @namespace    https://github.com/znxgio/darkroom
-// @version      0.2.0
+// @version      0.3.0
 // @description  Transfer-market sniper / autobuyer for the EA SPORTS FC Ultimate Team Web App.
 // @match        https://www.ea.com/*ultimate-team/web-app*
 // @match        https://www.ea.com/ea-sports-fc/ultimate-team/web-app*
@@ -151,10 +151,90 @@
     }
   }
 
+  // ---- Player name lookup ---------------------------------------------------
+
+  /** Lowercase, strip accents and punctuation: "Mbappé" -> "mbappe". */
+  function normalizeName(str) {
+    return String(str || '')
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      .replace(/ø/gi, 'o').replace(/æ/gi, 'ae').replace(/ß/g, 'ss').replace(/ı/g, 'i')
+      .toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
+  }
+
+  /**
+   * Parses EA's players database (the players.json the Web App downloads).
+   * Entries look like { id, f: first, l: last, c: common name, r: rating }.
+   */
+  function parsePlayerDb(json) {
+    const lists = [];
+    if (Array.isArray(json)) lists.push(json);
+    else if (json && typeof json === 'object') {
+      Object.values(json).forEach((v) => { if (Array.isArray(v)) lists.push(v); });
+    }
+    const byId = new Map();
+    for (const list of lists) {
+      for (const e of list) {
+        const id = Number(e && (e.id ?? e.assetId ?? e.definitionId));
+        if (!id || byId.has(id)) continue;
+        const first = e.f ?? e.firstName ?? '';
+        const last = e.l ?? e.lastName ?? '';
+        const common = e.c ?? e.commonName ?? '';
+        const full = `${first} ${last}`.trim();
+        const name = String(common || full || `#${id}`).trim();
+        byId.set(id, {
+          id, name, full, rating: Number(e.r ?? e.rating) || 0,
+          key: normalizeName(`${name} ${full}`),
+          nameKey: normalizeName(name),
+        });
+      }
+    }
+    return [...byId.values()];
+  }
+
+  /**
+   * Finds players matching `query`. Every query word must start a word of the
+   * player's common or full name. Best matches first, then by rating.
+   */
+  function searchPlayers(db, query, limit = 8) {
+    const q = normalizeName(query);
+    if (!q) return [];
+    const tokens = q.split(' ');
+    const scored = [];
+    for (const p of db) {
+      const words = p.key.split(' ');
+      if (!tokens.every((t) => words.some((wd) => wd.startsWith(t)))) continue;
+      let score = 0;
+      if (p.nameKey === q) score = 3;
+      else if (p.nameKey.startsWith(q)) score = 2;
+      else if (p.key.includes(q)) score = 1;
+      scored.push([score, p]);
+    }
+    scored.sort((a, b) => b[0] - a[0] || b[1].rating - a[1].rating || a[1].name.localeCompare(b[1].name));
+    return scored.slice(0, limit).map(([, p]) => p);
+  }
+
+  /** Players are searched in rotation, one per search request. */
+  function playerForIteration(players, iteration) {
+    if (!players || !players.length) return null;
+    return players[iteration % players.length];
+  }
+
+  /** Upgrade old configs that stored comma-separated IDs in `defId`. */
+  function migrateConfig(cfg) {
+    const out = { ...cfg };
+    if (!Array.isArray(out.players)) out.players = [];
+    if (out.defId && !out.players.length) {
+      out.players = String(out.defId).split(',').map((s) => parseInt(s, 10)).filter(Boolean)
+        .map((id) => ({ id, name: `#${id}`, rating: 0 }));
+    }
+    delete out.defId;
+    return out;
+  }
+
   const DEFAULT_CONFIG = {
     // search filters
     type: 'player',
-    defId: '', // player definition id(s), comma separated (from futbin / futwiz URL)
+    players: [], // [{ id, name, rating }] — searched in rotation
     level: 'any', // any | bronze | silver | gold
     rarity: '', // rarity id, e.g. 1 = rare
     position: '',
@@ -186,6 +266,7 @@
     EA_TAX, MIN_PRICE, MAX_PRICE, DEFAULT_CONFIG,
     priceStep, roundPrice, nextPrice, prevPrice, afterTax, profit, breakEvenSell,
     cacheBustBid, jitter, pickTargets, planSellPrice, classifyStatus,
+    normalizeName, parsePlayerDb, searchPlayers, playerForIteration, migrateConfig,
   };
 
   if (typeof module === 'object' && module.exports) {
@@ -220,9 +301,11 @@
     buildCriteria(cfg, iteration) {
       const c = new w.UTSearchCriteriaDTO();
       c.type = cfg.type || 'player';
-      const ids = String(cfg.defId || '').split(',').map((s) => parseInt(s, 10)).filter(Boolean);
-      if (ids.length === 1) c.maskedDefId = ids[0];
-      if (ids.length) c.defId = ids;
+      // maskedDefId matches every version of the player (base, TOTW, specials…),
+      // same as picking a name in the Web App's own search. Use Min rating /
+      // Rarity to narrow it to one card.
+      const player = playerForIteration(cfg.players, iteration);
+      if (player) c.maskedDefId = player.id;
       if (LEVELS[cfg.level]) c.level = LEVELS[cfg.level];
       if (cfg.rarity) c.rarities = [parseInt(cfg.rarity, 10)];
       if (cfg.position) c._position = cfg.position;
@@ -267,12 +350,46 @@
   };
 
   // ---------------------------------------------------------------------------
+  // Player database — the same players.json the Web App uses for its name search
+  // ---------------------------------------------------------------------------
+
+  const playerDb = {
+    list: null,
+    loading: null,
+    findUrl() {
+      const urls = (w.performance?.getEntriesByType?.('resource') || []).map((e) => e.name);
+      const direct = urls.find((u) => /\/players(_meta)?\.json(\?|$)/.test(u));
+      if (direct) return direct;
+      for (const u of urls) {
+        const m = u.match(/^(.*\/web-app\/content\/[^/]+\/\d{4}\/)/);
+        if (m) return `${m[1]}fut/items/web/players.json`;
+      }
+      return null;
+    },
+    load() {
+      if (this.list) return Promise.resolve(this.list);
+      if (this.loading) return this.loading;
+      this.loading = (async () => {
+        const url = this.findUrl();
+        if (!url) throw new Error('player list not found yet. Open Transfers → Search in the Web App once, then try again');
+        const res = await fetch(url, { credentials: 'omit' });
+        if (!res.ok) throw new Error(`player list download failed (${res.status})`);
+        const list = parsePlayerDb(await res.json());
+        if (!list.length) throw new Error('player list was empty');
+        this.list = list;
+        return list;
+      })().finally(() => { this.loading = null; });
+      return this.loading;
+    },
+  };
+
+  // ---------------------------------------------------------------------------
   // Config persistence
   // ---------------------------------------------------------------------------
 
   const STORE_KEY = 'fc-sniper:config';
   function loadConfig() {
-    try { return { ...DEFAULT_CONFIG, ...JSON.parse(localStorage.getItem(STORE_KEY) || '{}') }; } catch { return { ...DEFAULT_CONFIG }; }
+    try { return migrateConfig({ ...DEFAULT_CONFIG, ...JSON.parse(localStorage.getItem(STORE_KEY) || '{}') }); } catch { return { ...DEFAULT_CONFIG, players: [] }; }
   }
   function saveConfig(cfg) {
     try { localStorage.setItem(STORE_KEY, JSON.stringify(cfg)); } catch { /* ignore */ }
@@ -310,7 +427,8 @@
       this.running = true;
       ui.setRunning(true);
       keepAwake(true);
-      ui.log(`Started — max buy ${this.cfg.maxBuy.toLocaleString()} coins`);
+      const who = this.cfg.players.length ? this.cfg.players.map((p) => p.name).join(', ') : 'any player matching filters';
+      ui.log(`Started — ${who}, max buy ${this.cfg.maxBuy.toLocaleString()} coins`);
       let i = 0;
       try {
         while (this.running) {
@@ -431,7 +549,6 @@
 
   const FIELDS = [
     ['Search', [
-      ['defId', 'Player ID(s)', 'text', 'Definition ID, comma separated'],
       ['level', 'Quality', 'select', ['any', 'bronze', 'silver', 'gold']],
       ['rarity', 'Rarity ID', 'text', '1 = rare, 3 = TOTW…'],
       ['position', 'Position', 'text', 'e.g. ST'],
@@ -482,6 +599,15 @@
   #fcs button.go{background:#3ddc84;color:#06210f}#fcs button.stop{background:#ff6b6b;color:#2a0606}
   #fcs header button{flex:0;padding:2px 8px;background:none}
   #fcs header{touch-action:none}
+  #fcs .pp{position:relative;margin:4px 0 8px}
+  #fcs .chips{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:4px}
+  #fcs .chip{display:inline-flex;align-items:center;gap:4px;background:#1f3a2b;color:#bff5d4;border-radius:999px;padding:3px 4px 3px 9px}
+  #fcs .chip b{font-weight:700;color:#3ddc84}#fcs .chip button{flex:0;padding:0 6px;background:none;color:inherit;font-size:14px;line-height:1}
+  #fcs .sugg{position:absolute;left:0;right:0;top:100%;z-index:2;background:#1a2027;border:1px solid #2f3842;border-radius:6px;margin-top:2px;max-height:240px;overflow:auto}
+  #fcs .sugg:empty{display:none}
+  #fcs .sugg button{display:flex;width:100%;justify-content:space-between;background:none;border-radius:0;padding:7px 8px;font-weight:400;text-align:left}
+  #fcs .sugg button:hover,#fcs .sugg button:focus{background:#2a323b}#fcs .sugg small{color:#6c7783}
+  #fcs .sugg .note{padding:7px 8px;color:#9fb3c8}
   #fcs header button.qt{background:#3ddc84;color:#06210f;padding:3px 10px}#fcs header button.qt.on{background:#ff6b6b;color:#2a0606}
 
     #fcs.mob{top:auto!important;left:0!important;right:0!important;bottom:0;width:auto;max-height:70vh;border-radius:14px 14px 0 0;
@@ -495,6 +621,8 @@
     #fcs.mob input[type=checkbox]{width:22px;height:22px}
     #fcs.mob .stats span{font-size:16px}
     #fcs.mob .log{height:120px;font-size:12px}
+    #fcs.mob .chip{padding:5px 4px 5px 11px;font-size:14px}#fcs.mob .chip button{padding:2px 8px;font-size:18px}
+    #fcs.mob .sugg button{padding:12px 10px;font-size:15px}
     #fcs.mob .foot{padding:10px 12px}#fcs.mob button{padding:13px;font-size:15px}`;
 
   const ui = {
@@ -506,6 +634,8 @@
       const cfg = engine.cfg;
       const sections = FIELDS.map(([title, fields], idx) => `
         <details ${idx < 2 ? 'open' : ''}><summary>${title}</summary>
+        ${idx === 0 ? `<div class="pp"><div class="chips"></div>
+          <input class="pq" type="search" autocomplete="off" placeholder="Add player — type a name or ID"><div class="sugg"></div></div>` : ''}
         ${fields.map(([key, label, type, extra]) => {
           const v = cfg[key];
           if (type === 'select') return `<label>${label}<select data-k="${key}">${extra.map((o) => `<option ${String(v) === o ? 'selected' : ''}>${o}</option>`).join('')}</select></label>`;
@@ -533,6 +663,7 @@
       });
       root.addEventListener('change', () => { if (!engine.running) saveConfig(this.readForm()); });
       this.makeDraggable(root.querySelector('header'));
+      this.mountPlayerPicker();
       setInterval(() => { const c = fut.coins(); root.querySelector('.coins').textContent = c ? `${c.toLocaleString()} 🪙` : ''; }, 2000);
       document.addEventListener('keydown', (e) => {
         if (e.altKey && e.key.toLowerCase() === 's') { e.preventDefault(); engine.running ? engine.stop('stopped by user') : engine.start(); }
@@ -540,8 +671,64 @@
       if (isMobile()) root.classList.add('mob', 'min');
       this.log(isMobile() ? 'Ready. Tap ▶ to start, – to expand.' : 'Ready. Alt+S to start/stop.');
     },
+    mountPlayerPicker() {
+      const input = this.root.querySelector('.pq');
+      const sugg = this.root.querySelector('.sugg');
+      const chips = this.root.querySelector('.chips');
+      const esc = (t) => String(t).replace(/[&<>"']/g, (ch) => `&#${ch.charCodeAt(0)};`);
+      let results = [];
+      let timer;
+
+      const renderChips = () => {
+        chips.innerHTML = engine.cfg.players.map((p, i) =>
+          `<span class="chip">${esc(p.name)}${p.rating ? ` <b>${p.rating}</b>` : ''}<button data-rm="${i}" aria-label="Remove">×</button></span>`).join('');
+      };
+      const add = (p) => {
+        if (!engine.cfg.players.some((x) => x.id === p.id)) {
+          engine.cfg.players = [...engine.cfg.players, { id: p.id, name: p.name, rating: p.rating }];
+          saveConfig(this.readForm());
+          this.log(`Added ${p.name}${p.rating ? ` (${p.rating})` : ''} — id ${p.id}`);
+        }
+        input.value = ''; sugg.innerHTML = ''; renderChips();
+      };
+      const show = async () => {
+        const q = input.value.trim();
+        if (!q) { sugg.innerHTML = ''; return; }
+        if (/^\d{3,}$/.test(q)) {
+          const known = playerDb.list && playerDb.list.find((p) => p.id === Number(q));
+          results = [known || { id: Number(q), name: `#${q}`, rating: 0 }];
+        } else {
+          if (!playerDb.list) sugg.innerHTML = '<div class="note">Loading player list…</div>';
+          try { results = searchPlayers(await playerDb.load(), q); } catch (e) {
+            sugg.innerHTML = `<div class="note">${esc(e.message)}. You can still type a player ID.</div>`; return;
+          }
+          if (input.value.trim() !== q) return; // user kept typing
+        }
+        sugg.innerHTML = results.length
+          ? results.map((p, i) => `<button data-pick="${i}"><span>${esc(p.name)}${p.full && p.full !== p.name ? ` <small>${esc(p.full)}</small>` : ''}</span><b>${p.rating || ''}</b></button>`).join('')
+          : '<div class="note">No players found</div>';
+      };
+
+      input.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(show, 180); });
+      input.addEventListener('focus', () => { playerDb.load().catch(() => {}); });
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && results[0] && sugg.innerHTML) { e.preventDefault(); add(results[0]); }
+        if (e.key === 'Escape') sugg.innerHTML = '';
+      });
+      this.root.addEventListener('click', (e) => {
+        const pick = e.target.closest('[data-pick]');
+        if (pick) add(results[Number(pick.dataset.pick)]);
+        const rm = e.target.closest('[data-rm]');
+        if (rm && !engine.running) {
+          engine.cfg.players = engine.cfg.players.filter((_, i) => i !== Number(rm.dataset.rm));
+          saveConfig(this.readForm()); renderChips();
+        }
+        if (!e.target.closest('.pp')) sugg.innerHTML = '';
+      });
+      renderChips();
+    },
     readForm() {
-      const cfg = { ...engine.cfg };
+      const cfg = { ...engine.cfg, players: [...(engine.cfg.players || [])] };
       this.root.querySelectorAll('[data-k]').forEach((el) => {
         const k = el.dataset.k;
         if (el.type === 'checkbox') cfg[k] = el.checked;
@@ -557,7 +744,7 @@
       quick.classList.toggle('on', on);
       main.textContent = on ? 'Stop' : 'Start';
       main.className = on ? 'stop' : 'go';
-      this.root.querySelectorAll('[data-k]').forEach((el) => { el.disabled = on; });
+      this.root.querySelectorAll('[data-k], .pq').forEach((el) => { el.disabled = on; });
     },
     renderStats() {
       Object.entries(engine.stats).forEach(([k, v]) => {

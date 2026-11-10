@@ -28,8 +28,14 @@ switch apps, and the bot pauses with them. It picks up again when you come back.
 
 ## Use
 
-1. **Player ID(s):** the player's definition ID (it's in the futbin/futwiz player URL or page).
-   Leave it blank to search by quality, rarity, league, nation or club instead.
+1. **Add players:** type a name in the search box (accents optional, so `mbappe` finds
+   Mbappé) and tap a result, or press Enter for the top one. You can also type a player ID.
+   Add several players and the bot **rotates** between them, one per search. Leave the list
+   empty to search by quality, rarity, league, nation or club instead.
+   - A name matches **every version** of that player (base, TOTW, specials), just like the
+     Web App's own search. Use **Min rating** or **Rarity** to target one card.
+   - Names come from EA's own player list, the same file the Web App uses for its search
+     box. If it says the list isn't found, open **Transfers → Search** once and try again.
 2. **Max buy now:** the most you'll pay. Anything listed at or below this gets bought instantly.
 3. *(Optional)* tick **Auto-list** to relist bought items automatically, either at a fixed
    **Sell price** or automatically at break-even after EA's 5% tax plus **Min profit**.
