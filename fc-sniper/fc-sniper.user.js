@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FC Sniper
 // @namespace    https://github.com/znxgio/darkroom
-// @version      1.2.1
+// @version      1.2.2
 // @description  Sniper, pack opener, SBC solver and team upgrade advisor for the EA SPORTS FC Ultimate Team Web App, with built-in safety limits.
 // @match        https://www.ea.com/*ultimate-team/web-app*
 // @match        https://www.ea.com/ea-sports-fc/ultimate-team/web-app*
@@ -610,14 +610,17 @@
    * Requirements the solver can't satisfy yet are listed in `unsupported`.
    */
   function parseRequirements(reqs, playersRequired = 11) {
-    const c = { players: playersRequired, teamRating: 0, minOvr: 0, maxOvr: 99, minQuality: 0, maxQuality: 9, rareMin: 0, chemMin: 0 };
+    const c = { players: playersRequired, teamRating: 0, teamRatingMax: 99, minOvr: 0, maxOvr: 99, minQuality: 0, maxQuality: 9, rareMin: 0, chemMin: 0 };
     const unsupported = [];
     for (const r of reqs || []) {
       const v = Number((r.values || [])[0]);
-      const all = !(r.count > 0); // count -1 means "every player"
+      // count -1 means "every player"; so does a count that covers the whole squad ("11× Bronze")
+      const all = !(r.count > 0) || r.count >= playersRequired;
       switch (r.key) {
         case 'TEAM_RATING':
-          if (r.scope === 'LOWER') unsupported.push('max team rating'); else c.teamRating = Math.max(c.teamRating, v);
+          if (r.scope === 'LOWER') c.teamRatingMax = Math.min(c.teamRatingMax, v);
+          else if (r.scope === 'EXACT') { c.teamRating = Math.max(c.teamRating, v); c.teamRatingMax = Math.min(c.teamRatingMax, v); }
+          else c.teamRating = Math.max(c.teamRating, v);
           break;
         case 'PLAYER_COUNT':
         case 'SCOPE':
@@ -697,10 +700,11 @@
       return chosen;
     };
 
-    const finish = (players) => players && {
-      players,
-      rating: squadRating(players.map((p) => p.rating), Math.max(11, n)),
-      cost: players.reduce((a, p) => a + p.cost, 0),
+    const finish = (players) => {
+      if (!players) return null;
+      const rating = squadRating(players.map((p) => p.rating), Math.max(11, n));
+      if (rating > (k.teamRatingMax ?? 99)) return null;
+      return { players, rating, cost: players.reduce((a, p) => a + p.cost, 0) };
     };
 
     if (!k.teamRating) {
@@ -713,7 +717,17 @@
         if (chosen.length >= n) break;
         if (!ids.has(p.id)) chosen.push(p);
       }
-      return chosen.length === n ? finish(chosen) : null;
+      if (chosen.length !== n) return null;
+      const ok = finish(chosen);
+      if (ok || (k.teamRatingMax ?? 99) >= 99) return ok;
+      // Over the rating ceiling: try the lowest-rated players instead.
+      const low = rares.slice().sort((x, y) => x.rating - y.rating || x.cost - y.cost).slice(0, k.rareMin);
+      const lowIds = new Set(low.map((p) => p.id));
+      for (const p of eligible.slice().sort((x, y) => x.rating - y.rating || x.cost - y.cost)) {
+        if (low.length >= n) break;
+        if (!lowIds.has(p.id)) low.push(p);
+      }
+      return low.length === n ? finish(low) : null;
     }
     if (n !== 11) return null; // team rating with fewer than 11 players isn't modelled
 
@@ -729,7 +743,8 @@
       if (++visits > 400000) return;
       if (costSoFar >= bestCost) return;
       if (left === 0) {
-        if (squadRating(chosenRatings) < k.teamRating) return;
+        const rt = squadRating(chosenRatings);
+        if (rt < k.teamRating || rt > (k.teamRatingMax ?? 99)) return;
         const players = pick(counts);
         if (!players) return;
         const cost = players.reduce((a, p) => a + p.cost, 0);

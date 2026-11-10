@@ -468,3 +468,29 @@ test('bestLineup leaves a slot empty when nobody fits', () => {
   const r = c.bestLineup([{ id: 1, rating: 80, positions: ['GK'] }], c.FORMATIONS.f442.slots);
   assert.equal(r.filled, 1);
 });
+
+test('quality count covering the squad counts as every player; max team rating', () => {
+  // as seen in FC 27 "Room To Grow": 11× Quality ≥ Bronze, Team rating ≤ 64
+  const r = c.parseRequirements([
+    { key: 'PLAYER_QUALITY', scope: 'GREATER', values: [1], count: 11 },
+    { key: 'TEAM_RATING', scope: 'LOWER', values: [64], count: -1 },
+  ], 11);
+  assert.deepEqual(r.unsupported, []);
+  assert.equal(r.constraints.minQuality, 1);
+  assert.equal(r.constraints.teamRatingMax, 64);
+  const pool = clubPool([[60, 6], [63, 6], [70, 6], [80, 6]]);
+  const sol = c.solveSbc(pool, r.constraints);
+  assert.ok(sol && sol.rating <= 64, `rating ${sol && sol.rating}`);
+  // partial quality counts are still manual
+  assert.deepEqual(c.parseRequirements([{ key: 'PLAYER_QUALITY', scope: 'GREATER', values: [3], count: 3 }], 11).unsupported, ['quality count']);
+});
+
+test('min and max team rating together', () => {
+  const k = c.parseRequirements([
+    { key: 'TEAM_RATING', scope: 'GREATER', values: [80], count: -1 },
+    { key: 'TEAM_RATING', scope: 'LOWER', values: [81], count: -1 },
+  ], 11).constraints;
+  const sol = c.solveSbc(clubPool([[75, 10], [78, 10], [80, 10], [83, 10], [86, 5]]), k);
+  assert.ok(sol && sol.rating >= 80 && sol.rating <= 81, `rating ${sol && sol.rating}`);
+  assert.equal(c.solveSbc(clubPool([[86, 15]]), k), null);
+});
