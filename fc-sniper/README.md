@@ -52,7 +52,7 @@ The panel has 8 tabs: **Snipe · Trade · Squad · Packs / SBC · History · Log
 
 1. **Snipe tab → Priority list:** type a player's name and tap him (↑↓ to reorder), or tap
    **🧩 Fill from team needs**. Set a **Spend limit** if you want a total cap.
-   Type a player's name and tap him. His price is checked and his max buy
+   Each added player gets a price check, and his max buy
    shows on his row, e.g. `Mbappé 91 ≤ 46,750 · avg 52,000`.
 2. Choose **Buy** or **Alert only**, and set **Buys per session** (1 if you want one card).
 3. *(Optional)* **Sell tab:** choose what happens after a buy.
