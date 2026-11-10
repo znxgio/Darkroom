@@ -133,8 +133,18 @@ const idle = (p, ms = 150000) => p.waitForFunction(() => !document.querySelector
   const brLog = (await log(p)).filter((l) => /Market:/.test(l)).pop();
   check('rating limit ≤ 64 searches bronzes', /cheap bronze listings/.test(brLog || ''), brLog);
   const subBefore = await p.evaluate(() => T.submitted.length);
+  const boughtBefore = await p.evaluate(() => (T.sbcBought || []).length);
   await p.click('#fcs [data-a=sbc-submit]');
   await idle(p, 200000);
+  const firstTry = await log(p);
+  check('sold-out card replaced', firstTry.some((l) => /was gone — bought .* instead/.test(l)), firstTry.filter((l) => /gone|instead/.test(l)).join(' | '));
+  check('stops safely when a card and its replacements are gone', firstTry.some((l) => /kept in the plan, a retry only buys the rest/.test(l)));
+  const planNote = await p.textContent('#fcs [data-r=plan]');
+  check('plan shows what is already bought', /already bought for this SBC/.test(planNote) && /Buy \d+ more/.test(planNote), planNote.replace(/\s+/g, ' ').slice(0, 220));
+  await p.click('#fcs [data-a=sbc-submit]'); // retry
+  await idle(p, 200000);
+  const brBuys = (await p.evaluate(() => T.sbcBought || [])).slice(boughtBefore);
+  check('retry buys only the rest — no card bought twice', brBuys.length === 11 && new Set(brBuys.map((x) => x.d)).size === 11, `${brBuys.length} buys, ${new Set(brBuys.map((x) => x.d)).size} different`);
   const brSub = await p.evaluate(() => T.submitted[T.submitted.length - 1]);
   check('Break Away submitted with players all ≤ 64', (await p.evaluate(() => T.submitted.length)) === subBefore + 1 && brSub.length === 11 && brSub.every((x) => x.r <= 64), JSON.stringify(brSub.map((x) => x.r)));
 

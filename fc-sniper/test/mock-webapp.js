@@ -100,6 +100,7 @@ function installMock() {
           return fod;
         };
         if (!c._position && c.level === 'bronze') {
+          if (T.blockSub) { T.blockSub = false; return obs({ success: true, data: { items: [] } }); } // replacements briefly gone too
           const br = [];
           for (let k = 0; k < 20; k++) {
             const it = mk(4500 + k, 55 + (k % 10), { pos: ['GK', 'CB', 'CM', 'ST', 'RB'][k % 5], league: 60 + k, untradeable: false, name: `Bronze ${k}`, price: 200 + (k % 5) * 50 });
@@ -109,6 +110,9 @@ function installMock() {
           return obs({ success: true, data: { items: br.filter((i) => (!c.maxBuy || i._auction.buyNowPrice <= c.maxBuy) && (!c.minBuy || i._auction.buyNowPrice >= c.minBuy)) } });
         }
         if (c.maskedDefId >= 4500 && c.maskedDefId < 4520) {
+          T.fresh = (T.fresh || 0) + 1;
+          if (T.fresh === 2) return obs({ success: true, data: { items: [] } }); // this card sold out → replacement
+          if (T.fresh === 4) { T.blockSub = true; return obs({ success: true, data: { items: [] } }); } // card + replacements gone → run stops
           const it = mk(c.maskedDefId, 55 + ((c.maskedDefId - 4500) % 10), { untradeable: false, name: `Bronze ${c.maskedDefId - 4500}`, price: 250 });
           it.gen = T.gen;
           return obs({ success: true, data: { items: [it] } });
@@ -139,7 +143,7 @@ function installMock() {
       },
       bid(item, price) {
         if (item.gen !== undefined && item.gen !== T.gen) { T.stale = (T.stale || 0) + 1; return obs({ success: false, status: 403 }); }
-        T.sbcBought = (T.sbcBought || []).concat([{ r: item.rating, price }]); T.coins -= price; return obs({ success: true });
+        T.sbcBought = (T.sbcBought || []).concat([{ r: item.rating, price, d: item.definitionId }]); T.coins -= price; return obs({ success: true });
       },
       discard(items) { items.forEach((it) => { T.unassigned = T.unassigned.filter((u) => u !== it); T.piles.discarded.push(it.rating); }); return obs({ success: true }); },
     },

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FC Sniper
 // @namespace    https://github.com/znxgio/darkroom
-// @version      1.7.2
+// @version      1.7.3
 // @description  Sniper, pack opener, SBC solver and team upgrade advisor for the EA SPORTS FC Ultimate Team Web App, with built-in safety limits.
 // @match        https://www.ea.com/*ultimate-team/web-app*
 // @match        https://www.ea.com/ea-sports-fc/ultimate-team/web-app*
@@ -1269,7 +1269,7 @@
 
   const w = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '1.7.2';
+  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '1.7.3';
   const errText = (e) => (e && e.message ? e.message : String(e));
   const fmt = (n) => Number(n || 0).toLocaleString();
 
@@ -2445,7 +2445,7 @@
     allowed(p) {
       const cfg = engine.cfg;
       // Bought fill-ins: the max-rating rule protects your own players, not cards bought for this SBC.
-      if (p.market) return !(this.guard && this.guard.defIds.has(p.defId));
+      if (p.market || p.bought) return !(this.guard && this.guard.defIds.has(p.defId));
       if (this.guard && (this.guard.itemIds.has(p.itemId ?? p.id) || this.guard.defIds.has(p.defId ?? p.item?.definitionId))) return false;
       if (p.rating > cfg.sbcMaxRating) return false;
       if (p.special && !cfg.sbcUseSpecials) return false;
@@ -2456,6 +2456,14 @@
     /** Cheapest solution from a pool; chemistry/group SBCs use the position-aware search. */
     solveWith(pool, entry, slots) {
       const k = entry.parsed.constraints;
+      // A player can only be in a squad once: keep the cheapest copy of each
+      // (SBC-storage duplicate, then club, then market).
+      const best = new Map();
+      for (const p of pool) {
+        const key = baseId(p.defId ?? p.id);
+        if (!best.has(key) || best.get(key).cost > p.cost) best.set(key, p);
+      }
+      pool = [...best.values()];
       if (k.needsSearch) return solveSbcSearch(pool, slots, k);
       return solveSbc(pool, k);
     },
@@ -2499,7 +2507,7 @@
           if (p.rating < k.minOvr || p.rating > k.maxOvr) continue;
           if (!p.player || !l.buyNowPrice || out.has(l.tradeId) || ownedBase.has(baseId(p.id))) continue;
           if (p.special && !cfg.sbcUseSpecials) continue;
-          if ((perCard.get(p.id) || 0) >= 3) continue;
+          if ((perCard.get(p.id) || 0) >= 1) continue; // one copy per player — a squad can't use two
           perCard.set(p.id, (perCard.get(p.id) || 0) + 1);
           // Coins spent weigh far more than giving away your own fodder: the solver spends
           // as few coins as possible and uses your players wherever they fit.
@@ -2559,52 +2567,94 @@
     /**
      * Buy the planned fill-ins. Listings from the price check go stale once the
      * market cache is cleared (EA answers 403), so each card is searched again
-     * right before buying and the cheapest fresh listing is taken (up to 15%
-     * above plan). A listing that's gone is replaced by the next one.
+     * right before buying. If that card is gone, the cheapest fresh listing that
+     * fits the same spot is bought instead. Every buy is recorded in the plan,
+     * so a retry only buys what's still missing.
      */
     async buyFillIns(plan) {
       const cfg = engine.cfg;
       if (fut.coins() - cfg.minCoins < plan.buyTotal) throw new Error(`not enough coins for the fill-ins (${fmt(plan.buyTotal)})`);
-      const bought = [];
+      const k = plan.entry.parsed.constraints;
       const cap = Math.round((cfg.sbcBuyLimit || plan.buyTotal) * 1.15);
-      let spent = 0;
-      for (const p of plan.buys) {
-        engine.setStatus('pricing', `Buying ${p.name} (${bought.length + 1}/${plan.buys.length})…`);
+      const inSquad = new Set(plan.solution.players.map((x) => baseId(x.defId ?? x.id)));
+      const ownedBase = new Set([...(this.raw || []).map((x) => baseId(x.defId ?? x.id)), ...(this.guard ? [...this.guard.defIds].map(baseId) : [])]);
+      const boughtNow = [];
+      plan.spent = plan.spent || 0;
+
+      const tryBuy = async (options) => {
+        for (const l of options.slice(0, 3)) {
+          if (plan.spent + l.buyNowPrice > cap) return null;
+          const r = await fut.buy(l);
+          if (r.ok) return l;
+          const kind = classifyStatus(r.status);
+          if (kind === 'captcha' || kind === 'throttled') jobs.check(r, 'buying a fill-in');
+          if (kind === 'coins') throw new Error('not enough coins for the fill-ins');
+          await jobs.pause(900, 1600);
+        }
+        return null;
+      };
+
+      for (const p of plan.buys.slice()) {
+        if (p.bought) continue;
+        const slotPos = (plan.slots || [])[plan.solution.players.indexOf(p)];
+        engine.setStatus('pricing', `Buying ${p.name} (${plan.buys.indexOf(p) + 1}/${plan.buys.length})…`);
+        // 1) the same card, fresh
         const maxPrice = roundPrice(Math.max(p.price * 1.15, p.price + 100), 'up');
         const fresh = await fut.search(fut.criteria({}, { id: p.defId }, maxPrice));
         engine.countUsage('searches');
         jobs.check(fresh, 'market search');
-        const options = fresh.listings.filter((l) => l.defId === p.defId && l.buyNowPrice && l.buyNowPrice <= maxPrice)
-          .sort((x, y) => x.buyNowPrice - y.buyNowPrice);
-        let got = null;
-        for (const l of options.slice(0, 3)) {
-          if (spent + l.buyNowPrice > cap) break;
-          const r = await fut.buy(l);
-          if (r.ok) { got = l; break; }
-          const kind = classifyStatus(r.status);
-          if (kind === 'captcha' || kind === 'throttled') jobs.check(r, 'buying a fill-in');
-          if (kind === 'coins') throw new Error('not enough coins for the fill-ins');
-          ui.log(`${p.name} at ${fmt(l.buyNowPrice)} was gone (${r.status}) — trying the next one`, 'muted');
-          await jobs.pause(900, 1600);
+        let got = await tryBuy(fresh.listings.filter((l) => l.defId === p.defId && l.buyNowPrice && l.buyNowPrice <= maxPrice).sort((x, y) => x.buyNowPrice - y.buyNowPrice));
+        // 2) gone: the cheapest card that fits the same spot
+        if (!got) {
+          await jobs.pause(cfg.delayMin, cfg.delayMax);
+          const c = fut.newCriteria();
+          const level = marketLevel(k);
+          if (level) c.level = level;
+          if (k.needsSearch && slotPos && slotPos !== '?') { c._position = slotPos; c.position = slotPos; c.league = p.leagueId; }
+          c.maxBuy = roundPrice(Math.max(maxPrice * 1.5, p.price + 300), 'up');
+          const alt = await fut.search(c);
+          engine.countUsage('searches');
+          jobs.check(alt, 'market search');
+          const fits = alt.listings.filter((l) => {
+            const q = fut.toPlayer(l.item);
+            if (!q.player || !l.buyNowPrice || ownedBase.has(baseId(q.id)) || inSquad.has(baseId(q.id))) return false;
+            if (q.rating < Math.max(p.rating, k.minOvr) || q.rating > k.maxOvr) return false;
+            if (qualityOf(q.rating) < (k.minQuality || 0) || qualityOf(q.rating) > (k.maxQuality || 9)) return false;
+            if (p.rare && !q.rare) return false;
+            if (q.special && !cfg.sbcUseSpecials) return false;
+            if (k.needsSearch && !(q.positions.includes(slotPos) && q.leagueId === p.leagueId && q.nationId === p.nationId)) return false;
+            return true;
+          }).sort((x, y) => x.buyNowPrice - y.buyNowPrice);
+          got = await tryBuy(fits);
+          if (got) {
+            const q = fut.toPlayer(got.item);
+            ui.log(`${p.name} was gone — bought ${q.name} ${q.rating} instead`, 'muted');
+            Object.assign(p, { name: q.name, rating: q.rating, defId: q.id, rare: q.rare, positions: q.positions, leagueId: q.leagueId, nationId: q.nationId, teamId: q.teamId });
+            inSquad.add(baseId(q.id));
+          }
         }
-        if (!got) throw new Error(`couldn't get ${p.name} at ≤ ${fmt(maxPrice)} — bought ${bought.length} of ${plan.buys.length}, they're in your club`);
+        if (!got) {
+          throw new Error(`couldn't get ${p.name} or a replacement — bought ${plan.buys.filter((x) => x.bought).length} of ${plan.buys.length} (kept in the plan, a retry only buys the rest)`);
+        }
         engine.countUsage('buys');
-        spent += got.buyNowPrice;
-        p.item = got.item;
-        bought.push({ p, item: got.item, price: got.buyNowPrice });
+        plan.spent += got.buyNowPrice;
+        Object.assign(p, { item: got.item, price: got.buyNowPrice, bought: true, market: false });
+        boughtNow.push(got.item);
+        plan.buyTotal = plan.buys.filter((x) => !x.bought).reduce((a, x) => a + x.price, 0);
         engine.history = addHistory(engine.history, { at: Date.now(), id: p.defId, itemId: got.item && got.item.id, name: p.name, rating: p.rating, price: got.buyNowPrice, via: 'sbc' });
         store.set(KEYS.history, engine.history);
         ui.log(`Bought ${p.name} ${p.rating} for ${fmt(got.buyNowPrice)} (SBC fill-in)`, 'ok');
+        ui.renderSbc();
+        // move each one to the club straight away, so nothing is left in unassigned if we stop
+        await fut.move([got.item], w.ItemPile.CLUB);
         await jobs.pause(cfg.delayMin, cfg.delayMax);
       }
-      if (bought.length) {
-        const moved = await fut.move(bought.map((x) => x.item), w.ItemPile.CLUB);
-        if (!moved) ui.log('Couldn’t move the fill-ins to your club — they’re in unassigned', 'warn');
-        await jobs.pause(900, 1600);
-      }
-      plan.buys = [];
+      plan.buys = plan.buys.filter((x) => !x.bought);
       plan.buyTotal = 0;
       ui.renderHistory();
+      // Still meets every requirement after any replacements?
+      const chk = sbcCheck(plan.solution.players, plan.slots || [], k);
+      if (!chk.ok) throw new Error(`after replacing sold cards the squad misses: ${chk.issues.map(([n]) => n).join(', ')} — tap Solve again`);
     },
 
     async submit(fillOnly) {
@@ -3744,15 +3794,17 @@
       const p = sbc.plan;
       plan.hidden = !p;
       if (!p) return;
-      const tag = (x) => (x.market ? `<span class="tag no">buy ${fmt(x.price)}</span>` : x.storage ? '<span class="tag">storage</span>' : x.duplicate ? '<span class="tag">duplicate</span>' : x.untradeable ? '<span class="tag">untradeable</span>' : '<span class="tag no">tradeable</span>');
+      const tag = (x) => (x.bought ? `<span class="tag ok">bought ${fmt(x.price)}</span>` : x.market ? `<span class="tag no">buy ${fmt(x.price)}</span>` : x.storage ? '<span class="tag">storage</span>' : x.duplicate ? '<span class="tag">duplicate</span>' : x.untradeable ? '<span class="tag">untradeable</span>' : '<span class="tag no">tradeable</span>');
       const slots = p.slots || [];
-      const buys = (p.buys || []).length;
+      const buys = (p.buys || []).filter((x) => !x.bought).length;
+      const boughtN = p.solution.players.filter((x) => x.bought).length;
       const chemOn = p.entry.parsed.constraints.needsSearch;
       plan.innerHTML = `<h4>Solution — ${esc(p.set.name)}</h4>
         <p class="note" style="margin:0 0 8px">✓ none from your squad (${sbc.guard ? sbc.guard.itemIds.size : 0} protected) · ✓ all ≤ ${engine.cfg.sbcMaxRating}${engine.cfg.sbcUseSpecials ? '' : ' · ✓ no specials'}${engine.cfg.sbcUseTradeables ? '' : ' · ✓ untradeables only'}</p>
         <div class="kpi"><div><b>${p.solution.rating || '—'}</b>Rating</div><div><b>${chemOn ? `${p.solution.chem ?? '—'}` : p.solution.players.filter((x) => x.rare).length}</b>${chemOn ? 'Chemistry' : 'Rares'}</div><div><b>${buys ? fmt(p.buyTotal) : '0'}</b>${buys ? `To buy (${buys})` : 'Coins'}</div></div>
         <div class="list">${p.solution.players.map((x, i) => ({ x, pos: slots[i] })).sort((a, b) => (chemOn ? 0 : b.x.rating - a.x.rating)).map(({ x, pos }) => `<div class="li"><span class="t"><b>${chemOn && pos ? `${esc(pos)} · ` : ''}${esc(x.name)}${tag(x)}</b></span><b>${x.rating}</b></div>`).join('')}</div>
-        <button class="btn" data-a="sbc-submit" style="background:var(--green);color:var(--green-ink);border-color:var(--green)">${buys ? `Buy ${buys} for ${fmt(p.buyTotal)} & submit` : 'Submit'}${engine.cfg.sbcRepeat > 1 ? ` (up to ${engine.cfg.sbcRepeat}×)` : ''}</button>
+        ${boughtN ? `<p class="note" style="margin:6px 0 0">${boughtN} already bought for this SBC — ${buys ? `only ${buys} left to buy` : 'nothing left to buy'}.</p>` : ''}
+        <button class="btn" data-a="sbc-submit" style="background:var(--green);color:var(--green-ink);border-color:var(--green)">${buys ? `Buy ${buys}${boughtN ? ' more' : ''} for ${fmt(p.buyTotal)} & submit` : 'Submit'}${engine.cfg.sbcRepeat > 1 ? ` (up to ${engine.cfg.sbcRepeat}×)` : ''}</button>
         <button class="btn" data-a="sbc-fill">${buys ? `Buy ${buys} & fill squad only` : 'Fill squad only (check it in the Web App)'}</button>
         <button class="btn red" data-a="sbc-discard">Discard</button>`;
     },
