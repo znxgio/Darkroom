@@ -52,7 +52,7 @@ function installMock() {
   const squad = {
     getFieldPlayers: () => squadItems.map((item, index) => ({ index, item, position: { typeName: posList[index] } })),
     getPlayers: () => [...squadItems, ...benchItems].map((item, index) => ({ index, item })),
-    getFormation: () => ({ name: '4-3-1-2' }),
+    getFormation: () => ({ name: 'f4312' }), // the real app uses EA formation ids
   };
   // --- packs
   const packContents = [
@@ -225,16 +225,24 @@ const idle = (p, ms = 150000) => p.waitForFunction(() => !document.querySelector
   await p.click('#fcs [data-tab=upgrades]');
   await p.click('#fcs [data-a=forms]');
   await idle(p, 120000);
-  const forms = await p.$$eval('#fcs [data-r=forms] .li b', (els) => els.map((e) => e.textContent));
-  check('formations compared', forms.length >= 4 && forms.some((f) => /yours now/.test(f)), forms.join(' | '));
-  await p.click('#fcs [data-a=form-view]');
+  const forms = await p.$$eval('#fcs [data-r=forms] > .list > .li b', (els) => els.map((e) => e.textContent));
+  check('formations compared incl. best XI in current formation', forms.length >= 5 && forms.some((f) => /yours now/.test(f)) && forms.some((f) => /best XI/.test(f)), forms.join(' | '));
+  const detail = await p.textContent('#fcs [data-r=forms] .sub');
+  check('best option opens with In/Out changes', /In:/.test(detail) && /Out:/.test(detail), detail.replace(/\s+/g, ' ').slice(0, 120));
   const xi = await p.$$eval('#fcs [data-r=forms] .sub .li b', (els) => els.map((e) => e.textContent));
-  check('lineup view lists 11 slots', xi.length === 11, xi.slice(0, 3).join(' | '));
+  check('lineup lists 11 slots', xi.length === 11, xi.slice(0, 3).join(' | '));
+  const summary = await p.$$eval('#fcs [data-r=forms] > .list > .li small', (els) => els.map((e) => e.textContent));
+  check('rows show rating/chem change and number of changes', summary.some((t) => /\(\+\d+\)/.test(t) && /change/.test(t)), summary.slice(0, 3).join(' | '));
   await p.click('#fcs [data-a=form-create]');
   await idle(p);
   const created = await p.evaluate(() => T.created);
   check('creates a new squad with 11 players', created && created.n === 11 && /^f\d/.test(created.formation), JSON.stringify(created));
+  const flog = (await log(p)).filter((l) => /^Read \d+ players/.test(l));
+  check('logs players read per position', flog.length === 1, flog[0]);
   await p.screenshot({ path: `${S}/t-forms.png` });
+
+  // SBC pool diagnostics
+  check('SBC log explains skipped players', (await log(p)).some((l) => /Club: read \d+ · usable for SBCs \d+ · skipped .*in your squad/.test(l)));
 
   // copy log works (falls back to prompt if clipboard is blocked)
   await p.click('#fcs [data-tab=snipe]');

@@ -865,7 +865,7 @@
 
   const w = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '1.2.0';
+  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '1.2.3';
   const errText = (e) => (e && e.message ? e.message : String(e));
   const fmt = (n) => Number(n || 0).toLocaleString();
 
@@ -1023,6 +1023,7 @@
           const res = await observe(fn(c));
           if (!res.success) return { ok: false, status: res.status ?? (res.error && (res.error.code || res.error.message)) };
           const d = res.data || {};
+          if (i === 0) debugLog.push(`club page: keys ${Object.keys(d).join(',')} · items ${(d.items || []).length} · retrievedAll ${d.retrievedAll} · endOfList ${d.endOfList}`);
           out.push(...(d.items || []));
           if (onPage) onPage(out.length);
           if (d.retrievedAll || d.endOfList || !(d.items || []).length) return { ok: true };
@@ -1742,10 +1743,26 @@
           if (it && it.definitionId) { this.guard.itemIds.add(it.id); this.guard.defIds.add(it.definitionId); }
         }
       }
-      const usable = this.raw
-        .filter((p) => p.player && !p.loan && !p.evo && this.allowed(p))
-        .map((p) => ({ ...p, id: p.itemId, cost: playerCost(p) }));
-      ui.log(`Club: ${usable.length} players usable for SBCs · ${this.guard.itemIds.size} squad players protected`, 'muted');
+      const why = { notPlayer: 0, loanOrEvo: 0, squad: 0, rating: 0, special: 0, tradeable: 0 };
+      const usable = [];
+      for (const p of this.raw) {
+        if (!p.player) { why.notPlayer++; continue; }
+        if (p.loan || p.evo) { why.loanOrEvo++; continue; }
+        if (this.guard.itemIds.has(p.itemId) || this.guard.defIds.has(p.defId)) { why.squad++; continue; }
+        if (p.rating > cfg.sbcMaxRating) { why.rating++; continue; }
+        if (p.special && !cfg.sbcUseSpecials) { why.special++; continue; }
+        if (!(p.untradeable || p.storage || cfg.sbcUseTradeables)) { why.tradeable++; continue; }
+        usable.push({ ...p, id: p.itemId, cost: playerCost(p) });
+      }
+      const skipped = [
+        why.squad && `${why.squad} in your squad`, why.tradeable && `${why.tradeable} tradeable`,
+        why.rating && `${why.rating} above ${cfg.sbcMaxRating}`, why.special && `${why.special} specials`,
+        why.loanOrEvo && `${why.loanOrEvo} loans/evolutions`, why.notPlayer && `${why.notPlayer} not players`,
+      ].filter(Boolean).join(', ');
+      ui.log(`Club: read ${this.raw.length} · usable for SBCs ${usable.length}${skipped ? ` · skipped ${skipped}` : ''}`, usable.length ? 'muted' : 'warn');
+      if (!this.raw.length) ui.log('EA returned no club players — open Club → Players in the Web App once, then try again', 'warn');
+      else if (!usable.length && why.tradeable) ui.log('All your usable fodder is tradeable — turn on “Use tradeable players” (SBC tab) if you’re OK using it', 'warn');
+      debugLog.push(`club read ${this.raw.length}; sample ${this.raw.slice(0, 3).map((p) => `${p.name} r${p.rating} u${p.untradeable} pl${p.player} pos${JSON.stringify(p.positions)}`).join(' | ')}`);
       return usable;
     },
 
@@ -1985,9 +2002,9 @@
 
     async createSquad(idx) {
       const f = this.formations[idx];
-      if (!f || f.current) return;
+      if (!f || f.current || f.filled !== 11) return;
       await jobs.run('Creating squad', async () => {
-        const name = `FC Sniper ${f.label}`.slice(0, 20);
+        const name = `FC Sniper ${(FORMATIONS[f.id] && FORMATIONS[f.id].label) || f.id.replace(/^f/, '')}`.slice(0, 20);
         const items = f.lineup.map((p) => p && p.item);
         const r = await fut.createSquad(name, f.id, items);
         jobs.check(r, 'creating the squad');
