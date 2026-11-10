@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FC Sniper
 // @namespace    https://github.com/znxgio/darkroom
-// @version      1.0.0
+// @version      1.0.1
 // @description  Transfer-market sniper for the EA SPORTS FC Ultimate Team Web App — price checks, auto max buy, alerts, auto-listing, history and built-in safety limits.
 // @match        https://www.ea.com/*ultimate-team/web-app*
 // @match        https://www.ea.com/ea-sports-fc/ultimate-team/web-app*
@@ -1023,7 +1023,7 @@
     box-shadow:0 18px 50px rgba(0,0,0,.55),0 0 0 1px rgba(255,255,255,.02) inset;-webkit-font-smoothing:antialiased}
   #fcs *{box-sizing:border-box}
   #fcs svg{width:16px;height:16px;fill:currentColor;display:block}
-  #fcs button{font:inherit;color:inherit;border:0;background:none;cursor:pointer;-webkit-tap-highlight-color:transparent}
+  #fcs button{font:inherit;color:inherit;border:0;background:none;cursor:pointer;-webkit-tap-highlight-color:transparent;touch-action:manipulation}
   #fcs button:disabled{opacity:.45;cursor:default}
   #fcs input,#fcs select{font:inherit;color:var(--text);background:var(--card2);border:1px solid var(--line);border-radius:9px;padding:7px 9px;width:100%;min-width:0;outline:0}
   #fcs input:focus,#fcs select:focus{border-color:var(--green)}
@@ -1031,7 +1031,7 @@
 
   #fcs .hd{display:flex;align-items:center;gap:10px;padding:12px 12px 10px 14px;cursor:move;touch-action:none;user-select:none}
   #fcs .brand{display:flex;align-items:center;gap:8px;flex:1;min-width:0}
-  #fcs .logo{width:26px;height:26px;border-radius:8px;display:grid;place-items:center;background:linear-gradient(135deg,#3ddc84,#1aa35a);color:var(--green-ink);font-weight:800;font-size:12px}
+  #fcs .logo{flex:none;width:26px;height:26px;border-radius:8px;display:grid;place-items:center;background:linear-gradient(135deg,#3ddc84,#1aa35a);color:var(--green-ink);font-weight:800;font-size:12px}
   #fcs .brand b{font-size:14px;letter-spacing:.2px}
   #fcs .pill{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:600;padding:2px 8px;border-radius:999px;background:var(--card2);color:var(--muted)}
   #fcs .pill::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
@@ -1121,7 +1121,15 @@
   #fcs.mob input,#fcs.mob select{font-size:16px;padding:10px}
   #fcs.mob .row{padding:7px 0}#fcs.mob .seg button{padding:8px 4px;font-size:14px}
   #fcs.mob .btn{padding:13px}#fcs.mob .chip{padding:9px 6px 9px 12px}#fcs.mob .chip .rm{width:34px;height:34px}
-  #fcs.mob .sugg button{padding:13px 12px}#fcs.mob .log{font-size:12px}`;
+  #fcs.mob .sugg button{padding:13px 12px}#fcs.mob .log{font-size:12px}
+  /* collapsed on a phone: a small handle on the right edge, drag it up or down */
+  #fcs.mob.min{left:auto!important;right:6px!important;top:var(--fcs-top,58%)!important;bottom:auto;width:auto;
+    border:1px solid var(--line);border-radius:16px;padding-bottom:0;box-shadow:0 8px 24px rgba(0,0,0,.5)}
+  #fcs.mob.min .hd{padding:6px;gap:6px;cursor:grab}
+  #fcs.mob.min .hd::before,#fcs.mob.min .brand b,#fcs.mob.min .coins,#fcs.mob.min .pill{display:none}
+  #fcs.mob.min .brand{flex:none}
+  #fcs.mob.min .logo{width:32px;height:32px;flex:none}
+  #fcs.mob.min .go{width:42px;height:36px}#fcs.mob.min .fold{width:30px;height:36px}`;
 
   const ui = {
     root: null,
@@ -1239,11 +1247,29 @@
       this.makeDraggable(this.q('.hd'));
     },
 
+    /** Phone: move the collapsed handle up/down the right edge. */
+    dragHandle(e) {
+      e.preventDefault();
+      const startTop = this.root.getBoundingClientRect().top;
+      const sy = e.clientY;
+      const h = this.root.offsetHeight;
+      let top = startTop;
+      const move = (ev) => {
+        top = Math.min(w.innerHeight - h - 8, Math.max(8, startTop + ev.clientY - sy));
+        this.root.style.setProperty('--fcs-top', `${top}px`);
+      };
+      const up = () => {
+        removeEventListener('pointermove', move); removeEventListener('pointerup', up);
+        store.set(KEYS.ui, { ...store.get(KEYS.ui, {}), handleTop: Math.round(top) });
+      };
+      addEventListener('pointermove', move); addEventListener('pointerup', up);
+    },
+
     showTab(tab) {
       this.tab = tab;
       this.qa('[data-tab]').forEach((b) => b.classList.toggle('on', b.dataset.tab === tab));
       this.qa('[data-pane]').forEach((p) => p.classList.toggle('on', p.dataset.pane === tab));
-      store.set(KEYS.ui, { tab });
+      store.set(KEYS.ui, { ...store.get(KEYS.ui, {}), tab });
     },
 
     /** Read every field into the config and save it. */
@@ -1459,8 +1485,13 @@
     },
 
     makeDraggable(handle) {
+      const saved = store.get(KEYS.ui, {}).handleTop;
+      if (saved) this.root.style.setProperty('--fcs-top', `${saved}px`);
       handle.addEventListener('pointerdown', (e) => {
-        if (e.target.closest('button') || this.root.classList.contains('mob')) return;
+        if (e.target.closest('button')) return;
+        const cls = this.root.classList;
+        if (cls.contains('mob') && cls.contains('min')) return this.dragHandle(e);
+        if (cls.contains('mob')) return;
         const r = this.root.getBoundingClientRect();
         const sx = e.clientX; const sy = e.clientY;
         const move = (ev) => {
