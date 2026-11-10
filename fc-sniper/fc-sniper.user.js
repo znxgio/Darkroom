@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FC Sniper
 // @namespace    https://github.com/znxgio/darkroom
-// @version      1.7.4
+// @version      1.7.5
 // @description  Sniper, pack opener, SBC solver and team upgrade advisor for the EA SPORTS FC Ultimate Team Web App, with built-in safety limits.
 // @match        https://www.ea.com/*ultimate-team/web-app*
 // @match        https://www.ea.com/ea-sports-fc/ultimate-team/web-app*
@@ -1269,7 +1269,7 @@
 
   const w = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '1.7.4';
+  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '1.7.5';
   const errText = (e) => (e && e.message ? e.message : String(e));
   const fmt = (n) => Number(n || 0).toLocaleString();
 
@@ -1549,6 +1549,20 @@
       return this.challengeOpen(ch).map((x) => x.position);
     },
     /** Players the challenge needs: EA's own count, else its "number of players" rule, else 11. */
+    /** EA's raw requirement data, for Copy log: numbers, names, values, scope, count and any text fields. */
+    rawRequirements(ch) {
+      const keyNames = invert(w.SBCEligibilityKey, SBC_KEYS);
+      try {
+        return JSON.stringify((ch.eligibilityRequirements || []).map((r) => {
+          const kv = (r.kvPairs && (r.kvPairs._collection || r.kvPairs)) || {};
+          const text = {};
+          for (const [k, v] of Object.entries(r)) if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') text[k] = v;
+          let label = '';
+          try { label = typeof r.getText === 'function' ? r.getText() : typeof r.getDescription === 'function' ? r.getDescription() : ''; } catch { /* none */ }
+          return { ...text, label, kv: Object.fromEntries(Object.entries(kv).map(([k, v]) => [`${k}:${keyNames[k] || '?'}`, v])) };
+        })).slice(0, 900);
+      } catch (e) { return `unreadable (${errText(e)})`; }
+    },
     requiredPlayers(ch) {
       try {
         const n = ch.squad && ch.squad.getNumOfRequiredPlayers();
@@ -2409,7 +2423,9 @@
         const list = r.list.filter((ch) => !(typeof ch.isCompleted === 'function' && ch.isCompleted()) && ch.status !== 'COMPLETED');
         this.open.set(set.id, list.map((challenge) => {
           const reqs = fut.requirements(challenge);
-          return { challenge, reqs, parsed: parseRequirements(reqs, fut.requiredPlayers(challenge)) };
+          const parsed = parseRequirements(reqs, fut.requiredPlayers(challenge));
+          if (parsed.unsupported.length) debugLog.push(`manual SBC "${challenge.name}": ${fut.rawRequirements(challenge)}`);
+          return { challenge, reqs, parsed };
         }));
         ui.renderSbc();
       });
