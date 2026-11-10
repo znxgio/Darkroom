@@ -43,7 +43,7 @@ the Companion app. Updates install automatically.
 | **Upgrade advisor** | Reads your active squad, finds the 3 weakest spots, and suggests upgrades that raise your rating without breaking chemistry. Players you own come first, then market cards in your squad's main league or nation within budget. One tap sends a card to the sniper. |
 | **Formation coach** | Builds the best XI from players you own — by **meta** (position-weighted face stats: pace/shooting/dribbling up front, defending/physical at the back, skill moves and weak foot for attackers) or by rating — for 9 popular competitive formations (4-2-3-1, 4-3-2-1, 4-1-2-1-2, 4-3-1-2, 4-3-3, 4-4-2, 4-2-2-2, 5-2-1-2, 3-4-2-1), compares rating and chemistry with your current lineup, shows who comes in, and can create it as a new squad. Built-in formations and a stat-based meta model, not live pro data. Tactics and player roles can't be set from the Web App, so set those in game. |
 | **Pack opener** | Lists your unopened packs and opens one, a type, or all. Sorts each pack: new items to your club, untradeable duplicates to SBC storage, tradeable duplicates to the transfer list, and optionally quick-sells duplicates rated below a number you set. Shows your best pulls. |
-| **SBC solver** | Loads SBCs, marks which it can solve, and builds the cheapest squad from your club: SBC storage and duplicates first, then untradeables. Never uses your active squad (starters, subs and reserves), loans, evolutions, special cards or tradeables (unless you allow them), or players rated above your limit — and re-checks every player right before sending. Review, then submit, or just fill the squad and check it in the Web App. Repeats repeatable SBCs. |
+| **SBC solver** | Loads SBCs, marks which it can solve, and builds the cheapest squad from your club: SBC storage and duplicates first, then untradeables. Never uses your active squad (starters, subs and reserves), loans, evolutions, special cards or tradeables (unless you allow them), or players rated above your limit — and re-checks every player right before sending. Review, then submit, or just fill the squad and check it in the Web App. Repeats repeatable SBCs. **Buys missing players:** when your club can't complete an SBC, it adds the cheapest market fill-ins (fewest coins, your own players first, never cards you own), shows the total and asks before buying — capped by *Max coins to spend per SBC*. **Chemistry SBCs:** total and per-player chemistry, same/min/max league-nation-club counts and "from league X" requirements, with players placed in the SBC's positions. |
 | **Safety** | Enforced pacing, session and daily limits, and lockouts after EA warnings (below). Shared by every feature. |
 
 ## Using it
@@ -81,7 +81,8 @@ Cheaper, high-volume cards flip more often; expensive cards need a bigger margin
   the bot sorts it first and stops if something can't be moved (for example a full pile).
 - **SBC tab → Load SBCs → View → Solve.** Challenges tagged **auto** can be solved:
   team rating, min/max/exact player rating, Bronze/Silver/Gold, and rare count.
-  Chemistry and league/nation/club count requirements show as **manual** for now.
+  Chemistry, league/nation/club counts and "from league X" are solved too; very strict
+  combinations can still fail. If your club can't do it, it offers cheap fill-ins to buy.
 
 ### Something not working?
 Tap **Copy log** (Snipe tab, under Activity) and paste it in the chat. It includes

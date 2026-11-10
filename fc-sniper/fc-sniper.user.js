@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FC Sniper
 // @namespace    https://github.com/znxgio/darkroom
-// @version      1.6.1
+// @version      1.7.0
 // @description  Sniper, pack opener, SBC solver and team upgrade advisor for the EA SPORTS FC Ultimate Team Web App, with built-in safety limits.
 // @match        https://www.ea.com/*ultimate-team/web-app*
 // @match        https://www.ea.com/ea-sports-fc/ultimate-team/web-app*
@@ -806,6 +806,9 @@
     return Math.max(1, Math.round(c));
   }
 
+  /** Solver cost of one coin spent on a market fill-in, relative to your own fodder's value. */
+  const COIN_WEIGHT = 50;
+
   const QUALITY = { bronze: 1, silver: 2, gold: 3 };
   const qualityOf = (rating) => (rating >= 75 ? 3 : rating >= 65 ? 2 : 1);
 
@@ -815,45 +818,205 @@
    * Requirements the solver can't satisfy yet are listed in `unsupported`.
    */
   function parseRequirements(reqs, playersRequired = 11) {
-    const c = { players: playersRequired, teamRating: 0, teamRatingMax: 99, minOvr: 0, maxOvr: 99, minQuality: 0, maxQuality: 9, rareMin: 0, chemMin: 0 };
+    const c = {
+      players: playersRequired, teamRating: 0, teamRatingMax: 99, minOvr: 0, maxOvr: 99, minQuality: 0, maxQuality: 9,
+      rareMin: 0, chemMin: 0, chemEachMin: 0,
+      groups: { league: {}, nation: {}, club: {} }, // { sameMin, sameMax, distinctMin, distinctMax }
+      idReqs: [], // [{ type: league|nation|club|rarity|quality, ids, min, max }]
+      needsSearch: false,
+    };
     const unsupported = [];
+    const GROUP = { SAME_LEAGUE_COUNT: 'league', SAME_NATION_COUNT: 'nation', SAME_CLUB_COUNT: 'club', LEAGUE_COUNT: 'league', NATION_COUNT: 'nation', CLUB_COUNT: 'club' };
+    const IDS = { LEAGUE_ID: 'league', NATION_ID: 'nation', CLUB_ID: 'club', PLAYER_RARITY: 'rarity' };
     for (const r of reqs || []) {
-      const v = Number((r.values || [])[0]);
+      const vals = (r.values || []).map(Number);
+      const v = vals[0];
       // count -1 means "every player"; so does a count that covers the whole squad ("11× Bronze")
       const all = !(r.count > 0) || r.count >= playersRequired;
+      const lo = r.scope === 'LOWER';
+      const ex = r.scope === 'EXACT';
       switch (r.key) {
         case 'TEAM_RATING':
-          if (r.scope === 'LOWER') c.teamRatingMax = Math.min(c.teamRatingMax, v);
-          else if (r.scope === 'EXACT') { c.teamRating = Math.max(c.teamRating, v); c.teamRatingMax = Math.min(c.teamRatingMax, v); }
+          if (lo) c.teamRatingMax = Math.min(c.teamRatingMax, v);
+          else if (ex) { c.teamRating = Math.max(c.teamRating, v); c.teamRatingMax = Math.min(c.teamRatingMax, v); }
           else c.teamRating = Math.max(c.teamRating, v);
           break;
         case 'PLAYER_COUNT':
         case 'SCOPE':
+        case 'PLAYER_TRADABILITY': // untradeables are allowed everywhere; tradeables only if you allow them
           break;
         case 'PLAYER_MIN_OVR': c.minOvr = Math.max(c.minOvr, v); break;
         case 'PLAYER_MAX_OVR': c.maxOvr = Math.min(c.maxOvr, v); break;
         case 'PLAYER_EXACT_OVR': c.minOvr = Math.max(c.minOvr, v); c.maxOvr = Math.min(c.maxOvr, v); break;
         case 'PLAYER_QUALITY':
         case 'PLAYER_LEVEL':
-          if (!all) { unsupported.push('quality count'); break; }
+          if (!all) {
+            if (lo) { unsupported.push('quality count'); break; }
+            c.idReqs.push({ type: 'quality', ids: [v], min: r.count }); // "Min. 3 players: Gold"
+            break;
+          }
           if (r.scope === 'GREATER') c.minQuality = Math.max(c.minQuality, v);
-          else if (r.scope === 'LOWER') c.maxQuality = Math.min(c.maxQuality, v);
+          else if (lo) c.maxQuality = Math.min(c.maxQuality, v);
           else { c.minQuality = Math.max(c.minQuality, v); c.maxQuality = Math.min(c.maxQuality, v); }
           break;
         case 'PLAYER_RARITY_GROUP':
-          if (r.scope === 'LOWER') unsupported.push('max rares'); else c.rareMin = Math.max(c.rareMin, all ? playersRequired : r.count);
+          if (lo) unsupported.push('max rares'); else c.rareMin = Math.max(c.rareMin, all ? playersRequired : r.count);
           break;
         case 'CHEMISTRY_POINTS':
-        case 'ALL_PLAYERS_CHEMISTRY_POINTS':
-          if (v > 0) unsupported.push('chemistry');
+          if (lo) unsupported.push('max chemistry'); else c.chemMin = Math.max(c.chemMin, v || 0);
           break;
-        case 'PLAYER_TRADABILITY':
-          break; // untradeables are allowed everywhere; tradeables only if you allow them
+        case 'ALL_PLAYERS_CHEMISTRY_POINTS':
+          if (lo) unsupported.push('max chemistry'); else c.chemEachMin = Math.max(c.chemEachMin, v || 0);
+          break;
+        case 'SAME_LEAGUE_COUNT':
+        case 'SAME_NATION_COUNT':
+        case 'SAME_CLUB_COUNT': {
+          const g = c.groups[GROUP[r.key]];
+          if (lo) g.sameMax = Math.min(g.sameMax ?? 99, v);
+          else { g.sameMin = Math.max(g.sameMin || 0, v); if (ex) g.sameMax = v; }
+          break;
+        }
+        case 'LEAGUE_COUNT':
+        case 'NATION_COUNT':
+        case 'CLUB_COUNT': {
+          const g = c.groups[GROUP[r.key]];
+          if (lo) g.distinctMax = Math.min(g.distinctMax ?? 99, v);
+          else { g.distinctMin = Math.max(g.distinctMin || 0, v); if (ex) g.distinctMax = v; }
+          break;
+        }
+        case 'LEAGUE_ID':
+        case 'NATION_ID':
+        case 'CLUB_ID':
+        case 'PLAYER_RARITY': {
+          const n = all ? playersRequired : r.count;
+          c.idReqs.push(lo ? { type: IDS[r.key], ids: vals, max: n } : { type: IDS[r.key], ids: vals, min: n });
+          break;
+        }
         default:
           unsupported.push(String(r.key || 'unknown').toLowerCase().replace(/_/g, ' '));
       }
     }
+    const g = c.groups;
+    c.needsSearch = !!(c.chemMin || c.chemEachMin || c.idReqs.length
+      || ['league', 'nation', 'club'].some((t) => Object.keys(g[t]).length));
     return { constraints: c, unsupported: [...new Set(unsupported)] };
+  }
+
+  const GROUP_KEY = { league: 'leagueId', nation: 'nationId', club: 'teamId' };
+
+  /** Does a player count toward an id requirement? */
+  function matchesReq(p, r) {
+    if (r.type === 'quality') return qualityOf(p.rating) >= r.ids[0];
+    if (r.type === 'rarity') return r.ids.includes(p.rareflag ?? (p.rare ? 1 : 0));
+    return r.ids.includes(p[GROUP_KEY[r.type]]);
+  }
+
+  /**
+   * Checks a squad against SBC constraints. lineup[i] plays slots[i] (a position).
+   * Returns { ok, violation (how far off, 0 = ok), rating, chem, issues: [[name, amount]] }.
+   */
+  function sbcCheck(lineup, slots, k) {
+    const players = lineup.filter(Boolean);
+    const issues = [];
+    const miss = (name, amount) => { if (amount > 0) issues.push([name, amount]); };
+    miss('players', k.players - players.length);
+    const rating = k.players === 11 ? squadRating(lineup.map((p) => (p ? p.rating : 0))) : 0;
+    if (k.teamRating) miss('team rating', (k.teamRating - rating) * 3);
+    if ((k.teamRatingMax ?? 99) < 99) miss('max team rating', (rating - k.teamRatingMax) * 3);
+    const chem = squadChemistry(lineup.map((p, i) => p && { ...p, inPosition: (p.positions || []).includes(slots[i]) }));
+    if (k.chemMin) miss('chemistry', k.chemMin - chem.total);
+    if (k.chemEachMin) miss('chemistry per player', chem.each.reduce((a, x, i) => a + (lineup[i] ? Math.max(0, k.chemEachMin - x) : 0), 0));
+    miss('rares', (k.rareMin || 0) - players.filter((p) => p.rare).length);
+    for (const t of ['league', 'nation', 'club']) {
+      const g = (k.groups || {})[t] || {};
+      if (!Object.keys(g).length) continue;
+      const m = new Map();
+      players.forEach((p) => m.set(p[GROUP_KEY[t]], (m.get(p[GROUP_KEY[t]]) || 0) + 1));
+      const largest = Math.max(0, ...m.values());
+      if (g.sameMin) miss(`same ${t}`, g.sameMin - largest);
+      if (g.sameMax !== undefined) miss(`max same ${t}`, [...m.values()].reduce((a, x) => a + Math.max(0, x - g.sameMax), 0));
+      if (g.distinctMin) miss(`${t}s`, g.distinctMin - m.size);
+      if (g.distinctMax !== undefined) miss(`max ${t}s`, m.size - g.distinctMax);
+    }
+    for (const r of k.idReqs || []) {
+      const n = players.filter((p) => matchesReq(p, r)).length;
+      if (r.min) miss(`${r.type} ${r.ids.join('/')}`, r.min - n);
+      if (r.max !== undefined) miss(`max ${r.type} ${r.ids.join('/')}`, n - r.max);
+    }
+    const violation = issues.reduce((a, [, x]) => a + x, 0);
+    return { ok: violation === 0, violation, rating, chem: chem.total, issues };
+  }
+
+  /**
+   * Cheapest squad meeting every constraint, positions and chemistry included.
+   * Starts from several seeds (one per main league/nation/club in the pool,
+   * plus the cheapest rating mix) and improves by swapping players until
+   * nothing better is found. pool: [{ id, rating, rare, cost, positions, leagueId, nationId, teamId }]
+   * slots: positions of the SBC squad. Returns { players, rating, chem, cost } or null.
+   */
+  function solveSbcSearch(pool, slots, k, opts = {}) {
+    const ok = (p) => p.rating >= k.minOvr && p.rating <= k.maxOvr
+      && qualityOf(p.rating) >= (k.minQuality || 0) && qualityOf(p.rating) <= (k.maxQuality || 9);
+    const eligible = pool.filter(ok);
+    const n = slots.length;
+    if (eligible.length < n) return null;
+    const byCost = (a, b) => a.cost - b.cost;
+    const cheap = eligible.slice().sort(byCost);
+    const fits = slots.map((pos) => eligible.filter((p) => (p.positions || []).includes(pos)).sort(byCost));
+    const high = eligible.slice().sort((a, b) => b.rating - a.rating || a.cost - b.cost);
+    const score = (lineup) => {
+      const e = sbcCheck(lineup, slots, k);
+      return { f: e.violation * 1e6 + lineup.reduce((a, p) => a + (p ? p.cost : 1e6), 0), e };
+    };
+    const order = slots.map((_, i) => i).sort((a, b) => fits[a].length - fits[b].length);
+    const fill = (prefer) => {
+      const lineup = new Array(n).fill(null);
+      const used = new Set();
+      for (const i of order) {
+        const pick = (prefer && fits[i].find((p) => !used.has(p.id) && prefer(p)))
+          || fits[i].find((p) => !used.has(p.id)) || cheap.find((p) => !used.has(p.id));
+        if (pick) { lineup[i] = pick; used.add(pick.id); }
+      }
+      return lineup;
+    };
+    // Seeds: cheapest; each main league / nation / club; plus required ids.
+    const seeds = [fill(null)];
+    for (const t of ['league', 'nation', 'club']) {
+      const counts = new Map();
+      eligible.forEach((p) => counts.set(p[GROUP_KEY[t]], (counts.get(p[GROUP_KEY[t]]) || 0) + 1));
+      [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, t === 'league' ? 5 : 3)
+        .forEach(([id]) => seeds.push(fill((p) => p[GROUP_KEY[t]] === id)));
+    }
+    for (const r of k.idReqs || []) if (r.min) seeds.push(fill((p) => matchesReq(p, r)));
+    if (k.teamRating && n === 11) {
+      const r = solveSbc(eligible, { ...k, rareMin: k.rareMin || 0 });
+      if (r) { const ids = new Set(r.players.map((p) => p.id)); seeds.push(fill((p) => ids.has(p.id))); }
+    }
+    let best = null;
+    const deadline = Date.now() + (opts.timeMs || 2500);
+    for (const seed of seeds) {
+      const lineup = seed.slice();
+      let cur = score(lineup);
+      for (let round = 0; round < 60 && Date.now() < deadline; round++) {
+        let improved = false;
+        for (let i = 0; i < n; i++) {
+          const pool2 = new Set([...fits[i].slice(0, 30), ...cheap.slice(0, 30), ...high.slice(0, 20)]);
+          for (const c of pool2) {
+            const j = lineup.findIndex((x) => x && x.id === c.id);
+            if (j === i) continue;
+            const next = lineup.slice();
+            if (j >= 0) next[j] = lineup[i];
+            next[i] = c;
+            const sc = score(next);
+            if (sc.f < cur.f) { lineup.splice(0, n, ...next); cur = sc; improved = true; }
+          }
+        }
+        if (!improved) break;
+      }
+      if (cur.e.ok && (!best || cur.f < best.f)) best = { ...cur, lineup: lineup.slice() };
+    }
+    if (!best) return null;
+    return { players: best.lineup, rating: best.e.rating, chem: best.e.chem, cost: best.lineup.reduce((a, p) => a + p.cost, 0) };
   }
 
   /**
@@ -1058,6 +1221,8 @@
     sbcMaxRating: 86, // never use players rated above this
     sbcProtectSquad: true, // never use players from your active squad
     sbcRepeat: 1, // times to repeat a repeatable SBC
+    sbcBuyMissing: true, // buy cheap fill-ins from the market when your club can't complete an SBC
+    sbcBuyLimit: 20000, // max coins of fill-ins per SBC
     // upgrades
     upgradeBudget: 0, // 0 = your coins minus Keep coins
     upgradeMarket: true, // also search the market (uses searches)
@@ -1075,7 +1240,7 @@
     addHistory, summarizeHistory, isDiscordWebhook, discordPayload,
     squadRating, squadChemistry, topValues, rankUpgrades,
     POS_NAMES, normPos, baseId, FORMATIONS, squadRatingExact, lineupScore, bestLineup, metaScore, readStats,
-    fodderValue, playerCost, qualityOf, parseRequirements, solveSbc, sortItem,
+    fodderValue, playerCost, qualityOf, COIN_WEIGHT, parseRequirements, solveSbc, sortItem, sbcCheck, solveSbcSearch, matchesReq,
     SAFETY, clampConfig, dayKey, usageFor, lockoutFor, formatDuration, canStart,
   };
 
@@ -1090,7 +1255,7 @@
 
   const w = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '1.6.1';
+  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '1.7.0';
   const errText = (e) => (e && e.message ? e.message : String(e));
   const fmt = (n) => Number(n || 0).toLocaleString();
 
@@ -1223,6 +1388,7 @@
         leagueId: item.leagueId,
         teamId: item.teamId,
         positions,
+        rareflag: item.rareflag || 0,
         rare: (item.rareflag || 0) >= 1,
         special: (item.rareflag || 0) > 1,
         untradeable: !!item.untradeable,
@@ -1343,6 +1509,14 @@
         }
       }
       return out;
+    },
+    /** Positions of the SBC squad's open slots, in the order they're filled. */
+    challengeSlots(ch) {
+      try {
+        return ch.squad.getFieldPlayers()
+          .filter((s) => !(typeof s.isBrick === 'function' && s.isBrick()))
+          .map((s) => (s.position ? normPos(s.position.typeName ?? s.position.id) : '?'));
+      } catch { return new Array(this.requiredPlayers(ch)).fill('?'); }
     },
     requiredPlayers(ch) {
       try { return ch.squad.getNumOfRequiredPlayers() || 11; } catch { return 11; }
@@ -2256,6 +2430,8 @@
     /** The same rules, checked again on every player right before sending. */
     allowed(p) {
       const cfg = engine.cfg;
+      // Bought fill-ins: the max-rating rule protects your own players, not cards bought for this SBC.
+      if (p.market) return !(this.guard && this.guard.defIds.has(p.defId));
       if (this.guard && (this.guard.itemIds.has(p.itemId ?? p.id) || this.guard.defIds.has(p.defId ?? p.item?.definitionId))) return false;
       if (p.rating > cfg.sbcMaxRating) return false;
       if (p.special && !cfg.sbcUseSpecials) return false;
@@ -2263,20 +2439,136 @@
       return true;
     },
 
+    /** Cheapest solution from a pool; chemistry/group SBCs use the position-aware search. */
+    solveWith(pool, entry, slots) {
+      const k = entry.parsed.constraints;
+      if (k.needsSearch) return solveSbcSearch(pool, slots, k);
+      return solveSbc(pool, k);
+    },
+
+    /**
+     * Cheap market listings that could fill the SBC: right quality (and rare
+     * if needed), a few price levels, plus your club's main leagues for
+     * chemistry. Cards you already own are skipped (EA won't take duplicates
+     * into your club). Your own fodder always goes first; only gaps are bought.
+     */
+    async marketPool(k, ownedBase) {
+      const cfg = engine.cfg;
+      const level = k.minQuality >= 3 || k.minOvr >= 75 || k.teamRating >= 75 ? 'gold' : k.maxQuality === 1 ? 'bronze' : k.maxQuality === 2 || k.minQuality === 2 ? 'silver' : null;
+      const perPlayer = Math.max(1000, Math.min(cfg.sbcBuyLimit || 20000, k.teamRating ? fodderValue(k.teamRating + 3) * 2 : 4000));
+      const searches = [0, 0.2, 0.5].map((f) => ({ min: f ? roundPrice(perPlayer * f) : 0 }));
+      if (k.rareMin) searches.push({ min: 0, rare: true });
+      const leagues = topValues((this.club || []), 'leagueId', 2).map((x) => x.value);
+      if (k.needsSearch) leagues.forEach((league) => searches.push({ min: 0, league }));
+      for (const r of k.idReqs || []) if (r.min && ['league', 'nation', 'club'].includes(r.type)) searches.push({ min: 0, [r.type]: r.ids[0] });
+      const out = new Map();
+      const perCard = new Map();
+      for (const [i, q] of searches.slice(0, 8).entries()) {
+        engine.setStatus('pricing', `Checking market prices… ${i + 1}/${Math.min(8, searches.length)}`);
+        const c = fut.newCriteria();
+        if (level) c.level = level;
+        if (q.rare) c.rarities = [1];
+        if (q.league) c.league = q.league;
+        if (q.nation) c.nation = q.nation;
+        if (q.club) c.club = q.club;
+        c.maxBuy = roundPrice(perPlayer);
+        if (q.min >= 200) c.minBuy = q.min;
+        const r = await fut.search(c);
+        engine.countUsage('searches');
+        jobs.check(r, 'market search');
+        for (const l of r.listings) {
+          const p = fut.toPlayer(l.item);
+          if (!p.player || !l.buyNowPrice || out.has(l.tradeId) || ownedBase.has(baseId(p.id))) continue;
+          if (p.special && !cfg.sbcUseSpecials) continue;
+          if ((perCard.get(p.id) || 0) >= 3) continue;
+          perCard.set(p.id, (perCard.get(p.id) || 0) + 1);
+          // Coins spent weigh far more than giving away your own fodder: the solver spends
+          // as few coins as possible and uses your players wherever they fit.
+          out.set(l.tradeId, { ...p, id: `m${l.tradeId}`, defId: p.id, market: true, price: l.buyNowPrice, cost: COIN_WEIGHT * l.buyNowPrice + 2000, listing: l });
+        }
+        await jobs.pause(cfg.delayMin, cfg.delayMax);
+      }
+      ui.log(`Market: ${out.size} cheap listings to fill gaps`, 'muted');
+      return [...out.values()];
+    },
+
     async solve(set, entry) {
       await jobs.run('Solving SBC', async () => {
         const { challenge, parsed } = entry;
         if (parsed.unsupported.length) { ui.log(`Can't auto-solve yet: ${parsed.unsupported.join(', ')}`, 'warn'); return; }
-        const pool = await this.pool();
-        this.club = pool;
+        const cfg = engine.cfg;
+        const load = await fut.loadChallenge(challenge);
+        jobs.check(load, 'loading the challenge');
+        const slots = fut.challengeSlots(challenge);
+        if (parsed.constraints.needsSearch && slots.some((x) => x === '?')) ui.log('Couldn’t read this SBC’s positions — chemistry may not work', 'warn');
+        const club = await this.pool();
+        this.club = club;
         engine.setStatus('pricing', 'Solving…');
         await sleep(30);
-        const solution = solveSbc(pool, parsed.constraints);
-        if (!solution) { ui.log(`No solution from your club for ${challenge.name || set.name}`, 'warn'); this.plan = null; ui.renderSbc(); return; }
-        this.plan = { set, entry, solution };
-        ui.log(`Solution: ${solution.players.length} players, rating ${solution.rating || '—'} — review it, then Submit`, 'ok');
+        let solution = this.solveWith(club, entry, slots);
+        let buys = [];
+        if (!solution && cfg.sbcBuyMissing) {
+          ui.log('Not possible from your club alone — checking the market for cheap fill-ins…', 'muted');
+          const ownedBase = new Set([...(this.raw || []).map((p) => baseId(p.defId ?? p.id)), ...(this.guard ? [...this.guard.defIds].map(baseId) : [])]);
+          const market = await this.marketPool(parsed.constraints, ownedBase);
+          engine.setStatus('pricing', 'Solving with market fill-ins…');
+          await sleep(30);
+          solution = this.solveWith([...club, ...market], entry, slots);
+          if (solution) {
+            buys = solution.players.filter((p) => p.market);
+            const total = buys.reduce((a, p) => a + p.price, 0);
+            if (total > (cfg.sbcBuyLimit || 0)) { ui.log(`Cheapest solution needs ${fmt(total)} of buys — over your limit of ${fmt(cfg.sbcBuyLimit)}`, 'warn'); solution = null; buys = []; }
+          }
+        }
+        if (!solution) { ui.log(`No solution for ${challenge.name || set.name}${cfg.sbcBuyMissing ? '' : ' from your club (turn on “Buy missing players”)'}`, 'warn'); this.plan = null; ui.renderSbc(); return; }
+        const buyTotal = buys.reduce((a, p) => a + p.price, 0);
+        this.plan = { set, entry, solution, slots, buys, buyTotal };
+        ui.log(`Solution: ${solution.players.length} players · rating ${solution.rating || '—'}${parsed.constraints.needsSearch ? ` · chemistry ${solution.chem ?? '—'}` : ''}${buys.length ? ` · buy ${buys.length} for ${fmt(buyTotal)}` : ''} — review it, then submit`, 'ok');
         ui.renderSbc();
       });
+    },
+
+    /** Buy the planned market fill-ins; a sold listing is replaced by the next cheapest copy. */
+    async buyFillIns(plan) {
+      const cfg = engine.cfg;
+      if (fut.coins() - cfg.minCoins < plan.buyTotal) throw new Error(`not enough coins for the fill-ins (${fmt(plan.buyTotal)})`);
+      const bought = [];
+      for (const p of plan.buys) {
+        engine.setStatus('pricing', `Buying ${p.name} (${bought.length + 1}/${plan.buys.length})…`);
+        let r = await fut.buy(p.listing);
+        let item = p.listing.item;
+        let price = p.price;
+        if (!r.ok) {
+          const kind = classifyStatus(r.status);
+          if (kind === 'captcha' || kind === 'throttled' || kind === 'session') jobs.check(r, 'buying a fill-in');
+          // Sold already: try the next cheapest copy of the same card.
+          await jobs.pause(cfg.delayMin, cfg.delayMax);
+          const again = await fut.search(fut.criteria({}, { id: p.defId }, roundPrice(p.price * 1.3)));
+          engine.countUsage('searches');
+          jobs.check(again, 'market search');
+          const alt = again.listings.filter((l) => l.defId === p.defId && l.buyNowPrice).sort((a, b) => a.buyNowPrice - b.buyNowPrice)[0];
+          if (!alt) throw new Error(`${p.name} sold out — bought ${bought.length} of ${plan.buys.length}, they're in your club`);
+          r = await fut.buy(alt);
+          if (!r.ok) throw new Error(`couldn't buy ${p.name} (${r.status}) — bought ${bought.length} of ${plan.buys.length}, they're in your club`);
+          item = alt.item;
+          price = alt.buyNowPrice;
+        }
+        engine.countUsage('buys');
+        p.item = item;
+        bought.push({ p, item, price });
+        engine.history = addHistory(engine.history, { at: Date.now(), id: p.defId, itemId: item && item.id, name: p.name, rating: p.rating, price, via: 'sbc' });
+        store.set(KEYS.history, engine.history);
+        ui.log(`Bought ${p.name} ${p.rating} for ${fmt(price)} (SBC fill-in)`, 'ok');
+        await jobs.pause(900, 1600);
+      }
+      if (bought.length) {
+        const moved = await fut.move(bought.map((b) => b.item), w.ItemPile.CLUB);
+        if (!moved) ui.log('Couldn’t move the fill-ins to your club — they’re in unassigned', 'warn');
+        await jobs.pause(900, 1600);
+      }
+      plan.buys = [];
+      plan.buyTotal = 0;
+      ui.renderHistory();
     },
 
     async submit(fillOnly) {
@@ -2288,18 +2580,19 @@
         for (let n = 1; n <= times; n++) {
           const { set, entry, solution } = current;
           engine.setStatus('pricing', `${fillOnly ? 'Filling' : 'Submitting'} ${set.name}${times > 1 ? ` (${n}/${times})` : ''}`);
-          const load = await fut.loadChallenge(entry.challenge);
-          jobs.check(load, 'loading the challenge');
-          await jobs.pause(800, 1500);
           const bad = solution.players.filter((p) => !this.allowed(p));
           if (bad.length) {
             ui.log(`Safety check blocked this squad: ${bad.map((p) => `${p.name} ${p.rating}`).join(', ')} — nothing was sent`, 'err');
             return;
           }
+          if (current.buys && current.buys.length) await this.buyFillIns(current);
+          const load = await fut.loadChallenge(entry.challenge);
+          jobs.check(load, 'loading the challenge');
+          await jobs.pause(800, 1500);
           const items = solution.players.map((p) => p.item);
           const fill = await fut.fillChallenge(entry.challenge, items);
           jobs.check(fill, 'filling the squad');
-          if (fillOnly) { ui.log(`Squad filled and saved — open ${set.name} in the Web App to check and submit`, 'ok'); return; }
+          if (fillOnly) { ui.log(`Squad filled and saved — open ${set.name} in the Web App to check and submit`, 'ok'); this.plan = { ...current, buys: [], buyTotal: 0 }; ui.renderSbc(); return; }
           await jobs.pause(1500, 2500);
           const sub = await fut.submitChallenge(entry.challenge, set);
           jobs.check(sub, 'submitting');
@@ -2312,7 +2605,7 @@
           notify.discord('info', { title: `🧩 SBC done: ${set.name}`, text: entry.challenge.name || '' });
           this.plan = null;
           if (n === times) break;
-          // Repeatable: reload the set and solve the next one with the players left.
+          // Repeatable: reload the set and solve the next one from the players left (no buying on repeats).
           await jobs.pause(2500, 4000);
           const again = await fut.challenges(set);
           jobs.check(again, 'reloading the SBC');
@@ -2320,10 +2613,12 @@
           if (!next) { ui.log('No more repeats available', 'muted'); break; }
           const reqs = fut.requirements(next);
           const parsed = parseRequirements(reqs, fut.requiredPlayers(next));
-          const sol = !parsed.unsupported.length && solveSbc(this.club, parsed.constraints);
+          const nextEntry = { challenge: next, reqs, parsed };
+          await fut.loadChallenge(next);
+          const sol = !parsed.unsupported.length && this.solveWith(this.club, nextEntry, fut.challengeSlots(next));
           if (sol && sol.players.some((p) => !this.allowed(p))) { ui.log('Safety check stopped the repeat', 'err'); break; }
           if (!sol) { ui.log('Out of suitable players for another repeat', 'muted'); break; }
-          current = { set, entry: { challenge: next, reqs, parsed }, solution: sol };
+          current = { set, entry: nextEntry, solution: sol, buys: [], buyTotal: 0 };
         }
         ui.renderSbc();
       });
@@ -2745,6 +3040,8 @@
       ['sbcUseSpecials', 'Use special cards', 'toggle'],
       ['sbcMaxRating', 'Max player rating to use', 'number'],
       ['sbcRepeat', 'Repeat repeatable SBCs', 'number'],
+      ['sbcBuyMissing', 'Buy missing players (cheapest)', 'toggle'],
+      ['sbcBuyLimit', 'Max coins to spend per SBC', 'number'],
     ],
     filters: [
       ['autoPrice', 'Auto max buy from price', 'toggle'],
@@ -3057,7 +3354,7 @@
             <div class="card"><h4>Squad Building Challenges</h4><div data-r="sbc"><p class="empty">Load SBCs to see which ones can be solved from your club.</p></div>
               <button class="btn blue" data-a="sbc-load">Load SBCs</button></div>
             <div class="card">${FIELDS.sbc.map(fieldHtml).join('')}
-              <p class="note">Never uses your active squad (starters, subs, reserves), loans, evolutions, specials or tradeables unless you allow them, or anyone above your max rating — and checks every player again right before sending. Cheapest fodder first: SBC storage and duplicates, then untradeables. Chemistry and league/nation/club counts aren’t automatic yet.</p></div>
+              <p class="note">Never uses your active squad (starters, subs, reserves), loans, evolutions, specials or tradeables unless you allow them, or anyone above your max rating — and checks every player again right before sending. Cheapest fodder first: SBC storage and duplicates, then untradeables. When your club can’t complete one, it adds the cheapest market fill-ins (never cards you own) and shows the cost before buying. Chemistry, league/nation/club and “from league X” requirements are solved with players in the right positions.</p></div>
           </section>
           <section class="pane" data-pane="history">
             <div class="card"><h4>Totals</h4><div class="stats" data-r="totals"></div></div>
@@ -3377,7 +3674,17 @@
         case 'PLAYER_MIN_OVR': return `Each player ≥ ${v}`;
         case 'PLAYER_MAX_OVR': return `Each player ≤ ${v}`;
         case 'PLAYER_EXACT_OVR': return `Each player = ${v}`;
-        case 'CHEMISTRY_POINTS': case 'ALL_PLAYERS_CHEMISTRY_POINTS': return `Chemistry ${sym} ${v}`;
+        case 'CHEMISTRY_POINTS': return `Chemistry ${sym} ${v}`;
+        case 'ALL_PLAYERS_CHEMISTRY_POINTS': return `Each player chem ${sym} ${v}`;
+        case 'SAME_LEAGUE_COUNT': return `Same league ${sym} ${v}`;
+        case 'SAME_NATION_COUNT': return `Same nation ${sym} ${v}`;
+        case 'SAME_CLUB_COUNT': return `Same club ${sym} ${v}`;
+        case 'LEAGUE_COUNT': return `Leagues ${sym} ${v}`;
+        case 'NATION_COUNT': return `Nations ${sym} ${v}`;
+        case 'CLUB_COUNT': return `Clubs ${sym} ${v}`;
+        case 'LEAGUE_ID': return `${per}from league ${v}`;
+        case 'NATION_ID': return `${per}from nation ${v}`;
+        case 'CLUB_ID': return `${per}from club ${v}`;
         default: return `${per}${r.key.toLowerCase().replace(/_/g, ' ')} ${sym} ${v}`;
       }
     },
@@ -3401,13 +3708,16 @@
       const p = sbc.plan;
       plan.hidden = !p;
       if (!p) return;
-      const tag = (x) => (x.storage ? '<span class="tag">storage</span>' : x.duplicate ? '<span class="tag">duplicate</span>' : x.untradeable ? '<span class="tag">untradeable</span>' : '<span class="tag no">tradeable</span>');
+      const tag = (x) => (x.market ? `<span class="tag no">buy ${fmt(x.price)}</span>` : x.storage ? '<span class="tag">storage</span>' : x.duplicate ? '<span class="tag">duplicate</span>' : x.untradeable ? '<span class="tag">untradeable</span>' : '<span class="tag no">tradeable</span>');
+      const slots = p.slots || [];
+      const buys = (p.buys || []).length;
+      const chemOn = p.entry.parsed.constraints.needsSearch;
       plan.innerHTML = `<h4>Solution — ${esc(p.set.name)}</h4>
         <p class="note" style="margin:0 0 8px">✓ none from your squad (${sbc.guard ? sbc.guard.itemIds.size : 0} protected) · ✓ all ≤ ${engine.cfg.sbcMaxRating}${engine.cfg.sbcUseSpecials ? '' : ' · ✓ no specials'}${engine.cfg.sbcUseTradeables ? '' : ' · ✓ untradeables only'}</p>
-        <div class="kpi"><div><b>${p.solution.players.length}</b>Players</div><div><b>${p.solution.rating || '—'}</b>Rating</div><div><b>${p.solution.players.filter((x) => x.rare).length}</b>Rares</div></div>
-        <div class="list">${p.solution.players.slice().sort((a, b) => b.rating - a.rating).map((x) => `<div class="li"><span class="t"><b>${esc(x.name)}${tag(x)}</b></span><b>${x.rating}</b></div>`).join('')}</div>
-        <button class="btn" data-a="sbc-submit" style="background:var(--green);color:var(--green-ink);border-color:var(--green)">Submit${engine.cfg.sbcRepeat > 1 ? ` (up to ${engine.cfg.sbcRepeat}×)` : ''}</button>
-        <button class="btn" data-a="sbc-fill">Fill squad only (check it in the Web App)</button>
+        <div class="kpi"><div><b>${p.solution.rating || '—'}</b>Rating</div><div><b>${chemOn ? `${p.solution.chem ?? '—'}` : p.solution.players.filter((x) => x.rare).length}</b>${chemOn ? 'Chemistry' : 'Rares'}</div><div><b>${buys ? fmt(p.buyTotal) : '0'}</b>${buys ? `To buy (${buys})` : 'Coins'}</div></div>
+        <div class="list">${p.solution.players.map((x, i) => ({ x, pos: slots[i] })).sort((a, b) => (chemOn ? 0 : b.x.rating - a.x.rating)).map(({ x, pos }) => `<div class="li"><span class="t"><b>${chemOn && pos ? `${esc(pos)} · ` : ''}${esc(x.name)}${tag(x)}</b></span><b>${x.rating}</b></div>`).join('')}</div>
+        <button class="btn" data-a="sbc-submit" style="background:var(--green);color:var(--green-ink);border-color:var(--green)">${buys ? `Buy ${buys} for ${fmt(p.buyTotal)} & submit` : 'Submit'}${engine.cfg.sbcRepeat > 1 ? ` (up to ${engine.cfg.sbcRepeat}×)` : ''}</button>
+        <button class="btn" data-a="sbc-fill">${buys ? `Buy ${buys} & fill squad only` : 'Fill squad only (check it in the Web App)'}</button>
         <button class="btn red" data-a="sbc-discard">Discard</button>`;
     },
 

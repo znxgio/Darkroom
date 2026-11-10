@@ -59,7 +59,7 @@ function installMock() {
   const sbcSquad = {
     players: [],
     getNumOfRequiredPlayers: () => 11,
-    getFieldPlayers: () => Array.from({ length: 11 }, (_, index) => ({ index, isBrick: () => false })),
+    getFieldPlayers: () => ['GK', 'RB', 'CB', 'CB', 'LB', 'CM', 'CM', 'CM', 'RW', 'ST', 'LW'].map((typeName, index) => ({ index, isBrick: () => false, position: { typeName } })),
     removeAllItems() { this.players = []; },
     setPlayers(arr) { this.players = arr.filter(Boolean); },
   };
@@ -68,8 +68,12 @@ function installMock() {
     eligibilityRequirements: [{ scope: 0, count: -1, kvPairs: { _collection: { 19: [84] } } }, { scope: 0, count: 2, kvPairs: { _collection: { 25: [4] } } }] });
   const chemChallenge = { id: 78, name: 'League & Nation', squad: sbcSquad, isCompleted: () => false,
     eligibilityRequirements: [{ scope: 0, count: 3, kvPairs: { _collection: { 5: [3] } } }, { scope: 0, count: -1, kvPairs: { _collection: { 35: [20] } } }] };
+  // needs an 87-rated squad: more than the club (max 86 allowed) can do → buys fill-ins
+  const eliteChallenge = { id: 79, name: 'Elite 87', squad: sbcSquad, isCompleted: () => false,
+    eligibilityRequirements: [{ scope: 0, count: -1, kvPairs: { _collection: { 19: [87] } } }] };
   const sets = [{ id: 1, name: '84+ Upgrade', description: 'Repeatable', isComplete: () => false, repeatable: true, timesCompleted: 0 },
-    { id: 2, name: 'Hybrid Leagues', description: 'Chemistry', isComplete: () => false }];
+    { id: 2, name: 'Hybrid Leagues', description: 'Chemistry', isComplete: () => false },
+    { id: 3, name: 'Elite 87', description: 'Needs buys', isComplete: () => false }];
 
   window.services = {
     User: { getUser: () => ({ coins: { amount: 120000 } }) },
@@ -78,6 +82,14 @@ function installMock() {
       clearTransferMarketCache() {},
       searchTransferMarket(c) {
         T.searches.push({ league: c.league, nation: c.nation, pos: c._position, max: c.maxBuy, min: c.minBuy });
+        if (!c._position && c.level === 'gold') {
+          // cheap tradeable gold fodder on the market, a few of each rating
+          const fod = [];
+          [[84, 900], [85, 1400], [86, 2200], [87, 3200], [88, 5000], [89, 9000]].forEach(([r, price]) => {
+            for (let k = 0; k < 3; k++) fod.push(mk(4000 + r * 10 + k, r, { pos: ['CB', 'CM', 'ST'][k], league: 53 + k, nation: 30 + k, untradeable: false, name: `Market ${r}-${k}`, price: price + k * 100 }));
+          });
+          return obs({ success: true, data: { items: fod.filter((i) => (!c.maxBuy || i._auction.buyNowPrice <= c.maxBuy) && (!c.minBuy || i._auction.buyNowPrice >= c.minBuy)) } });
+        }
         const items = c._position === 'ST' ? [
           mk(800, 86, { pos: 'ST', league: 13, nation: 10, name: 'Same League ST 86', price: 45000 }),
           mk(801, 88, { pos: 'ST', league: 53, nation: 99, name: 'Other League ST 88', price: 60000 }),
@@ -96,6 +108,7 @@ function installMock() {
         items.forEach((it) => { T.unassigned = T.unassigned.filter((u) => u !== it); it.pile = pile; T.piles[key].push(it.rating); });
         return obs({ success: true });
       },
+      bid(item, price) { T.sbcBought = (T.sbcBought || []).concat([{ r: item.rating, price }]); T.coins -= price; return obs({ success: true }); },
       discard(items) { items.forEach((it) => { T.unassigned = T.unassigned.filter((u) => u !== it); T.piles.discarded.push(it.rating); }); return obs({ success: true }); },
     },
     Club: {
@@ -107,7 +120,7 @@ function installMock() {
       create(name, formation, items) { T.created = { name, formation, n: items.filter(Boolean).length, ratings: items.map((i) => i && i.rating) }; return obs({ success: true }); } },
     SBC: {
       requestSets: () => obs({ success: true, data: { sets } }),
-      requestChallengesForSet: (set) => obs({ success: true, data: { challenges: set.id === 1 ? (done < 2 ? [challenge()] : []) : [chemChallenge] } }),
+      requestChallengesForSet: (set) => obs({ success: true, data: { challenges: set.id === 1 ? (done < 2 ? [challenge()] : []) : set.id === 3 ? [eliteChallenge] : [chemChallenge] } }),
       loadChallenge: () => obs({ success: true }),
       saveChallenge: () => obs({ success: true }),
       submitChallenge(ch) {

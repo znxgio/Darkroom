@@ -11,6 +11,7 @@ const check = (name, ok, info = '') => results.push(`${ok ? 'PASS' : 'FAIL'}  ${
 
 const { installMock } = require('./mock-webapp');
 
+let lastPage = null; // for printing the activity log when a step fails
 async function page(b, mobile) {
   const ctx = await b.newContext(mobile ? devices['iPhone 13'] : { viewport: { width: 1280, height: 900 }, deviceScaleFactor: 2 });
   const p = await ctx.newPage();
@@ -21,6 +22,7 @@ async function page(b, mobile) {
   await p.evaluate(installMock);
   await p.addScriptTag({ content: SCRIPT });
   await p.waitForSelector('#fcs');
+  lastPage = p;
   return p;
 }
 const log = (p) => p.evaluate(() => [...document.querySelectorAll('#fcs [data-r=log] div')].reverse().map((d) => d.textContent.replace(/^\d\d:\d\d:\d\d\s*/, '')));
@@ -62,15 +64,16 @@ const idle = (p, ms = 150000) => p.waitForFunction(() => !document.querySelector
   await p.click('#fcs [data-a=sbc-load]');
   await p.waitForSelector('#fcs [data-a=sbc-set]');
   await p.click('#fcs [data-a=sbc-set][data-i="1"]');
-  await p.waitForFunction(() => /needs/.test(document.querySelector('#fcs [data-r=sbc]').textContent));
-  check('chemistry/league SBC marked manual', /needs same league count, chemistry/.test(await p.textContent('#fcs [data-r=sbc]')));
+  await p.waitForFunction(() => /League & Nation/.test(document.querySelector('#fcs [data-r=sbc]').textContent));
   await idle(p);
+  const chemText = await p.textContent('#fcs [data-r=sbc]');
+  check('chemistry/league SBC is now auto', /League & Nation\s*auto/.test(chemText) && /Chemistry ≥ 20/.test(chemText), chemText.replace(/\s+/g, ' ').slice(0, 200));
   await p.click('#fcs [data-a=sbc-set][data-i="0"]');
-  await p.waitForSelector('#fcs [data-a=sbc-solve]');
+  await p.waitForSelector('#fcs [data-a=sbc-solve][data-i="0"]');
   const reqText = await p.textContent('#fcs [data-r=sbc]');
   check('requirements shown readable', /Team rating ≥ 84/.test(reqText) && /2× Rare/.test(reqText), reqText.slice(0, 160));
   await idle(p);
-  await p.click('#fcs [data-a=sbc-solve]');
+  await p.click('#fcs [data-a=sbc-solve][data-i="0"]');
   await p.waitForSelector('#fcs [data-a=sbc-submit]', { timeout: 60000 });
   await idle(p);
   await p.screenshot({ path: `${S}/t-sbc-plan.png` });
@@ -86,6 +89,39 @@ const idle = (p, ms = 150000) => p.waitForFunction(() => !document.querySelector
   check('no player used twice', new Set(sub.flat().map((x) => x.id)).size === sub.flat().length);
   check('never uses tradeables', sub.flat().every((x) => x.untradeable) && !sub.flat().some((x) => x.r === 87));
   check('storage players used first', sub[0].filter((x) => x.pile === 6).length === 2, `${sub[0].filter((x) => x.pile === 6).length} storage`);
+  // ---- chemistry SBC solved from the club with positions
+  await p.click('#fcs [data-a=sbc-solve][data-i="1"]');
+  await p.waitForSelector('#fcs [data-a=sbc-submit]', { timeout: 120000 });
+  await idle(p);
+  const chemPlan = await p.textContent('#fcs [data-r=plan]');
+  const chemVal = Number((chemPlan.match(/(\d+)Chemistry/) || [])[1]);
+  check('chemistry SBC solved with chem ≥ 20', chemVal >= 20, chemPlan.replace(/\s+/g, ' ').slice(0, 160));
+  check('plan shows positions for chemistry', /GK · /.test(chemPlan) && /ST · /.test(chemPlan));
+  await p.click('#fcs [data-a=sbc-discard]');
+
+  // ---- Elite 87: club can't do it → buys cheap fill-ins, then submits
+  await p.fill('#fcs [data-k=sbcBuyLimit]', '50000');
+  await p.press('#fcs [data-k=sbcBuyLimit]', 'Tab');
+  await p.click('#fcs [data-a=sbc-set][data-i="2"]');
+  await p.waitForSelector('#fcs [data-a=sbc-solve][data-i="2"]');
+  await idle(p);
+  await p.click('#fcs [data-a=sbc-solve][data-i="2"]');
+  await p.waitForSelector('#fcs [data-a=sbc-submit]', { timeout: 200000 });
+  await idle(p);
+  const elitePlan = await p.textContent('#fcs [data-r=plan]');
+  check('plan shows fill-ins to buy and cost', /Buy \d+ for [\d,]+ & submit/.test(elitePlan) && /buy [\d,]+/.test(elitePlan), elitePlan.replace(/\s+/g, ' ').slice(0, 200));
+  await p.screenshot({ path: `${S}/t-sbc-buy.png` });
+  const before = (await p.evaluate(() => T.submitted.length));
+  await p.click('#fcs [data-a=sbc-submit]');
+  await idle(p, 200000);
+  const T2 = await p.evaluate(() => ({ sbcBought: T.sbcBought || [], submitted: T.submitted, club: T.piles.club }));
+  const last = T2.submitted[T2.submitted.length - 1];
+  check('bought the fill-ins within the limit', T2.sbcBought.length >= 1 && T2.sbcBought.reduce((a, x) => a + x.price, 0) <= 50000, JSON.stringify(T2.sbcBought));
+  check('moved them to the club', T2.club.length >= T2.sbcBought.length);
+  check('uses your own players first, buys only the gaps', T2.sbcBought.length < 11 && last.some((x) => x.untradeable), `${T2.sbcBought.length} bought, ${last.filter((x) => x.untradeable).length} from club`);
+  check('Elite 87 submitted at ≥ 87', T2.submitted.length === before + 1 && rating(last.map((x) => x.r)) >= 87, last && rating(last.map((x) => x.r)));
+  check('fill-ins never include a card you own', !last.some((x) => x.def >= 100 && x.def <= 110));
+
   check('active squad protected (starters)', !sub.flat().some((x) => x.def >= 100 && x.def <= 110));
   check('subs and reserves protected', !sub.flat().some((x) => x.def === 650 || x.def === 651));
   check('special cards not used', !sub.flat().some((x) => x.def >= 660 && x.def < 670));
@@ -179,4 +215,9 @@ const idle = (p, ms = 150000) => p.waitForFunction(() => !document.querySelector
   await b.close();
   console.log('\n' + results.join('\n'));
   if (results.some((r) => r.startsWith('FAIL'))) process.exit(1);
-})().catch((e) => { console.error(e); console.log('\n' + results.join('\n')); process.exit(1); });
+})().catch(async (e) => {
+  console.error(e);
+  if (lastPage) console.log('log at failure:\n  ' + (await log(lastPage).catch(() => [])).slice(-15).join('\n  '));
+  console.log('\n' + results.join('\n'));
+  process.exit(1);
+});
