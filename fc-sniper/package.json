@@ -1,0 +1,9 @@
+{
+  "name": "fc-sniper",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Transfer-market sniper userscript for the EA SPORTS FC Ultimate Team Web App",
+  "scripts": {
+    "test": "node --test test/core.test.js"
+  }
+}
