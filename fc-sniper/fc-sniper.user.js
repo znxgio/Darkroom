@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FC Sniper
 // @namespace    https://github.com/znxgio/darkroom
-// @version      1.2.2
+// @version      1.2.3
 // @description  Sniper, pack opener, SBC solver and team upgrade advisor for the EA SPORTS FC Ultimate Team Web App, with built-in safety limits.
 // @match        https://www.ea.com/*ultimate-team/web-app*
 // @match        https://www.ea.com/ea-sports-fc/ultimate-team/web-app*
@@ -1925,28 +1925,61 @@
         if (!squad) throw new Error('could not read your active squad');
         const fieldSlots = squad.getFieldPlayers().slice(0, 11);
         const curSlots = fieldSlots.map((s) => (s.position ? normPos(s.position.typeName ?? s.position.id) : '?'));
-        const curPlayers = fieldSlots.map((s) => (s.item && s.item.definitionId ? { ...fut.toPlayer(s.item), itemId: s.item.id } : null));
-        const curFormation = (typeof squad.getFormation === 'function' && squad.getFormation() && squad.getFormation().name) || '';
+        const asPlayer = (item) => ({ ...fut.toPlayer(item), itemId: item.id, id: item.definitionId });
+        const curPlayers = fieldSlots.map((s) => (s.item && s.item.definitionId ? asPlayer(s.item) : null));
+        const fObj = typeof squad.getFormation === 'function' && squad.getFormation();
+        const curFormation = (fObj && (fObj.name || fObj.typeName)) || '';
+        const curLabel = (FORMATIONS[curFormation] && FORMATIONS[curFormation].label) || curFormation.replace(/^f/, '') || 'Current';
         const cur = lineupScore(curPlayers, curSlots);
 
+        // Your players: whole active squad (starters, subs, reserves) + the club.
+        const pool = new Map();
+        const allSquad = typeof squad.getPlayers === 'function' ? squad.getPlayers() : fieldSlots;
+        for (const s of allSquad) {
+          const it = s && (s.item || s);
+          if (it && it.definitionId) pool.set(it.id, asPlayer(it));
+        }
         const owned = await fut.clubPlayers((n) => engine.setStatus('pricing', `Reading your club… ${n}`), { storage: false });
-        jobs.check(owned, 'reading your club');
-        const club = owned.items.map((item) => ({ ...fut.toPlayer(item), itemId: item.id, id: item.definitionId }))
-          .filter((p) => p.player && !p.loan);
+        if (owned.ok) owned.items.forEach((it) => { if (it && it.definitionId) pool.set(it.id, asPlayer(it)); });
+        else ui.log(`Club couldn't be read (EA status ${owned.status}) — using your squad only`, 'warn');
+        const club = [...pool.values()].filter((p) => p.player && !p.loan && p.positions.length);
+        // one card per player (duplicates of the same card can't both play)
+        const byCard = new Map();
+        club.forEach((p) => { if (!byCard.has(p.id) || byCard.get(p.id).rating < p.rating) byCard.set(p.id, p); });
+        const players = [...byCard.values()];
+
+        const perPos = {};
+        players.forEach((p) => p.positions.forEach((x) => { perPos[x] = (perPos[x] || 0) + 1; }));
+        ui.log(`Read ${players.length} players · ${Object.entries(perPos).sort((x, y) => y[1] - x[1]).map(([k, v]) => `${k} ${v}`).join(', ')}`, 'muted');
+        debugLog.push(`formations: squad slots ${curSlots.join(',')} · formation ${curFormation} · sample positions ${players.slice(0, 3).map((p) => `${p.name}:${JSON.stringify(p.positions)}`).join(' ')}`);
+
         engine.setStatus('pricing', 'Building the best XI for each formation…');
         await sleep(30);
-        const list = [{ id: curFormation, label: `${(FORMATIONS[curFormation] || {}).label || curFormation || 'Current'} (yours now)`, rating: cur.rating, chem: cur.chem, score: cur.score, lineup: curPlayers, slots: curSlots, current: true }];
+        const curIds = new Set(curPlayers.filter(Boolean).map((p) => p.id));
+        const describe = (lineup) => {
+          const ins = lineup.filter((p) => p && !curIds.has(p.id));
+          const ids = new Set(lineup.filter(Boolean).map((p) => p.id));
+          const outs = curPlayers.filter((p) => p && !ids.has(p.id));
+          return { ins, outs };
+        };
+        const list = [{ id: curFormation, label: `${curLabel} (yours now)`, rating: cur.rating, chem: cur.chem, score: cur.score, lineup: curPlayers, slots: curSlots, current: true, filled: curPlayers.filter(Boolean).length, ins: [], outs: [] }];
+        // Best XI in the formation you already use.
+        const same = bestLineup(players, curSlots);
+        if (same.filled >= 11) list.push({ id: curFormation, label: `${curLabel} — best XI`, rating: same.rating, chem: same.chem, score: same.score, lineup: same.lineup, slots: curSlots, filled: same.filled, ...describe(same.lineup) });
         for (const [id, f] of Object.entries(FORMATIONS)) {
-          const best = bestLineup(club, f.slots);
-          if (best.filled < 11) continue;
-          list.push({ id, label: f.label, rating: best.rating, chem: best.chem, score: best.score, lineup: best.lineup, slots: f.slots });
+          if (id === curFormation) continue;
+          const best = bestLineup(players, f.slots);
+          const missing = f.slots.filter((_, i) => !best.lineup[i]);
+          list.push({ id, label: f.label, rating: best.rating, chem: best.chem, score: best.score, lineup: best.lineup, slots: f.slots, filled: best.filled, missing, ...describe(best.lineup) });
         }
-        list.sort((a, b) => b.score - a.score);
+        list.sort((x, y) => (y.filled === 11) - (x.filled === 11) || y.score - x.score);
         this.formations = list;
-        this.currentIds = new Set(curPlayers.filter(Boolean).map((p) => p.id));
+        this.currentIds = curIds;
+        ui.formOpen = list.findIndex((f) => !f.current && f.filled === 11);
         ui.renderFormations();
-        const top = list[0];
-        ui.log(top.current ? 'Your current lineup is already the best of the formations compared' : `Best: ${top.label} — rating ${top.rating}, chemistry ${top.chem}/33 (now ${cur.rating} / ${cur.chem})`, 'ok');
+        const top = list.find((f) => f.filled === 11);
+        if (!top || top.current) ui.log(`Your current lineup is already the best option (rating ${cur.rating}, chemistry ${cur.chem}/33)`, 'ok');
+        else ui.log(`Best: ${top.label} — rating ${top.rating}, chemistry ${top.chem}/33 (now ${cur.rating} / ${cur.chem}) · ${top.ins.length} change${top.ins.length === 1 ? '' : 's'}`, 'ok');
       });
     },
 
@@ -2585,13 +2618,26 @@
 
     renderFormations() {
       const list = upgrades.formations;
-      const curIds = upgrades.currentIds || new Set();
-      this.q('[data-r=forms]').innerHTML = list.length ? `<div class="list">${list.map((f, i) => `
-        <div class="li"><span class="t"><b>${i === 0 ? '⭐ ' : ''}${esc(f.label)}</b><small>rating ${f.rating} · chemistry ${f.chem}/33</small></span>
+      const names = (arr) => arr.map((p) => `${esc(p.name)} ${p.rating}`).join(', ');
+      this.q('[data-r=forms]').innerHTML = list.length ? `<div class="list">${list.map((f, i) => {
+        const full = f.filled === 11;
+        const best = full && !f.current && list.findIndex((x) => x.filled === 11) === i;
+        let sub;
+        if (f.current) sub = `rating ${f.rating} · chemistry ${f.chem}/33`;
+        else if (!full) sub = `can’t fill: no ${[...new Set(f.missing)].join(', ')} in your club`;
+        else {
+          const dR = f.rating - list.find((x) => x.current).rating;
+          const dC = f.chem - list.find((x) => x.current).chem;
+          sub = `rating ${f.rating} (${dR >= 0 ? '+' : ''}${dR}) · chemistry ${f.chem}/33 (${dC >= 0 ? '+' : ''}${dC}) · ${f.ins.length ? `${f.ins.length} change${f.ins.length === 1 ? '' : 's'}` : 'same players'}`;
+        }
+        const detail = this.formOpen === i ? `<div class="sub">
+          ${!f.current && f.ins.length ? `<p class="note" style="margin:4px 0"><span class="up">In:</span> ${names(f.ins)}<br><span class="down">Out:</span> ${names(f.outs) || '—'}</p>` : ''}
+          ${f.lineup.map((p, k) => `<div class="li"><span class="t"><b>${esc(f.slots[k])} · ${p ? esc(p.name) : '—'}</b>
+          <small>${p ? `${p.rating}${!f.current && !(upgrades.currentIds || new Set()).has(p.id) ? ' · <span class="up">new in XI</span>' : ''}` : 'nobody fits'}</small></span></div>`).join('')}</div>` : '';
+        return `<div class="li"><span class="t"><b>${best ? '⭐ ' : ''}${esc(f.label)}</b><small>${sub}</small></span>
           <button class="mini" data-a="form-view" data-i="${i}">${this.formOpen === i ? 'Hide' : 'View'}</button>
-          ${f.current ? '' : `<button class="mini go2" data-a="form-create" data-i="${i}">Create squad</button>`}</div>
-        ${this.formOpen === i ? `<div class="sub">${f.lineup.map((p, k) => `<div class="li"><span class="t"><b>${esc(f.slots[k])} · ${p ? esc(p.name) : '—'}</b>
-          <small>${p ? `${p.rating}${!f.current && !curIds.has(p.id) ? ' · <span class="up">new in XI</span>' : ''}` : 'nobody fits'}</small></span></div>`).join('')}</div>` : ''}`).join('')}</div>`
+          ${!f.current && full ? `<button class="mini go2" data-a="form-create" data-i="${i}">Create squad</button>` : ''}</div>${detail}`;
+      }).join('')}</div>`
         : '<p class="empty">Compares your lineup with popular competitive formations, built from players you own.</p>';
     },
 
