@@ -569,3 +569,38 @@ test('rankHot: demand and supply win, over-budget and thin cards drop out', () =
   assert.deepEqual(r.map((x) => x.name), ['Busy', 'Quiet']);
   assert.ok(r[0].score > r[1].score);
 });
+
+// ---- meta lineups -----------------------------------------------------------------
+
+test('readStats handles different Web App field shapes', () => {
+  assert.deepEqual(c.readStats({ attributes: [95, 88, 80, 92, 40, 78], skillMoves: 5, weakFoot: 4 }),
+    { stats: { pac: 95, sho: 88, pas: 80, dri: 92, def: 40, phy: 78 }, skillMoves: 5, weakFoot: 4 });
+  assert.deepEqual(c.readStats({ _attributes: [{ value: 70 }, { value: 60 }, { value: 65 }, { value: 68 }, { value: 80 }, { value: 85 }] }).stats,
+    { pac: 70, sho: 60, pas: 65, dri: 68, def: 80, phy: 85 });
+  assert.equal(c.readStats({ rating: 80 }).stats, null);
+  assert.equal(c.readStats({ weakFootAbilityTypeCode: 3 }).weakFoot, 3);
+});
+
+test('metaScore weights the stats that matter per position', () => {
+  const fastST = { rating: 86, stats: { pac: 97, sho: 87, pas: 75, dri: 90, def: 35, phy: 76 }, skillMoves: 4, weakFoot: 4 };
+  const slowST = { rating: 88, stats: { pac: 68, sho: 91, pas: 78, dri: 82, def: 40, phy: 85 }, skillMoves: 3, weakFoot: 3 };
+  assert.ok(c.metaScore(fastST, 'ST') > c.metaScore(slowST, 'ST'), 'pacey striker is more meta');
+  const cb = { rating: 85, stats: { pac: 82, sho: 40, pas: 65, dri: 66, def: 86, phy: 87 } };
+  assert.ok(c.metaScore(cb, 'CB') > c.metaScore(cb, 'ST'));
+  assert.equal(c.metaScore({ rating: 84 }, 'ST'), 84, 'falls back to rating');
+  assert.equal(c.metaScore({ rating: 84, stats: cb.stats }, 'GK'), 84);
+});
+
+test('bestLineup by meta picks the pacey striker, by rating the higher-rated one', () => {
+  let id = 0;
+  const mk = (pos, rating, stats) => ({ id: ++id, rating, positions: [pos], leagueId: 13, nationId: 1, teamId: id, stats });
+  const base = ['GK', 'RB', 'CB', 'CB', 'LB', 'CM', 'CM', 'CM', 'RW', 'LW'].map((p) => mk(p, 84));
+  const fast = mk('ST', 86, { pac: 97, sho: 87, pas: 75, dri: 90, def: 35, phy: 76 });
+  const slow = mk('ST', 88, { pac: 68, sho: 91, pas: 78, dri: 82, def: 40, phy: 85 });
+  const slots = c.FORMATIONS.f433.slots;
+  const byMeta = c.bestLineup([...base, fast, slow], slots, { by: 'meta' });
+  const byRating = c.bestLineup([...base, fast, slow], slots, { by: 'rating' });
+  assert.equal(byMeta.lineup[slots.indexOf('ST')].id, fast.id);
+  assert.equal(byRating.lineup[slots.indexOf('ST')].id, slow.id);
+  assert.ok(byMeta.meta > 0);
+});

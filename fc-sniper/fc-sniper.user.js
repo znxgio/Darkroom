@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FC Sniper
 // @namespace    https://github.com/znxgio/darkroom
-// @version      1.4.0
+// @version      1.5.0
 // @description  Sniper, pack opener, SBC solver and team upgrade advisor for the EA SPORTS FC Ultimate Team Web App, with built-in safety limits.
 // @match        https://www.ea.com/*ultimate-team/web-app*
 // @match        https://www.ea.com/ea-sports-fc/ultimate-team/web-app*
@@ -626,6 +626,62 @@
     f3421: { label: '3-4-2-1', slots: ['GK', 'CB', 'CB', 'CB', 'RM', 'CM', 'CM', 'LM', 'CF', 'CF', 'ST'] },
   };
 
+  /**
+   * Which face stats matter for each position — a stat-based take on "meta"
+   * (pace and dribbling up front, defending and physical at the back).
+   * Weights per position: [PAC, SHO, PAS, DRI, DEF, PHY].
+   */
+  const META_WEIGHTS = {
+    ST: [0.30, 0.30, 0.05, 0.20, 0, 0.15], CF: [0.25, 0.25, 0.15, 0.30, 0, 0.05],
+    RW: [0.35, 0.15, 0.15, 0.30, 0, 0.05], LW: [0.35, 0.15, 0.15, 0.30, 0, 0.05],
+    RM: [0.35, 0.10, 0.20, 0.30, 0, 0.05], LM: [0.35, 0.10, 0.20, 0.30, 0, 0.05],
+    CAM: [0.15, 0.20, 0.30, 0.30, 0, 0.05], CM: [0.10, 0.05, 0.30, 0.25, 0.15, 0.15],
+    CDM: [0.15, 0, 0.20, 0.05, 0.30, 0.30],
+    RB: [0.35, 0, 0.15, 0.05, 0.30, 0.15], LB: [0.35, 0, 0.15, 0.05, 0.30, 0.15],
+    RWB: [0.35, 0, 0.15, 0.15, 0.20, 0.15], LWB: [0.35, 0, 0.15, 0.15, 0.20, 0.15],
+    CB: [0.30, 0, 0.05, 0, 0.40, 0.25],
+  };
+  const ATTACKING = new Set(['ST', 'CF', 'RW', 'LW', 'RM', 'LM', 'CAM']);
+
+  /**
+   * How good a player is in a position by the stats that matter there, on a
+   * rating-like scale. Falls back to the card rating when stats aren't known.
+   * p: { rating, stats: { pac, sho, pas, dri, def, phy }, skillMoves, weakFoot }
+   */
+  function metaScore(p, pos) {
+    if (!p) return 0;
+    const w = META_WEIGHTS[pos];
+    const st = p.stats;
+    if (!w || !st) return p.rating || 0;
+    const v = [st.pac, st.sho, st.pas, st.dri, st.def, st.phy];
+    let score = v.reduce((a, x, i) => a + (x || 0) * w[i], 0);
+    if (ATTACKING.has(pos)) {
+      if (p.skillMoves >= 4) score += 1;
+      if (p.weakFoot >= 4) score += 1;
+    } else if (pos === 'CM' && p.weakFoot >= 4) score += 0.5;
+    // keep the card's overall in the picture so a 70-rated speedster doesn't win on pace alone
+    return Math.round((score * 0.7 + (p.rating || 0) * 0.3) * 10) / 10;
+  }
+
+  /**
+   * Face stats, skill moves and weak foot from a Web App item, whatever the
+   * field names are in this version. Returns { stats|null, skillMoves, weakFoot }.
+   */
+  function readStats(item) {
+    const raw = item.attributes ?? item._attributes ?? item.attributeArray ?? (item._staticData && item._staticData.attributes);
+    let stats = null;
+    if (Array.isArray(raw) && raw.length >= 6) {
+      const v = raw.slice(0, 6).map((a) => (typeof a === 'number' ? a : Number(a && (a.value ?? a.val ?? a.rating)) || 0));
+      if (v.some((x) => x > 0)) stats = { pac: v[0], sho: v[1], pas: v[2], dri: v[3], def: v[4], phy: v[5] };
+    }
+    const num = (...xs) => { for (const x of xs) if (x !== undefined && x !== null && !Number.isNaN(Number(x))) return Number(x); return 0; };
+    return {
+      stats,
+      skillMoves: num(item.skillMoves, item._skillMoves, item.skillmoves),
+      weakFoot: num(item.weakFoot, item._weakFoot, item.weakFootAbilityTypeCode, item.weakfoot),
+    };
+  }
+
   /** Squad rating with decimals (no rounding) — smooth enough to optimise against. */
   function squadRatingExact(ratings, size = 11) {
     const list = ratings.filter((r) => r > 0);
@@ -635,11 +691,18 @@
     return (sum + list.reduce((a, r) => a + Math.max(0, r - avg), 0)) / size;
   }
 
-  /** Score of a lineup: rating matters most, chemistry next. */
-  function lineupScore(lineup, slots, chemWeight = 0.6) {
+  /**
+   * Score of a lineup. By 'meta': the position-weighted stats of each player;
+   * by 'rating': the squad rating. Chemistry counts in both.
+   */
+  function lineupScore(lineup, slots, opts = {}) {
+    const chemWeight = opts.chemWeight ?? 0.6;
     const ratings = lineup.map((p) => (p ? p.rating : 0));
     const chem = squadChemistry(lineup.map((p, i) => p && { ...p, inPosition: p.positions.includes(slots[i]) })).total;
-    return { score: squadRatingExact(ratings) * 3 + chem * chemWeight, rating: squadRating(ratings), chem };
+    const metas = lineup.map((p, i) => metaScore(p, slots[i]));
+    const meta = metas.reduce((a, b) => a + b, 0) / slots.length;
+    const base = opts.by === 'meta' ? meta : squadRatingExact(ratings);
+    return { score: base * 3 + chem * chemWeight, rating: squadRating(ratings), chem, meta: Math.round(meta * 10) / 10 };
   }
 
   /**
@@ -649,7 +712,8 @@
    */
   function bestLineup(players, slots, opts = {}) {
     const pool = players.filter((p) => p && p.rating > 0);
-    const fits = slots.map((pos) => pool.filter((p) => p.positions.includes(pos)).sort((a, b) => b.rating - a.rating).slice(0, opts.depth || 12));
+    const value = (p, pos) => (opts.by === 'meta' ? metaScore(p, pos) : p.rating);
+    const fits = slots.map((pos) => pool.filter((p) => p.positions.includes(pos)).sort((a, b) => value(b, pos) - value(a, pos)).slice(0, opts.depth || 12));
     // Fill the scarcest positions first so a rare position isn't left empty.
     const order = slots.map((_, i) => i).sort((a, b) => fits[a].length - fits[b].length);
     const lineup = new Array(slots.length).fill(null);
@@ -658,7 +722,7 @@
       const p = fits[i].find((x) => !used.has(x.id));
       if (p) { lineup[i] = p; used.add(p.id); }
     }
-    let best = lineupScore(lineup, slots, opts.chemWeight);
+    let best = lineupScore(lineup, slots, opts);
     for (let round = 0; round < 6; round++) {
       let improved = false;
       for (let i = 0; i < slots.length; i++) {
@@ -672,13 +736,13 @@
             next[j] = lineup[i];
           }
           next[i] = cand;
-          const sc = lineupScore(next, slots, opts.chemWeight);
+          const sc = lineupScore(next, slots, opts);
           if (sc.score > best.score + 1e-9) { lineup.splice(0, lineup.length, ...next); best = sc; improved = true; }
         }
       }
       if (!improved) break;
     }
-    return { lineup, rating: best.rating, chem: best.chem, score: best.score, filled: lineup.filter(Boolean).length };
+    return { lineup, rating: best.rating, chem: best.chem, meta: best.meta, score: best.score, filled: lineup.filter(Boolean).length };
   }
 
   // ---- SBC solving ------------------------------------------------------------------
@@ -954,6 +1018,7 @@
     // upgrades
     upgradeBudget: 0, // 0 = your coins minus Keep coins
     upgradeMarket: true, // also search the market (uses searches)
+    lineupBy: 'meta', // formation coach: 'meta' (position-weighted stats) or 'rating'
   };
 
   const core = {
@@ -965,7 +1030,7 @@
     aggregateListings, hotScore, rankHot,
     addHistory, summarizeHistory, isDiscordWebhook, discordPayload,
     squadRating, squadChemistry, topValues, rankUpgrades,
-    POS_NAMES, normPos, FORMATIONS, squadRatingExact, lineupScore, bestLineup,
+    POS_NAMES, normPos, FORMATIONS, squadRatingExact, lineupScore, bestLineup, metaScore, readStats,
     fodderValue, playerCost, qualityOf, parseRequirements, solveSbc, sortItem,
     SAFETY, clampConfig, dayKey, usageFor, lockoutFor, formatDuration, canStart,
   };
@@ -981,7 +1046,7 @@
 
   const w = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '1.4.0';
+  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '1.5.0';
   const errText = (e) => (e && e.message ? e.message : String(e));
   const fmt = (n) => Number(n || 0).toLocaleString();
 
@@ -1122,6 +1187,7 @@
         loan: typeof item.isLimitedUse === 'function' ? !!item.isLimitedUse() : false,
         evo: !!item.academy,
         player: typeof item.isPlayer === 'function' ? !!item.isPlayer() : item.type === 'player',
+        ...readStats(item),
         price: auction.buyNowPrice || 0,
         item,
       };
@@ -2301,7 +2367,8 @@
         const fObj = typeof squad.getFormation === 'function' && squad.getFormation();
         const curFormation = (fObj && (fObj.name || fObj.typeName)) || '';
         const curLabel = (FORMATIONS[curFormation] && FORMATIONS[curFormation].label) || curFormation.replace(/^f/, '') || 'Current';
-        const cur = lineupScore(curPlayers, curSlots);
+        const by = engine.cfg.lineupBy || 'meta';
+        const cur = lineupScore(curPlayers, curSlots, { by });
 
         // Your players: whole active squad (starters, subs, reserves) + the club.
         const pool = new Map();
@@ -2321,6 +2388,10 @@
 
         const perPos = {};
         players.forEach((p) => p.positions.forEach((x) => { perPos[x] = (perPos[x] || 0) + 1; }));
+        const withStats = players.filter((p) => p.stats).length;
+        if (by === 'meta') ui.log(withStats ? `Meta: face stats found for ${withStats}/${players.length} players` : 'Meta: this Web App version doesn’t expose face stats — using rating instead', withStats ? 'muted' : 'warn');
+        const sampleItem = allSquad.map((x) => x && (x.item || x)).find((it) => it && it.definitionId);
+        if (sampleItem) debugLog.push(`item keys: ${Object.keys(sampleItem).slice(0, 60).join(',')}`);
         ui.log(`Read ${players.length} players · ${Object.entries(perPos).sort((x, y) => y[1] - x[1]).map(([k, v]) => `${k} ${v}`).join(', ')}`, 'muted');
         debugLog.push(`formations: squad slots ${curSlots.join(',')} · formation ${curFormation} · sample positions ${players.slice(0, 3).map((p) => `${p.name}:${JSON.stringify(p.positions)}`).join(' ')}`);
 
@@ -2333,15 +2404,15 @@
           const outs = curPlayers.filter((p) => p && !ids.has(p.id));
           return { ins, outs };
         };
-        const list = [{ id: curFormation, label: `${curLabel} (yours now)`, rating: cur.rating, chem: cur.chem, score: cur.score, lineup: curPlayers, slots: curSlots, current: true, filled: curPlayers.filter(Boolean).length, ins: [], outs: [] }];
+        const list = [{ id: curFormation, label: `${curLabel} (yours now)`, rating: cur.rating, chem: cur.chem, meta: cur.meta, score: cur.score, lineup: curPlayers, slots: curSlots, current: true, filled: curPlayers.filter(Boolean).length, ins: [], outs: [] }];
         // Best XI in the formation you already use.
-        const same = bestLineup(players, curSlots);
-        if (same.filled >= 11) list.push({ id: curFormation, label: `${curLabel} — best XI`, rating: same.rating, chem: same.chem, score: same.score, lineup: same.lineup, slots: curSlots, filled: same.filled, ...describe(same.lineup) });
+        const same = bestLineup(players, curSlots, { by });
+        if (same.filled >= 11) list.push({ id: curFormation, label: `${curLabel} — best XI`, rating: same.rating, chem: same.chem, meta: same.meta, score: same.score, lineup: same.lineup, slots: curSlots, filled: same.filled, ...describe(same.lineup) });
         for (const [id, f] of Object.entries(FORMATIONS)) {
           if (id === curFormation) continue;
-          const best = bestLineup(players, f.slots);
+          const best = bestLineup(players, f.slots, { by });
           const missing = f.slots.filter((_, i) => !best.lineup[i]);
-          list.push({ id, label: f.label, rating: best.rating, chem: best.chem, score: best.score, lineup: best.lineup, slots: f.slots, filled: best.filled, missing, ...describe(best.lineup) });
+          list.push({ id, label: f.label, rating: best.rating, chem: best.chem, meta: best.meta, score: best.score, lineup: best.lineup, slots: f.slots, filled: best.filled, missing, ...describe(best.lineup) });
         }
         list.sort((x, y) => (y.filled === 11) - (x.filled === 11) || y.score - x.score);
         this.formations = list;
@@ -2507,6 +2578,7 @@
       ['hotLeagues', 'Leagues to scan (IDs)', 'text', '13,53,19,31,16'],
     ],
     squad: [
+      ['lineupBy', 'Best XI by', 'seg', OPT([['meta', 'Meta (stats)'], ['rating', 'Rating']])],
       ['upgradeBudget', 'Budget (0 = my coins)', 'number'],
       ['upgradeMarket', 'Also search the market', 'toggle'],
     ],
@@ -2555,6 +2627,15 @@
       ['discordWebhook', 'Discord webhook', 'text', 'https://discord.com/api/webhooks/…'],
     ],
   };
+
+  /** The two stats that matter most for a position, e.g. " · PAC 95 · DRI 90". */
+  function keyStats(p, pos) {
+    const w = META_WEIGHTS[pos];
+    if (!w || !p.stats) return '';
+    const names = ['PAC', 'SHO', 'PAS', 'DRI', 'DEF', 'PHY'];
+    const vals = [p.stats.pac, p.stats.sho, p.stats.pas, p.stats.dri, p.stats.def, p.stats.phy];
+    return w.map((x, i) => [x, i]).sort((a, b) => b[0] - a[0]).slice(0, 2).map(([, i]) => ` · ${names[i]} ${vals[i]}`).join('');
+  }
 
   const esc = (t) => String(t ?? '').replace(/[&<>"']/g, (ch) => `&#${ch.charCodeAt(0)};`);
 
@@ -3178,17 +3259,18 @@
         const full = f.filled === 11;
         const best = full && !f.current && list.findIndex((x) => x.filled === 11) === i;
         let sub;
-        if (f.current) sub = `rating ${f.rating} · chemistry ${f.chem}/33`;
+        const metaTxt = engine.cfg.lineupBy === 'meta' && f.meta ? ` · meta ${f.meta}` : '';
+        if (f.current) sub = `rating ${f.rating} · chemistry ${f.chem}/33${metaTxt}`;
         else if (!full) sub = `can’t fill: no ${[...new Set(f.missing)].join(', ')} in your club`;
         else {
           const dR = f.rating - list.find((x) => x.current).rating;
           const dC = f.chem - list.find((x) => x.current).chem;
-          sub = `rating ${f.rating} (${dR >= 0 ? '+' : ''}${dR}) · chemistry ${f.chem}/33 (${dC >= 0 ? '+' : ''}${dC}) · ${f.ins.length ? `${f.ins.length} change${f.ins.length === 1 ? '' : 's'}` : 'same players'}`;
+          sub = `rating ${f.rating} (${dR >= 0 ? '+' : ''}${dR}) · chemistry ${f.chem}/33 (${dC >= 0 ? '+' : ''}${dC})${metaTxt} · ${f.ins.length ? `${f.ins.length} change${f.ins.length === 1 ? '' : 's'}` : 'same players'}`;
         }
         const detail = this.formOpen === i ? `<div class="sub">
           ${!f.current && f.ins.length ? `<p class="note" style="margin:4px 0"><span class="up">In:</span> ${names(f.ins)}<br><span class="down">Out:</span> ${names(f.outs) || '—'}</p>` : ''}
           ${f.lineup.map((p, k) => `<div class="li"><span class="t"><b>${esc(f.slots[k])} · ${p ? esc(p.name) : '—'}</b>
-          <small>${p ? `${p.rating}${!f.current && !(upgrades.currentIds || new Set()).has(p.id) ? ' · <span class="up">new in XI</span>' : ''}` : 'nobody fits'}</small></span></div>`).join('')}</div>` : '';
+          <small>${p ? `${p.rating}${keyStats(p, f.slots[k])}${!f.current && !(upgrades.currentIds || new Set()).has(p.id) ? ' · <span class="up">new in XI</span>' : ''}` : 'nobody fits'}</small></span></div>`).join('')}</div>` : '';
         return `<div class="li"><span class="t"><b>${best ? '⭐ ' : ''}${esc(f.label)}</b><small>${sub}</small></span>
           <button class="mini" data-a="form-view" data-i="${i}">${this.formOpen === i ? 'Hide' : 'View'}</button>
           ${!f.current && full ? `<button class="mini go2" data-a="form-create" data-i="${i}">Create squad</button>` : ''}</div>${detail}`;

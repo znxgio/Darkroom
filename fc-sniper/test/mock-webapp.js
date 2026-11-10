@@ -12,7 +12,7 @@ function installMock() {
     const it = {
       id: nextId++, definitionId: defId, rating, rareflag: o.rare ? 1 : (o.special ? 3 : 0), untradeable: o.untradeable !== false,
       pile: o.pile || PILE.CLUB, nationId: o.nation || 18, leagueId: o.league || 13, teamId: o.team || defId,
-      preferredPosition: o.pos || 'CM', possiblePositions: o.alt || [], _staticData: { name: o.name || `Player ${defId}` },
+      preferredPosition: o.pos || 'CM', possiblePositions: o.alt || [], attributes: o.attrs || [rating - 6, rating - 8, rating - 4, rating - 3, rating - 10, rating - 5], skillMoves: o.sm || 3, weakFoot: o.wf || 3, _staticData: { name: o.name || `Player ${defId}` },
       _auction: o.price ? { tradeId: nextId, buyNowPrice: o.price } : undefined,
       isPlayer() { return o.player !== false; }, isLimitedUse() { return false; },
       isDuplicate() { return o.dup !== undefined ? o.dup : owned.has(defId) && this.pile !== PILE.CLUB; },
@@ -35,6 +35,8 @@ function installMock() {
   // untradeable specials — must not be used unless allowed
   for (let i = 0; i < 6; i++) club.push(mk(660 + i, 83, { special: true, name: `Special 83 ${i}` }));
   club.push(mk(700, 80, { pos: 25, league: 13, name: 'Bench Striker 80' })); // EA sends position ids
+  // a pacey 84 striker: should start over slower, higher-rated strikers when picking by meta
+  club.push(mk(710, 84, { pos: 25, league: 13, nation: 10, name: 'Pacey Striker 84', attrs: [97, 86, 75, 91, 35, 78], sm: 5, wf: 4 }));
   // a bench covering every position, so formations can be built (numeric ids like the real app)
   const ids = { GK: 0, RB: 3, CB: 5, LB: 7, RWB: 2, LWB: 8, CDM: 10, CM: 14, CAM: 18, RM: 12, LM: 16, RW: 23, LW: 27, CF: 21, ST: 25 };
   ['GK', 'RB', 'CB', 'CB', 'CB', 'LB', 'RWB', 'LWB', 'CDM', 'CDM', 'CM', 'CAM', 'CAM', 'RM', 'LM', 'RW', 'LW', 'CF', 'CF', 'ST', 'ST']

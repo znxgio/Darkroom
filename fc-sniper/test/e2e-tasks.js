@@ -102,7 +102,7 @@ const idle = (p, ms = 150000) => p.waitForFunction(() => !document.querySelector
   const order = await p.$$eval('#fcs [data-r=upg] .card:first-child .li b', (els) => els.map((e) => e.textContent));
   check('owned equal upgrade ranks above buying one', order[0].startsWith('Bench ST'), order.join(' | '));
   check('best market suggestion keeps chemistry', order.find((o) => !o.startsWith('Bench')).startsWith('Same League ST 86'), order.join(' | '));
-  check('owned bench striker suggested', order.some((o) => o.startsWith('Bench Striker 80')), order.join(' | '));
+  check('owned strikers suggested', order.filter((o) => /^(Bench|Pacey)/.test(o)).length >= 2, order.join(' | '));
   check('over-budget card excluded', !order.some((o) => /Too Pricey/.test(o)));
   const srch = await p.evaluate(() => T.searches.filter((x) => x.pos === 'ST'));
   check('market searched by league/nation within budget', srch.length >= 2 && srch.every((x) => x.max <= 120000) && srch.some((x) => x.league === 13), JSON.stringify(srch[0]));
@@ -125,6 +125,10 @@ const idle = (p, ms = 150000) => p.waitForFunction(() => !document.querySelector
   await idle(p);
   const created = await p.evaluate(() => T.created);
   check('creates a new squad with 11 players', created && created.n === 11 && /^f\d/.test(created.formation), JSON.stringify(created));
+  check('meta: face stats read', (await log(p)).some((l) => /Meta: face stats found for \d+\/\d+ players/.test(l)));
+  await p.click('#fcs [data-tab=squad]');
+  const xiText = await p.textContent('#fcs [data-r=forms] .sub');
+  check('meta XI starts the pacey striker and shows key stats', /Pacey Striker 84/.test(xiText) && /PAC 97/.test(xiText), xiText.replace(/\s+/g, ' ').slice(0, 160));
   const flog = (await log(p)).filter((l) => /^Read \d+ players/.test(l));
   check('logs players read per position', flog.length === 1, flog[0]);
   await p.screenshot({ path: `${S}/t-forms.png` });
