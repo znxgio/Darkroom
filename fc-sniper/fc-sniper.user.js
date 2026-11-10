@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FC Sniper
 // @namespace    https://github.com/znxgio/darkroom
-// @version      0.1.0
+// @version      0.2.0
 // @description  Transfer-market sniper / autobuyer for the EA SPORTS FC Ultimate Team Web App.
 // @match        https://www.ea.com/*ultimate-team/web-app*
 // @match        https://www.ea.com/ea-sports-fc/ultimate-team/web-app*
@@ -297,6 +297,7 @@
     stop(reason) {
       if (!this.running) return;
       this.running = false;
+      keepAwake(false);
       ui.log(`Stopped: ${reason}`, 'warn');
       ui.setRunning(false);
     },
@@ -308,6 +309,7 @@
       saveConfig(this.cfg);
       this.running = true;
       ui.setRunning(true);
+      keepAwake(true);
       ui.log(`Started — max buy ${this.cfg.maxBuy.toLocaleString()} coins`);
       let i = 0;
       try {
@@ -383,6 +385,32 @@
   // Sounds
   // ---------------------------------------------------------------------------
 
+  // Phone = touch screen whose short side is phone-sized, or a narrow window.
+  // (Uses screen size, not CSS width, because pages without a viewport tag
+  // lay out at ~980px on phones.)
+  const isMobile = () => w.innerWidth <= 600
+    || (w.matchMedia('(pointer:coarse)').matches && Math.min(w.screen.width, w.screen.height) <= 600);
+  const vibrate = (pattern) => { try { w.navigator.vibrate && w.navigator.vibrate(pattern); } catch { /* unsupported */ } };
+
+  // Keep the phone screen on while running — mobile browsers pause timers
+  // (and so the bot) as soon as the screen locks or the tab goes to background.
+  let wakeLock = null;
+  async function keepAwake(on) {
+    try {
+      if (on && !wakeLock && w.navigator.wakeLock) {
+        wakeLock = await w.navigator.wakeLock.request('screen');
+        wakeLock.addEventListener('release', () => { wakeLock = null; });
+      } else if (!on && wakeLock) {
+        await wakeLock.release(); wakeLock = null;
+      }
+    } catch { /* not supported or denied */ }
+  }
+  document.addEventListener('visibilitychange', () => {
+    if (!engine.running) return;
+    if (document.visibilityState === 'visible') { keepAwake(true); ui.log('Back in foreground'); }
+    else ui.log('Tab in background — the browser may pause the bot', 'warn');
+  });
+
   let audioCtx;
   function tone(freq, ms) {
     try {
@@ -394,8 +422,8 @@
       o.start(); o.stop(audioCtx.currentTime + ms / 1000);
     } catch { /* no audio */ }
   }
-  function beep() { tone(880, 120); setTimeout(() => tone(1320, 160), 140); }
-  function alarm() { [0, 300, 600].forEach((d) => setTimeout(() => tone(440, 220), d)); }
+  function beep() { tone(880, 120); setTimeout(() => tone(1320, 160), 140); vibrate([80, 40, 80]); }
+  function alarm() { [0, 300, 600].forEach((d) => setTimeout(() => tone(440, 220), d)); vibrate([400, 150, 400, 150, 400]); }
 
   // ---------------------------------------------------------------------------
   // UI panel
@@ -452,7 +480,22 @@
   #fcs .foot{display:flex;gap:6px;padding:8px 10px;border-top:1px solid #2a323b}
   #fcs button{flex:1;border:0;border-radius:6px;padding:7px;font:600 12px system-ui;cursor:pointer;background:#2a323b;color:#e8edf2}
   #fcs button.go{background:#3ddc84;color:#06210f}#fcs button.stop{background:#ff6b6b;color:#2a0606}
-  #fcs header button{flex:0;padding:2px 8px;background:none}`;
+  #fcs header button{flex:0;padding:2px 8px;background:none}
+  #fcs header{touch-action:none}
+  #fcs header button.qt{background:#3ddc84;color:#06210f;padding:3px 10px}#fcs header button.qt.on{background:#ff6b6b;color:#2a0606}
+
+    #fcs.mob{top:auto!important;left:0!important;right:0!important;bottom:0;width:auto;max-height:70vh;border-radius:14px 14px 0 0;
+      font-size:14px;padding-bottom:env(safe-area-inset-bottom)}
+    #fcs.mob header{cursor:default;padding:10px 12px}#fcs.mob header b{font-size:15px}
+    #fcs.mob header button{padding:8px 14px;font-size:16px}#fcs.mob header button.qt{padding:8px 16px}
+    #fcs.mob .body{padding:8px 12px;-webkit-overflow-scrolling:touch;overscroll-behavior:contain}
+    #fcs.mob summary{padding:10px 0;font-size:15px}
+    #fcs.mob label{grid-template-columns:1fr 46%;margin:7px 0}
+    #fcs.mob input,#fcs.mob select{font-size:16px;padding:9px 8px}
+    #fcs.mob input[type=checkbox]{width:22px;height:22px}
+    #fcs.mob .stats span{font-size:16px}
+    #fcs.mob .log{height:120px;font-size:12px}
+    #fcs.mob .foot{padding:10px 12px}#fcs.mob button{padding:13px;font-size:15px}`;
 
   const ui = {
     root: null,
@@ -470,7 +513,7 @@
           return `<label>${label}<input type="${type}" data-k="${key}" value="${v ?? ''}" placeholder="${extra || ''}"></label>`;
         }).join('')}</details>`).join('');
       root.innerHTML = `
-        <header><i class="dot"></i><b>FC Sniper</b><span class="coins"></span><button data-a="min">–</button></header>
+        <header><i class="dot"></i><b>FC Sniper</b><span class="coins"></span><button class="qt" data-a="start">▶</button><button data-a="min">–</button></header>
         <div class="body">${sections}
           <div class="stats">
             <div>Searches<span data-s="searches">0</span></div><div>Bought<span data-s="buys">0</span></div><div>Missed<span data-s="missed">0</span></div>
@@ -494,7 +537,8 @@
       document.addEventListener('keydown', (e) => {
         if (e.altKey && e.key.toLowerCase() === 's') { e.preventDefault(); engine.running ? engine.stop('stopped by user') : engine.start(); }
       });
-      this.log('Ready. Alt+S to start/stop.');
+      if (isMobile()) root.classList.add('mob', 'min');
+      this.log(isMobile() ? 'Ready. Tap ▶ to start, – to expand.' : 'Ready. Alt+S to start/stop.');
     },
     readForm() {
       const cfg = { ...engine.cfg };
@@ -508,9 +552,11 @@
     },
     setRunning(on) {
       this.root.querySelector('.dot').classList.toggle('on', on);
-      const b = this.root.querySelector('[data-a=start]');
-      b.textContent = on ? 'Stop' : 'Start';
-      b.className = on ? 'stop' : 'go';
+      const [quick, main] = this.root.querySelectorAll('[data-a=start]');
+      quick.textContent = on ? '■' : '▶';
+      quick.classList.toggle('on', on);
+      main.textContent = on ? 'Stop' : 'Start';
+      main.className = on ? 'stop' : 'go';
       this.root.querySelectorAll('[data-k]').forEach((el) => { el.disabled = on; });
     },
     renderStats() {
@@ -531,7 +577,7 @@
     makeDraggable(handle) {
       let sx, sy, ox, oy;
       handle.addEventListener('pointerdown', (e) => {
-        if (e.target.closest('button')) return;
+        if (e.target.closest('button') || isMobile()) return;
         const r = this.root.getBoundingClientRect();
         sx = e.clientX; sy = e.clientY; ox = r.left; oy = r.top;
         const move = (ev) => {

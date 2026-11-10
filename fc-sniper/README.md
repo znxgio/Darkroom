@@ -13,6 +13,19 @@ adds a floating control panel.
 2. Create a new script and paste in `fc-sniper.user.js`.
 3. Open the FC Web App, log in, and the **FC Sniper** panel appears top-right.
 
+### On your phone
+Phone browsers need a userscript manager too:
+- **iPhone / iPad:** Safari with the **Userscripts** app (free, App Store) or **Tampermonkey** for Safari.
+  Turn the extension on in Settings → Safari → Extensions, then add the script.
+- **Android:** **Firefox** with the **Tampermonkey** or **Violentmonkey** add-on.
+
+On a phone the panel is a bar along the bottom of the screen. Tap **▶ / ■** to start or stop,
+and **–** to open the full settings sheet. It keeps the screen awake while running and
+vibrates when it buys something (on Android) or gets stopped.
+
+**Keep the Web App open and on screen.** Phones pause web pages when you lock the screen or
+switch apps, and the bot pauses with them. It picks up again when you come back.
+
 ## Use
 
 1. **Player ID(s):** the player's definition ID (it's in the futbin/futwiz player URL or page).
@@ -20,7 +33,7 @@ adds a floating control panel.
 2. **Max buy now:** the most you'll pay. Anything listed at or below this gets bought instantly.
 3. *(Optional)* tick **Auto-list** to relist bought items automatically, either at a fixed
    **Sell price** or automatically at break-even after EA's 5% tax plus **Min profit**.
-4. Press **Start** (or **Alt+S**).
+4. Press **Start** (or **Alt+S** on desktop, **▶** on phone).
 
 ### How it snipes
 - Every search changes the min-bid filter, so EA returns fresh listings instead of cached ones.
