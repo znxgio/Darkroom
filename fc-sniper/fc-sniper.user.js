@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FC Sniper
 // @namespace    https://github.com/znxgio/darkroom
-// @version      1.5.0
+// @version      1.6.0
 // @description  Sniper, pack opener, SBC solver and team upgrade advisor for the EA SPORTS FC Ultimate Team Web App, with built-in safety limits.
 // @match        https://www.ea.com/*ultimate-team/web-app*
 // @match        https://www.ea.com/ea-sports-fc/ultimate-team/web-app*
@@ -143,6 +143,33 @@
   /** Max buy actually used for a player: your manual value, else the price check, else the default. */
   function effectiveMaxBuy(player, cfg) {
     return (player && (player.manualMax || player.maxBuy)) || cfg.maxBuy;
+  }
+
+  // ---- Priority list ----------------------------------------------------------------
+
+  /** Coins the sniper may spend now: your coins minus Keep coins, capped by what's left of the spend limit. */
+  function listSpendable(cfg, coins) {
+    const own = coins - (cfg.minCoins || 0);
+    const left = cfg.spendLimit > 0 ? cfg.spendLimit - (cfg.listSpent || 0) : Infinity;
+    return Math.max(0, Math.min(own, left));
+  }
+
+  /**
+   * "Keep coins for players higher on the list": buying player #idx at `price`
+   * must leave enough for every unbought player above him.
+   */
+  function reserveOk(players, idx, price, spendable, cfg) {
+    if (!cfg.reserveForHigher || idx <= 0) return true;
+    const need = Math.max(0, ...players.slice(0, idx).map((p) => effectiveMaxBuy(p, cfg)));
+    return spendable - price >= need;
+  }
+
+  /** After a list buy: count the spend and (Buy each once) drop the player. */
+  function afterListBuy(cfg, playerId, price) {
+    return {
+      listSpent: (cfg.listSpent || 0) + price,
+      players: cfg.buyOnce ? cfg.players.filter((p) => p.id !== playerId) : cfg.players,
+    };
   }
 
   // ---- Trading (resell) & bidding ------------------------------------------------
@@ -588,13 +615,19 @@
         const chemAfter = squadChemistry(after.map((p, i) => p && { ...p, inPosition: inPos(p, squad[i].position) })).total;
         const ratingGain = ratingAfter - baseRating;
         const chemGain = chemAfter - baseChem;
-        const playerGain = c.rating - ((squad[slotIndex].player && squad[slotIndex].player.rating) || 0);
-        // Rating matters most, chemistry next; owned players are free.
+        const cur = squad[slotIndex].player;
+        // By meta: how much better he is in this position by the stats that matter there.
+        const playerGain = opts.by === 'meta'
+          ? Math.round((metaScore(c, pos) - metaScore(cur, pos)) * 10) / 10
+          : c.rating - ((cur && cur.rating) || 0);
+        // Better player matters most, then team rating, then chemistry; owned players are free.
         const price = c.source === 'club' ? 0 : (c.price || 0);
-        const score = ratingGain * 10 + playerGain * 2 + chemGain * 3 - price / Math.max(1000, opts.budget || 100000) * 4;
+        const score = ratingGain * 10 + playerGain * 3 + chemGain * 3 - price / Math.max(1000, opts.budget || 100000) * 4;
         return { ...c, ratingAfter, chemAfter, ratingGain, chemGain, playerGain, score };
       })
-      .filter((c) => c.playerGain > 0 && (opts.allowChemLoss || c.chemGain >= -(opts.maxChemLoss ?? 2)))
+      // An upgrade is a better player, or the same level with more chemistry.
+      .filter((c) => (c.playerGain > 0 || (c.chemGain > 0 && c.playerGain >= 0 && c.ratingGain >= 0))
+        && (opts.allowChemLoss || c.chemGain >= -(opts.maxChemLoss ?? 2)))
       .sort((a, b) => b.score - a.score);
   }
 
@@ -973,6 +1006,10 @@
     maxBuy: 1000, // used when a player has no price
     maxBuysPerSearch: 1,
     minCoins: 0, // never spend below this balance
+    spendLimit: 0, // priority list: total coins to spend (0 = all but Keep coins)
+    listSpent: 0, // spent on the list so far (reset from the Snipe tab)
+    buyOnce: true, // take a player off the list once bought
+    reserveForHigher: false, // don't buy lower players if it leaves too little for higher ones
     repriceMinutes: 15, // refresh a player's market price this often while running
     bidSnipe: false, // also bid on auctions about to end under your max
     bidWindow: 30, // seconds left on an auction before bidding
@@ -1027,6 +1064,7 @@
     cacheBustBid, jitter, pickTargets, planSellPrice, classifyStatus,
     normalizeName, parsePlayerDb, searchPlayers, playerForIteration, migrateConfig,
     findMarketPrice, planMaxBuy, effectiveMaxBuy, flipPlan, tradeOpts, bidAmount, settleSales,
+    listSpendable, reserveOk, afterListBuy,
     aggregateListings, hotScore, rankHot,
     addHistory, summarizeHistory, isDiscordWebhook, discordPayload,
     squadRating, squadChemistry, topValues, rankUpgrades,
@@ -1046,7 +1084,7 @@
 
   const w = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '1.5.0';
+  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '1.6.0';
   const errText = (e) => (e && e.message ? e.message : String(e));
   const fmt = (n) => Number(n || 0).toLocaleString();
 
@@ -1683,6 +1721,8 @@
       let errors = 0;
       let i = 0;
       let fullWarned = false;
+      this.listStarted = cfg.players.length > 0;
+      this.reserveWarned = new Set();
       this.nextUpkeep = cfg.mode === 'trade' ? Date.now() : Date.now() + cfg.upkeepMinutes * 60e3;
 
       while (this.running) {
@@ -1693,8 +1733,11 @@
         if (limit) { await this.finishBids(); return this.stop(limit); }
         const gate = this.gate();
         if (!gate.ok) return this.stop(gate.reason);
-        const spendable = fut.coins() - cfg.minCoins;
+        const listMode = cfg.mode === 'buy';
+        const spendable = listMode ? listSpendable(cfg, fut.coins()) : fut.coins() - cfg.minCoins;
+        if (listMode && cfg.spendLimit > 0 && spendable < MIN_PRICE) { await this.finishBids(); return this.stop(`spend limit reached (${fmt(cfg.listSpent)} of ${fmt(cfg.spendLimit)})`); }
         if (cfg.mode !== 'alert' && spendable < MIN_PRICE) return this.stop('not enough coins');
+        if (listMode && this.listStarted && !cfg.players.length) { await this.finishBids(); return this.stop('priority list complete 🎉'); }
 
         // Transfer list upkeep (Trade mode, or when bids are waiting to be collected).
         if ((cfg.mode === 'trade' || this.bids.size) && Date.now() >= this.nextUpkeep) {
@@ -1840,11 +1883,28 @@
       }
       this.history = addHistory(this.history, entry);
       store.set(KEYS.history, this.history);
+      if (cfg.mode === 'buy' && player) {
+        Object.assign(cfg, afterListBuy(cfg, player.id, info.price));
+        this.save();
+        if (cfg.buyOnce) ui.log(`${player.name} ticked off your list${cfg.players.length ? ` — ${cfg.players.length} left` : ''}`, 'ok');
+        ui.renderPlayers();
+      }
       ui.renderStats(); ui.renderHistory(); ui.renderTrade();
       notify.discord('buy', entry);
     },
 
     async attempt(t, player, plan) {
+      const cfg = this.cfg;
+      if (cfg.mode === 'buy' && player) {
+        const idx = cfg.players.findIndex((p) => p.id === player.id);
+        if (!reserveOk(cfg.players, idx, t.buyNowPrice, listSpendable(cfg, fut.coins()), cfg)) {
+          if (!this.reserveWarned.has(player.id)) {
+            this.reserveWarned.add(player.id);
+            ui.log(`Skipped ${t.name} at ${fmt(t.buyNowPrice)} — keeping coins for players higher on your list`, 'muted');
+          }
+          return;
+        }
+      }
       const r = await fut.buy(t);
       if (!r.ok) {
         this.stats.missed++;
@@ -2270,20 +2330,20 @@
     summary: null,
     results: [], // [{ slotIndex, position, current, options: [...] }]
 
-    async analyse() {
-      await jobs.run('Analysing your team', async () => {
-        engine.setStatus('pricing', 'Reading your squad…');
-        const squad = await fut.activeSquad();
-        if (!squad) throw new Error('could not read your active squad');
-        const slots = squad.getFieldPlayers().slice(0, 11).map((s) => ({
-          position: s.position ? normPos(s.position.typeName ?? s.position.id) : '?',
-          player: s.item && s.item.definitionId ? fut.toPlayer(s.item) : null,
-        }));
-        this.squad = slots;
-        const inPos = (p, pos) => !!p && p.positions.includes(pos);
-        const chem = squadChemistry(slots.map((s) => s.player && { ...s.player, inPosition: inPos(s.player, s.position) }));
-        const players = slots.map((s) => s.player).filter(Boolean);
-        this.summary = {
+    /** Reads the active squad: 11 slots, chemistry, main leagues/nations. */
+    async readSquad() {
+      engine.setStatus('pricing', 'Reading your squad…');
+      const squad = await fut.activeSquad();
+      if (!squad) throw new Error('could not read your active squad');
+      const slots = squad.getFieldPlayers().slice(0, 11).map((s) => ({
+        position: s.position ? normPos(s.position.typeName ?? s.position.id) : '?',
+        player: s.item && s.item.definitionId ? fut.toPlayer(s.item) : null,
+      }));
+      this.squad = slots;
+      const inPos = (p, pos) => !!p && p.positions.includes(pos);
+      const chem = squadChemistry(slots.map((s) => s.player && { ...s.player, inPosition: inPos(s.player, s.position) }));
+      const players = slots.map((s) => s.player).filter(Boolean);
+      this.summary = {
           rating: squadRating(slots.map((s) => (s.player ? s.player.rating : 0))),
           chem: chem.total,
           eachChem: chem.each,
@@ -2294,10 +2354,17 @@
           })(),
           leagues: topValues(players, 'leagueId', 2),
           nations: topValues(players, 'nationId', 2),
-        };
-        // Weakest first: lowest rating, then lowest chemistry.
-        const order = slots.map((s, i) => ({ i, r: s.player ? s.player.rating : 0, c: chem.each[i] }))
-          .sort((a, b) => a.r - b.r || a.c - b.c).map((x) => x.i);
+      };
+      // Weakest first: lowest meta (or rating) in their slot, then lowest chemistry.
+      const by = engine.cfg.lineupBy || 'meta';
+      const val = (s) => (s.player ? (by === 'meta' ? metaScore(s.player, s.position) : s.player.rating) : 0);
+      const order = slots.map((s, i) => ({ i, v: val(s), c: chem.each[i] })).sort((a, b) => a.v - b.v || a.c - b.c).map((x) => x.i);
+      return { slots, order, by };
+    },
+
+    async analyse() {
+      await jobs.run('Analysing your team', async () => {
+        const { slots, order, by } = await this.readSquad();
         this.results = order.slice(0, 3).map((i) => ({ slotIndex: i, position: slots[i].position, current: slots[i].player, options: [] }));
         ui.renderUpgrades();
 
@@ -2312,7 +2379,7 @@
           if (engine.cfg.upgradeMarket && budget >= 1000) {
             candidates = candidates.concat(await this.market(res, budget));
           }
-          res.options = rankUpgrades(slots, res.slotIndex, candidates, { budget }).filter((o) => o.source === 'club' || o.price <= budget).slice(0, 4);
+          res.options = rankUpgrades(slots, res.slotIndex, candidates, { budget, by }).filter((o) => o.source === 'club' || o.price <= budget).slice(0, 4);
           res.done = true;
           ui.renderUpgrades();
         }
@@ -2320,21 +2387,30 @@
       });
     },
 
-    /** Market listings that fit the slot: same league / nation as your squad, within budget. */
-    async market(res, budget) {
+    /**
+     * Market listings for a slot within budget: by position alone (best value),
+     * then in your squad's main league and nation (keeps chemistry).
+     */
+    async market(res, budget, opts = {}) {
       const out = [];
       const s = this.summary;
+      const lg = s.leagues[0] && s.leagues[0].value;
+      const nt = s.nations[0] && s.nations[0].value;
       const searches = [
-        { league: s.leagues[0] && s.leagues[0].value, min: Math.round(budget * 0.25) },
-        { nation: s.nations[0] && s.nations[0].value, min: Math.round(budget * 0.25) },
-        { league: s.leagues[0] && s.leagues[0].value, min: Math.round(budget * 0.05) },
-      ].filter((q) => q.league || q.nation);
+        { min: Math.round(budget * 0.3) },
+        { league: lg, min: Math.round(budget * 0.15) },
+        { nation: nt, min: Math.round(budget * 0.15) },
+        { min: Math.round(budget * 0.08) },
+      ].filter((q) => !('league' in q) || q.league).filter((q) => !('nation' in q) || q.nation).slice(0, opts.searches || 4);
+      let matched = 0;
       for (const q of searches) {
         engine.setStatus('pricing', `Searching market for a ${res.position}…`);
         const c = fut.newCriteria();
         if (q.league) c.league = q.league;
         if (q.nation) c.nation = q.nation;
         c._position = res.position;
+        c.position = res.position;
+        c.level = 'gold';
         c.maxBuy = roundPrice(budget);
         if (q.min >= 200) c.minBuy = roundPrice(q.min);
         const r = await fut.search(c);
@@ -2342,14 +2418,54 @@
         jobs.check(r, 'market search');
         for (const l of r.listings) {
           const p = fut.toPlayer(l.item);
-          if (p.player && l.buyNowPrice) out.push({ ...p, price: l.buyNowPrice, source: 'market' });
+          if (!p.player || !l.buyNowPrice) continue;
+          if (p.positions.includes(res.position)) matched++;
+          out.push({ ...p, price: l.buyNowPrice, source: 'market' });
         }
         await jobs.pause(engine.cfg.delayMin, engine.cfg.delayMax);
       }
+      debugLog.push(`market for ${res.position}: ${out.length} listings, ${matched} in position`);
       // Cheapest listing per card.
       const best = new Map();
       for (const p of out) if (!best.has(p.id) || best.get(p.id).price > p.price) best.set(p.id, p);
       return [...best.values()];
+    },
+
+    /**
+     * Auto-fill the priority list from what your team needs: finds affordable
+     * upgrades for your weakest spots and adds the best one per spot, with a
+     * max buy under its cheapest listing so it's a snipe.
+     */
+    async autofill() {
+      await jobs.run('Filling from team needs', async () => {
+        const cfg = engine.cfg;
+        const budget = listSpendable(cfg, fut.coins());
+        if (budget < 1000) { ui.log('Not enough coins (or spend limit) left to fill the list', 'warn'); return; }
+        const { slots, order, by } = await this.readSquad();
+        const listed = new Set(cfg.players.map((p) => p.id));
+        const off = Math.max(0, Math.min(50, cfg.discount || 0)) / 100;
+        // Look a bit above budget: a snipe at `discount`% under still fits.
+        const searchBudget = roundPrice(budget / (1 - off));
+        const added = [];
+        for (const idx of order.slice(0, 3)) {
+          if (jobs.cancelled) break;
+          const res = { slotIndex: idx, position: slots[idx].position };
+          const cands = await this.market(res, searchBudget, { searches: 3 });
+          const best = rankUpgrades(slots, idx, cands, { budget: searchBudget, by }).find((o) => !listed.has(o.id));
+          if (!best) { ui.log(`${res.position}: no affordable upgrade found`, 'muted'); continue; }
+          const maxBuy = Math.min(roundPrice(best.price * (1 - off), 'down'), roundPrice(budget, 'down'));
+          if (maxBuy < MIN_PRICE) continue;
+          const entry = { id: best.id, name: best.name, rating: best.rating, manualMax: maxBuy, autofill: `${res.position} upgrade`, lowest: best.price };
+          listed.add(best.id);
+          added.push(entry);
+          ui.log(`🧩 ${res.position}: ${best.name} ${best.rating} — cheapest ${fmt(best.price)}, sniping ≤ ${fmt(maxBuy)}${best.chemGain > 0 ? ` · +${best.chemGain} chem` : ''}`, 'ok');
+        }
+        if (!added.length) { ui.log('No upgrades found within your budget right now — try again later or raise the spend limit', 'warn'); return; }
+        engine.cfg.players = [...engine.cfg.players.filter((p) => !p.autofill), ...added];
+        engine.save();
+        ui.renderPlayers();
+        ui.log(`Added ${added.length} team upgrade${added.length === 1 ? '' : 's'} to your priority list — tap ▶ to snipe`, 'ok');
+      });
     },
 
     // -- formation coach --
@@ -2554,6 +2670,11 @@
 
   // [key, label, type, options/hint] — type 'sec' shows seconds but stores milliseconds
   const FIELDS = {
+    list: [
+      ['spendLimit', 'Spend limit (0 = all but Keep coins)', 'number'],
+      ['buyOnce', 'Buy each player once', 'toggle'],
+      ['reserveForHigher', 'Keep coins for players higher up', 'toggle'],
+    ],
     snipe: [
       ['mode', 'Mode', 'seg', OPT([['buy', 'Buy'], ['trade', 'Trade'], ['alert', 'Alert']])],
       ['discount', 'Snipe % under avg', 'number'],
@@ -2729,7 +2850,17 @@
   #fcs .pqw{position:relative}
   #fcs .chips{display:flex;flex-direction:column;gap:6px;margin-bottom:8px}
   #fcs .chips:empty{display:none}
-  #fcs .chip{display:flex;align-items:center;gap:8px;background:var(--card2);border:1px solid var(--line);border-radius:10px;padding:7px 6px 7px 10px}
+  #fcs .chip{display:flex;flex-direction:column;gap:4px;background:var(--card2);border:1px solid var(--line);border-radius:10px;padding:7px 6px 7px 10px}
+  #fcs .chip .top,#fcs .chip .bot{display:flex;align-items:center;gap:8px}
+  #fcs .chip .bot{justify-content:space-between;padding-left:20px}
+  #fcs .chip .num{font-weight:800;color:var(--dim);font-size:11px;min-width:12px}
+  #fcs .chip .ord{display:flex;gap:4px}
+  #fcs .chip .ord button{width:28px;height:22px;line-height:20px;font-size:12px;color:var(--muted);background:var(--card);border-radius:6px}
+  #fcs .chip .ord button:disabled{opacity:.25}
+  #fcs .two{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+  #fcs .two .btn{margin-top:8px;font-size:12px;padding:9px 4px}
+  #fcs .spend{margin:8px 0 2px;color:var(--muted);font-size:12px;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+  #fcs .spend b{color:var(--text)}
   #fcs .chip .ovr{font-weight:800;color:var(--green);font-size:12px;min-width:22px}
   #fcs .chip .nm{flex:1;min-width:0;font-weight:600;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;line-height:1.25}
   #fcs .chip .nm small{display:block;font-weight:400;color:var(--dim);font-size:11px}
@@ -2791,7 +2922,9 @@
   #fcs.mob .last{font-size:13px}
   #fcs.mob input,#fcs.mob select{font-size:16px;padding:10px}
   #fcs.mob .row{padding:7px 0}#fcs.mob .seg button{padding:8px 4px;font-size:14px}
-  #fcs.mob .btn{padding:13px}#fcs.mob .chip{padding:9px 6px 9px 12px}#fcs.mob .chip .rm{width:34px;height:34px}
+  #fcs.mob .btn{padding:13px}
+  #fcs.mob .chip .ord button{width:36px;height:30px;font-size:15px}
+  #fcs.mob .two .btn{font-size:13px;padding:12px 4px}#fcs.mob .chip{padding:9px 6px 9px 12px}#fcs.mob .chip .rm{width:34px;height:34px}
   #fcs.mob .sugg button{padding:13px 12px}#fcs.mob .log{font-size:12px}
   /* collapsed on a phone: a small handle on the right edge, drag it up or down */
   #fcs.mob.min{left:auto!important;right:6px!important;top:var(--fcs-top,58%)!important;bottom:auto;width:auto;
@@ -2839,12 +2972,14 @@
               </div>
             </div>
             <div class="card picker">
-              <h4>Players</h4>
+              <h4>Priority list</h4>
               <div class="chips" data-r="chips"></div>
               <div class="pqw"><input data-r="pq" type="search" autocomplete="off" autocorrect="off" spellcheck="false" placeholder="Add a player — name or ID">
               <div class="sugg" data-r="sugg"></div></div>
-              <button class="btn blue" data-a="price">Check prices</button>
-              <p class="note">Tap a price to set your own max buy.</p>
+              <div class="two"><button class="btn blue" data-a="price">Check prices</button><button class="btn blue" data-a="autofill">🧩 Fill from team needs</button></div>
+              <div class="spend" data-r="spend"></div>
+              ${FIELDS.list.map(fieldHtml).join('')}
+              <p class="note">All players are hunted at once; higher on the list wins ties. Tap a price to set your own max buy, ↑↓ to reorder. “Fill from team needs” adds snipes for your squad’s weakest spots.</p>
             </div>
             <div class="card">${FIELDS.snipe.map(fieldHtml).join('')}
               <p class="note"><b>Buy</b> snipes cards under your max. <b>Trade</b> buys under value and relists for profit (see Trade). <b>Alert</b> only notifies you.</p></div>
@@ -2945,6 +3080,10 @@
           case 'fold': return root.classList.toggle('min');
           case 'price': return engine.checkPricesNow();
           case 'analyse': return upgrades.analyse();
+          case 'autofill': this.commit(); return upgrades.autofill();
+          case 'spend-reset':
+            engine.cfg.listSpent = 0; engine.save(); this.renderPlayers();
+            return this.log('Spend counter reset', 'muted');
           case 'hot-scan': return hot.scan(false);
           case 'hot-add': return hot.add(hot.list[Number(btn.dataset.i)]);
           case 'hot-top': return hot.addTop();
@@ -3122,6 +3261,18 @@
           engine.save(); this.renderPlayers();
           return;
         }
+        const up = e.target.closest('[data-up]');
+        const down = e.target.closest('[data-down]');
+        if ((up || down) && !engine.running) {
+          const i = Number((up || down).dataset[up ? 'up' : 'down']);
+          const j = up ? i - 1 : i + 1;
+          const list = engine.cfg.players.slice();
+          if (j < 0 || j >= list.length) return;
+          [list[i], list[j]] = [list[j], list[i]];
+          engine.cfg.players = list;
+          engine.save(); this.renderPlayers();
+          return;
+        }
         const mx = e.target.closest('[data-max]');
         if (mx && !engine.running) this.editMax(Number(mx.dataset.max));
         if (!e.target.closest('.picker')) sugg.innerHTML = '';
@@ -3142,13 +3293,21 @@
 
     renderPlayers() {
       const cfg = engine.cfg;
-      this.q('[data-r=chips]').innerHTML = cfg.players.map((p) => {
+      const sp = this.q('[data-r=spend]');
+      if (sp) {
+        sp.innerHTML = cfg.spendLimit > 0
+          ? `Spent <b>${fmt(cfg.listSpent || 0)}</b> of ${fmt(cfg.spendLimit)} · ${fmt(Math.max(0, cfg.spendLimit - (cfg.listSpent || 0)))} left <button class="mini" data-a="spend-reset">Reset</button>`
+          : `Spent <b>${fmt(cfg.listSpent || 0)}</b> on the list${cfg.listSpent ? ' <button class="mini" data-a="spend-reset">Reset</button>' : ''}`;
+      }
+      this.q('[data-r=chips]').innerHTML = cfg.players.map((p, i) => {
         const max = effectiveMaxBuy(p, cfg);
-        const sub = `${p.hot ? '🔥 ' : ''}${p.manualMax ? 'your max' : p.avg ? `avg ${fmt(p.avg)}` : p.checkedAt ? 'none listed' : 'not priced yet'}`;
-        return `<div class="chip"><span class="ovr">${p.rating || ''}</span>
-          <span class="nm">${esc(p.name)}<small>${sub}</small></span>
-          <button class="mx${p.manualMax ? ' manual' : ''}" data-max="${p.id}">≤ ${fmt(max)}</button>
-          <button class="rm" data-rm="${p.id}" aria-label="Remove ${esc(p.name)}">×</button></div>`;
+        const sub = `${p.hot ? '🔥 ' : ''}${p.autofill ? `🧩 ${esc(p.autofill)} · ` : ''}${p.manualMax ? (p.autofill && p.lowest ? `cheapest ${fmt(p.lowest)}` : 'your max') : p.avg ? `avg ${fmt(p.avg)}` : p.checkedAt ? 'none listed' : 'not priced yet'}`;
+        return `<div class="chip">
+          <div class="top"><span class="num">${i + 1}</span><span class="ovr">${p.rating || ''}</span>
+            <span class="nm">${esc(p.name)}<small>${sub}</small></span>
+            <button class="rm" data-rm="${p.id}" aria-label="Remove ${esc(p.name)}">×</button></div>
+          <div class="bot"><span class="ord"><button data-up="${i}" aria-label="Move up" ${i === 0 ? 'disabled' : ''}>↑</button><button data-down="${i}" aria-label="Move down" ${i === cfg.players.length - 1 ? 'disabled' : ''}>↓</button></span>
+            <button class="mx${p.manualMax ? ' manual' : ''}" data-max="${p.id}">≤ ${fmt(max)}</button></div></div>`;
       }).join('');
     },
 
@@ -3367,7 +3526,7 @@
       go.setAttribute('aria-label', on ? 'Stop' : 'Start');
       this.tick();
       this.qa('[data-k] , [data-k] button, [data-r=pq], [data-a=price]').forEach((el) => { el.disabled = on; });
-      this.qa('[data-a=trade-start], [data-a=hot-scan], [data-a=hot-top], [data-a=hot-add]').forEach((el) => { el.disabled = on; });
+      this.qa('[data-a=trade-start], [data-a=hot-scan], [data-a=hot-top], [data-a=hot-add], [data-a=autofill], [data-up], [data-down]').forEach((el) => { el.disabled = on; });
       const ts = this.q('[data-a=trade-start]');
       if (ts) ts.textContent = on ? (engine.cfg.mode === 'trade' ? 'Trading… (■ to stop)' : 'Sniping… (■ to stop)') : 'Start trading';
       this.renderStatus();

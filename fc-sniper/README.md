@@ -25,7 +25,8 @@ the Companion app. Updates install automatically.
 
 | | |
 |---|---|
-| **Player search** | Add players by name (accents optional) or ID. Several players are searched in turn. |
+| **Priority list** | Add players by name or ID, in order. All are hunted at once (higher on the list wins ties), each is bought once and ticked off, and the bot stops when the list is done or your **spend limit** is reached. Optional: keep coins for players higher on the list. |
+| **Fill from team needs** | Reads your squad, finds affordable upgrades (by meta stats and chemistry) for your weakest spots, and adds the best one per spot to the list with a max buy under its cheapest listing. |
 | **Price check** | Finds each player's market price from the 5 cheapest Buy Now listings of the base card. |
 | **Auto max buy** | Snipes a set % under the average (default 10%), never more than your coins minus *Keep coins*. Tap a price to set your own. |
 | **Buy, Trade or Alert** | *Buy* snipes instantly. *Trade* runs the resell bot (below). *Alert* notifies you and never spends coins. |
@@ -49,7 +50,9 @@ the Companion app. Updates install automatically.
 
 The panel has 8 tabs: **Snipe · Trade · Squad · Packs / SBC · History · Log · Settings**.
 
-1. **Snipe tab:** type a player's name and tap him. His price is checked and his max buy
+1. **Snipe tab → Priority list:** type a player's name and tap him (↑↓ to reorder), or tap
+   **🧩 Fill from team needs**. Set a **Spend limit** if you want a total cap.
+   Type a player's name and tap him. His price is checked and his max buy
    shows on his row, e.g. `Mbappé 91 ≤ 46,750 · avg 52,000`.
 2. Choose **Buy** or **Alert only**, and set **Buys per session** (1 if you want one card).
 3. *(Optional)* **Sell tab:** choose what happens after a buy.

@@ -101,6 +101,11 @@ const idle = (p) => p.waitForFunction(() => !document.querySelector('#fcs [data-
 
   // alert mode: should not buy
   await p.click('#fcs [data-tab=snipe]');
+  // keep Mbappé on the list for the alert run (Buy each player once ticked him off)
+  await p.fill('#fcs [data-r=pq]', 'mbappe');
+  await p.press('#fcs [data-r=pq]', 'Enter');
+  await p.waitForTimeout(400);
+  await p.waitForFunction(() => !document.querySelector('#fcs [data-a=price]').disabled, null, { timeout: 60000 });
   await p.click('#fcs .seg [data-v=alert]');
   await p.click('#fcs [data-tab=settings]');
   await p.fill('#fcs [data-k=maxSearches]', '2');

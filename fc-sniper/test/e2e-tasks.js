@@ -100,8 +100,8 @@ const idle = (p, ms = 150000) => p.waitForFunction(() => !document.querySelector
   const firstSlot = await p.textContent('#fcs [data-r=upg] .card');
   check('weakest slot is the 75 striker', /ST — now Weak Striker 75/.test(firstSlot), firstSlot.slice(0, 60));
   const order = await p.$$eval('#fcs [data-r=upg] .card:first-child .li b', (els) => els.map((e) => e.textContent));
-  check('owned equal upgrade ranks above buying one', order[0].startsWith('Bench ST'), order.join(' | '));
-  check('best market suggestion keeps chemistry', order.find((o) => !o.startsWith('Bench')).startsWith('Same League ST 86'), order.join(' | '));
+  check('owned upgrades rank above buying one', /^(Bench|Pacey)/.test(order[0]), order.join(' | '));
+  check('best market suggestion keeps chemistry', order.find((o) => !/^(Bench|Pacey)/.test(o)).startsWith('Same League ST 86'), order.join(' | '));
   check('owned strikers suggested', order.filter((o) => /^(Bench|Pacey)/.test(o)).length >= 2, order.join(' | '));
   check('over-budget card excluded', !order.some((o) => /Too Pricey/.test(o)));
   const srch = await p.evaluate(() => T.searches.filter((x) => x.pos === 'ST'));
@@ -109,6 +109,17 @@ const idle = (p, ms = 150000) => p.waitForFunction(() => !document.querySelector
   await p.click('#fcs [data-r=upg] .card:first-child [data-a=snipe-opt]');
   const chips = await p.textContent('#fcs [data-r=chips]');
   check('Snipe adds player with listed price as max', /Same League ST 86/.test(chips) && /45,000/.test(chips), chips.replace(/\s+/g, ' ').trim());
+  // ---- Auto-fill the priority list from team needs
+  await p.click('#fcs [data-tab=snipe]');
+  while (await p.$('#fcs [data-r=chips] [data-rm]')) await p.click('#fcs [data-r=chips] [data-rm]'); // empty the list first
+  await p.click('#fcs [data-a=autofill]');
+  await idle(p, 200000);
+  const filled = await p.evaluate(() => JSON.parse(localStorage.getItem('fc-sniper:config')).players.filter((x) => x.autofill));
+  check('auto-fill adds a snipe for the weak ST', filled.some((x) => /ST upgrade/.test(x.autofill)), JSON.stringify(filled.map((x) => [x.name, x.autofill, x.manualMax, x.lowest])));
+  check('auto-fill max buy is under the cheapest listing', filled.length && filled.every((x) => x.manualMax < x.lowest && x.manualMax <= 120000), JSON.stringify(filled.map((x) => [x.manualMax, x.lowest])));
+  const chipsText = await p.textContent('#fcs [data-r=chips]');
+  check('list shows 🧩 reason', /🧩 ST upgrade/.test(chipsText), chipsText.replace(/\s+/g, ' ').slice(0, 120));
+
   // ---- Formation coach
   await p.click('#fcs [data-tab=squad]');
   await p.click('#fcs [data-a=forms]');

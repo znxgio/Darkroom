@@ -604,3 +604,39 @@ test('bestLineup by meta picks the pacey striker, by rating the higher-rated one
   assert.equal(byRating.lineup[slots.indexOf('ST')].id, slow.id);
   assert.ok(byMeta.meta > 0);
 });
+
+// ---- priority list ------------------------------------------------------------------
+
+test('listSpendable: coins minus keep, capped by what is left of the limit', () => {
+  assert.equal(c.listSpendable({ minCoins: 10000, spendLimit: 0 }, 215000), 205000);
+  assert.equal(c.listSpendable({ minCoins: 0, spendLimit: 200000, listSpent: 150000 }, 215000), 50000);
+  assert.equal(c.listSpendable({ minCoins: 0, spendLimit: 100000, listSpent: 120000 }, 215000), 0);
+});
+
+test('reserveOk keeps coins for players higher on the list', () => {
+  const players = [{ id: 1, manualMax: 150000 }, { id: 2, manualMax: 60000 }, { id: 3, manualMax: 40000 }];
+  const cfg = { reserveForHigher: true, maxBuy: 1000 };
+  assert.equal(c.reserveOk(players, 2, 40000, 200000, cfg), true); // 160k left ≥ 150k
+  assert.equal(c.reserveOk(players, 2, 60000, 200000, cfg), false); // 140k left < 150k
+  assert.equal(c.reserveOk(players, 0, 150000, 150000, cfg), true); // top of the list
+  assert.equal(c.reserveOk(players, 2, 60000, 200000, { ...cfg, reserveForHigher: false }), true);
+});
+
+test('afterListBuy counts spend and removes the player once bought', () => {
+  const cfg = { buyOnce: true, listSpent: 1000, players: [{ id: 1 }, { id: 2 }] };
+  assert.deepEqual(c.afterListBuy(cfg, 1, 50000), { listSpent: 51000, players: [{ id: 2 }] });
+  assert.equal(c.afterListBuy({ ...cfg, buyOnce: false }, 1, 5).players.length, 2);
+});
+
+test('rankUpgrades by meta finds stat upgrades and chemistry sidegrades', () => {
+  const mk = (id, rating, leagueId, nationId, pos, stats) => ({ id, name: `P${id}`, rating, nationId, leagueId, teamId: id, positions: [pos], stats });
+  // ST slot: 84 with poor pace; others share league 13
+  const squad = Array.from({ length: 11 }, (_, i) => ({ position: i === 10 ? 'ST' : `X${i}`,
+    player: i === 10 ? mk(11, 84, 99, 50, 'ST', { pac: 70, sho: 85, pas: 70, dri: 78, def: 40, phy: 80 }) : mk(i + 1, 84, 13, 1, `X${i}`) }));
+  const pacey = { ...mk(100, 84, 99, 50, 'ST', { pac: 96, sho: 84, pas: 72, dri: 88, def: 35, phy: 75 }), price: 9000, source: 'market' };
+  const sameLeague = { ...mk(101, 84, 13, 1, 'ST', { pac: 70, sho: 85, pas: 70, dri: 78, def: 40, phy: 80 }), price: 8000, source: 'market' };
+  const r = c.rankUpgrades(squad, 10, [pacey, sameLeague], { budget: 20000, by: 'meta' });
+  assert.ok(r.find((x) => x.id === 100), 'same rating but more meta = upgrade');
+  assert.ok(r.find((x) => x.id === 101 && x.chemGain > 0), 'same level with more chemistry = sidegrade');
+  assert.equal(c.rankUpgrades(squad, 10, [pacey, sameLeague], { budget: 20000 }).length, 1, 'by rating only the chem sidegrade counts');
+});
