@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FC Sniper
 // @namespace    https://github.com/znxgio/darkroom
-// @version      1.2.4
+// @version      1.3.0
 // @description  Sniper, pack opener, SBC solver and team upgrade advisor for the EA SPORTS FC Ultimate Team Web App, with built-in safety limits.
 // @match        https://www.ea.com/*ultimate-team/web-app*
 // @match        https://www.ea.com/ea-sports-fc/ultimate-team/web-app*
@@ -145,6 +145,57 @@
     return (player && (player.manualMax || player.maxBuy)) || cfg.maxBuy;
   }
 
+  // ---- Trading (resell) & bidding ------------------------------------------------
+
+  /**
+   * Resale plan for a card: list `undercut`% under the market average so it
+   * sells, and only buy low enough to keep `minProfit` after EA's 5% tax.
+   * Returns { sell, maxBuy, profit } or null when no profitable buy price exists.
+   */
+  function flipPlan(avg, opts = {}) {
+    const minProfit = Math.max(0, opts.minProfit || 0);
+    const undercut = Math.max(0, Math.min(50, opts.undercut ?? 3));
+    if (!avg || avg < MIN_PRICE) return null;
+    const sell = roundPrice(avg * (1 - undercut / 100), 'down');
+    let maxBuy = roundPrice(Math.max(MIN_PRICE, afterTax(sell) - minProfit), 'down');
+    while (maxBuy > MIN_PRICE && profit(maxBuy, sell) < minProfit) maxBuy = prevPrice(maxBuy);
+    if (profit(maxBuy, sell) < Math.max(1, minProfit)) return null;
+    return { sell, maxBuy, profit: profit(maxBuy, sell) };
+  }
+
+  /**
+   * What to bid on an auction about to end, or 0 to skip it.
+   * l: { expires (seconds left), currentBid, startingBid, buyNowPrice, bidState }
+   */
+  function bidAmount(l, maxBid, windowSec = 30) {
+    if (!l || !(l.expires > 0) || l.expires > windowSec) return 0;
+    if (l.bidState === 'highest') return 0;
+    const next = l.currentBid > 0 ? nextPrice(l.currentBid) : Math.max(MIN_PRICE, l.startingBid || MIN_PRICE);
+    if (next > maxBid) return 0;
+    if (l.buyNowPrice && next >= l.buyNowPrice) return 0; // Buy Now is the better move
+    return next;
+  }
+
+  /** Records sales from your transfer list. sold: [{ itemId, price }]. */
+  function settleSales(history, sold, now) {
+    const byId = new Map(sold.map((x) => [x.itemId, x.price]));
+    let realized = 0;
+    let matched = 0;
+    const out = (history || []).map((e) => {
+      if (!e.itemId || e.soldFor || !byId.has(e.itemId)) return e;
+      const soldFor = byId.get(e.itemId);
+      realized += afterTax(soldFor) - e.price;
+      matched++;
+      return { ...e, soldFor, soldAt: now };
+    });
+    return { history: out, realized, matched };
+  }
+
+  /** Trade settings for a card: Min profit, or Min profit % of the price, whichever is higher. */
+  function tradeOpts(avg, cfg) {
+    return { minProfit: Math.max(cfg.minProfit || 0, Math.round((avg || 0) * (cfg.minProfitPct || 0) / 100)), undercut: cfg.undercut };
+  }
+
   // ---- Buy history & notifications --------------------------------------------
 
   /** Newest first, capped at `max` entries. */
@@ -152,15 +203,25 @@
     return [entry, ...(list || [])].slice(0, max);
   }
 
-  /** Totals for today and all time. Entries: { at, price, sell }. */
+  /**
+   * Totals for today and all time. Entries: { at, price, sell, soldFor, soldAt }.
+   * profit = expected from listings; realized = actual sales after tax.
+   */
   function summarizeHistory(list, now) {
     const today = dayKey(now);
     const sum = (arr) => arr.reduce((t, e) => ({
       buys: t.buys + 1,
       spent: t.spent + e.price,
       profit: t.profit + (e.sell ? profit(e.price, e.sell) : 0),
-    }), { buys: 0, spent: 0, profit: 0 });
-    return { today: sum((list || []).filter((e) => dayKey(e.at) === today)), all: sum(list || []) };
+      sold: t.sold + (e.soldFor ? 1 : 0),
+      realized: t.realized + (e.soldFor ? afterTax(e.soldFor) - e.price : 0),
+    }), { buys: 0, spent: 0, profit: 0, sold: 0, realized: 0 });
+    const L = list || [];
+    const todays = sum(L.filter((e) => dayKey(e.at) === today));
+    const soldToday = L.filter((e) => e.soldAt && dayKey(e.soldAt) === today);
+    todays.soldToday = soldToday.length;
+    todays.realizedToday = soldToday.reduce((a, e) => a + afterTax(e.soldFor) - e.price, 0);
+    return { today: todays, all: sum(L) };
   }
 
   function isDiscordWebhook(url) {
@@ -792,7 +853,7 @@
   const DEFAULT_CONFIG = {
     // targets
     players: [], // [{ id, name, rating, avg, lowest, maxBuy, manualMax, checkedAt }]
-    mode: 'buy', // buy | alert (notify only, never buys)
+    mode: 'buy', // buy | trade (buy under value and relist for profit) | alert (notify only)
     // filters (used with or without players)
     level: 'any', // any | bronze | silver | gold
     rarity: '',
@@ -807,6 +868,14 @@
     maxBuy: 1000, // used when a player has no price
     maxBuysPerSearch: 1,
     minCoins: 0, // never spend below this balance
+    repriceMinutes: 15, // refresh a player's market price this often while running
+    bidSnipe: false, // also bid on auctions about to end under your max
+    bidWindow: 30, // seconds left on an auction before bidding
+    maxActiveBids: 5,
+    // trading (resell)
+    undercut: 3, // list this % under the market average so it sells
+    minProfitPct: 3, // and make at least this % of the sell price (as well as Min profit)
+    upkeepMinutes: 5, // check the transfer list this often while trading
     // selling
     sellMode: 'off', // off | profit | market | fixed
     sellPrice: 0,
@@ -846,7 +915,7 @@
     priceStep, roundPrice, nextPrice, prevPrice, afterTax, profit, breakEvenSell,
     cacheBustBid, jitter, pickTargets, planSellPrice, classifyStatus,
     normalizeName, parsePlayerDb, searchPlayers, playerForIteration, migrateConfig,
-    findMarketPrice, planMaxBuy, effectiveMaxBuy,
+    findMarketPrice, planMaxBuy, effectiveMaxBuy, flipPlan, tradeOpts, bidAmount, settleSales,
     addHistory, summarizeHistory, isDiscordWebhook, discordPayload,
     squadRating, squadChemistry, topValues, rankUpgrades,
     POS_NAMES, normPos, FORMATIONS, squadRatingExact, lineupScore, bestLineup,
@@ -865,7 +934,7 @@
 
   const w = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '1.2.4';
+  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '1.3.0';
   const errText = (e) => (e && e.message ? e.message : String(e));
   const fmt = (n) => Number(n || 0).toLocaleString();
 
@@ -927,7 +996,7 @@
     coins() {
       try { return w.services.User.getUser().coins.amount; } catch { return 0; }
     },
-    criteria(cfg, player, maxBuy, iteration) {
+    criteria(cfg, player, maxBuy, iteration, maxBid) {
       const c = new w.UTSearchCriteriaDTO();
       c.type = 'player';
       // maskedDefId matches every version of the player, like the Web App's own name search.
@@ -939,7 +1008,12 @@
       if (cfg.league) c.league = parseInt(cfg.league, 10);
       if (cfg.club) c.club = parseInt(cfg.club, 10);
       if (maxBuy) c.maxBuy = roundPrice(maxBuy);
-      if (iteration !== undefined) c.minBid = cacheBustBid(iteration, maxBuy);
+      if (maxBid) c.maxBid = roundPrice(maxBid);
+      // Changing a filter that doesn't matter makes EA send fresh results.
+      if (iteration !== undefined) {
+        if (maxBid) c.minBuy = roundPrice(cacheBustBid(iteration, 0) + 1000);
+        else c.minBid = cacheBustBid(iteration, maxBuy);
+      }
       return c;
     },
     async search(criteria) {
@@ -954,6 +1028,9 @@
         item,
         tradeId: a.tradeId,
         buyNowPrice: a.buyNowPrice,
+        currentBid: a.currentBid || 0,
+        startingBid: a.startingBid || 0,
+        bidState: a._bidState || a.bidState,
         expires: a.expires,
         rating: item.rating,
         defId: item.definitionId,
@@ -1133,6 +1210,61 @@
       const chem = !!(w.services.Chemistry && typeof w.services.Chemistry.isFeatureEnabled === 'function' && w.services.Chemistry.isFeatureEnabled());
       const res = await observe(w.services.SBC.submitChallenge(ch, set, true, chem), 30000);
       return { ok: !!res.success, status: res.status, data: res.data };
+    },
+
+    // -- transfer list & watchlist --
+
+    /** Where an item stands on the market: sold | expired | active | won | lost | none. */
+    auctionState(item) {
+      const a = (typeof item.getAuctionData === 'function' && item.getAuctionData()) || item._auction || {};
+      const call = (fn) => (typeof a[fn] === 'function' ? !!a[fn]() : undefined);
+      const trade = a._tradeState || a.tradeState;
+      const bid = a._bidState || a.bidState;
+      const sold = call('isSold') ?? (trade === 'closed' && a.currentBid > 0 && bid !== 'highest');
+      const won = call('isWon') ?? (trade === 'closed' && bid === 'highest');
+      const expired = call('isExpired') ?? trade === 'expired';
+      const selling = call('isSelling') ?? trade === 'active';
+      const state = won ? 'won' : sold ? 'sold' : expired ? 'expired' : selling ? 'active' : trade === 'closed' ? 'lost' : 'none';
+      return { state, price: a.currentBid || a.buyNowPrice || 0, tradeId: a.tradeId };
+    },
+    async transferList() {
+      const res = await observe(w.services.Item.requestTransferItems());
+      return res.success ? ((res.data && res.data.items) || []) : null;
+    },
+    transferSpace() {
+      try {
+        const R = w.repositories.Item;
+        const size = typeof R.getPileSize === 'function' ? R.getPileSize(w.ItemPile.TRANSFER) : 100;
+        return Math.max(0, size - (R.numItemsInCache(w.ItemPile.TRANSFER) || 0));
+      } catch { return 100; }
+    },
+    async clearSold() {
+      const S = w.services.Item;
+      if (typeof S.clearSoldItems === 'function') return !!(await observe(S.clearSoldItems())).success;
+      try {
+        if (w.UTTransferListViewController && w.UTTransferListViewController.prototype._clearSold) {
+          w.UTTransferListViewController.prototype._clearSold();
+          return true;
+        }
+      } catch { /* not available */ }
+      return false;
+    },
+    async relistExpired() {
+      const S = w.services.Item;
+      if (typeof S.relistExpiredAuctions !== 'function') return false;
+      return !!(await observe(S.relistExpiredAuctions())).success;
+    },
+    async watched() {
+      const res = await observe(w.services.Item.requestWatchedItems());
+      return res.success ? ((res.data && res.data.items) || []) : null;
+    },
+    async untarget(items) {
+      if (!items.length || typeof w.services.Item.untarget !== 'function') return false;
+      return !!(await observe(w.services.Item.untarget(items))).success;
+    },
+    async placeBid(listing, amount) {
+      const res = await observe(w.services.Item.bid(listing.item, amount));
+      return { ok: !!res.success, status: res.status };
     },
 
     /** Relist expired items and clear sold ones, if this Web App version supports it. */
@@ -1335,9 +1467,14 @@
         }
         const plan = planMaxBuy(r.avg, this.cfg.discount, fut.coins() - this.cfg.minCoins);
         Object.assign(player, { avg: r.avg, lowest: r.lowest, maxBuy: plan.maxBuy });
-        ui.log(`${player.name}: avg ${fmt(r.avg)} · lowest ${fmt(r.lowest)} · ${r.count} listed → max ${fmt(plan.maxBuy)}`
-          + (plan.cappedByCoins ? ' (all your coins)' : ` (${this.cfg.discount}% under)`)
-          + (player.manualMax ? ` — your manual ${fmt(player.manualMax)} is used instead` : ''), 'ok');
+        const flip = this.cfg.mode === 'trade' && flipPlan(r.avg, tradeOpts(r.avg, this.cfg));
+        if (this.cfg.mode === 'trade') {
+          ui.log(`${player.name}: avg ${fmt(r.avg)} · ${flip ? `trade: buy ≤ ${fmt(flip.maxBuy)}, sell ${fmt(flip.sell)} (+${fmt(flip.profit)})` : 'no profitable trade at your min profit'}`, flip ? 'ok' : 'warn');
+        } else {
+          ui.log(`${player.name}: avg ${fmt(r.avg)} · lowest ${fmt(r.lowest)} · ${r.count} listed → max ${fmt(plan.maxBuy)}`
+            + (plan.cappedByCoins ? ' (all your coins)' : ` (${this.cfg.discount}% under)`)
+            + (player.manualMax ? ` — your manual ${fmt(player.manualMax)} is used instead` : ''), 'ok');
+        }
       }
       return true;
     },
@@ -1403,13 +1540,25 @@
         }
         if (!this.running) return;
         const who = cfg.players.length
-          ? cfg.players.map((p) => `${p.name} ≤ ${fmt(effectiveMaxBuy(p, cfg))}`).join(', ')
+          ? cfg.players.map((p) => {
+            const { maxBuy, plan } = this.planFor(p);
+            return plan ? `${p.name} (buy ≤ ${fmt(maxBuy)} → sell ${fmt(plan.sell)})` : `${p.name} ≤ ${fmt(maxBuy)}`;
+          }).join(', ')
           : `filters ≤ ${fmt(cfg.maxBuy)}`;
-        ui.log(`${cfg.mode === 'alert' ? 'Watching' : 'Sniping'} ${who}`, 'ok');
+        ui.log(`${{ alert: 'Watching', trade: 'Trading' }[cfg.mode] || 'Sniping'} ${who}${cfg.bidSnipe && cfg.mode !== 'alert' ? ' · bidding on auctions ending soon' : ''}`, 'ok');
         await this.loop();
       } catch (e) {
         this.stop(`error: ${errText(e)}`);
       }
+    },
+
+    /** Max buy (and resale plan in Trade mode) for a player this search. */
+    planFor(player) {
+      const cfg = this.cfg;
+      if (cfg.mode !== 'trade') return { maxBuy: effectiveMaxBuy(player, cfg), plan: null };
+      const plan = player && flipPlan(player.avg, tradeOpts(player.avg, cfg));
+      if (!plan) return { maxBuy: 0, plan: null };
+      return { maxBuy: Math.min(plan.maxBuy, player.manualMax || Infinity), plan };
     },
 
     async loop() {
@@ -1417,22 +1566,59 @@
       const startSearches = this.stats.searches;
       const startBuys = this.stats.buys;
       const alerted = new Set();
+      const skipped = new Set();
       let errors = 0;
       let i = 0;
+      let fullWarned = false;
+      this.nextUpkeep = cfg.mode === 'trade' ? Date.now() : Date.now() + cfg.upkeepMinutes * 60e3;
 
       while (this.running) {
-        if (this.stats.searches - startSearches >= cfg.maxSearches) return this.stop('session search limit reached');
-        if (this.stats.buys - startBuys >= cfg.maxBuys) return this.stop('session buy limit reached');
-        if (Date.now() >= this.session.endsAt) return this.stop(`${cfg.sessionMinutes} min session limit — take a break`);
+        let limit = '';
+        if (this.stats.searches - startSearches >= cfg.maxSearches) limit = 'session search limit reached';
+        else if (this.stats.buys - startBuys >= cfg.maxBuys) limit = 'session buy limit reached';
+        else if (Date.now() >= this.session.endsAt) limit = `${cfg.sessionMinutes} min session limit — take a break`;
+        if (limit) { await this.finishBids(); return this.stop(limit); }
         const gate = this.gate();
         if (!gate.ok) return this.stop(gate.reason);
         const spendable = fut.coins() - cfg.minCoins;
-        if (cfg.mode === 'buy' && spendable < MIN_PRICE) return this.stop('not enough coins');
+        if (cfg.mode !== 'alert' && spendable < MIN_PRICE) return this.stop('not enough coins');
+
+        // Transfer list upkeep (Trade mode, or when bids are waiting to be collected).
+        if ((cfg.mode === 'trade' || this.bids.size) && Date.now() >= this.nextUpkeep) {
+          await this.upkeep();
+          this.nextUpkeep = Date.now() + cfg.upkeepMinutes * 60e3;
+          if (!this.running) return;
+        }
 
         const player = playerForIteration(cfg.players, i);
-        const maxBuy = effectiveMaxBuy(player, cfg);
-        this.setStatus('searching', player ? `Searching ${player.name} ≤ ${fmt(maxBuy)}` : `Searching ≤ ${fmt(maxBuy)}`);
-        const res = await fut.search(fut.criteria(cfg, player, maxBuy, i++));
+        // Prices drift — refresh a player's average during long sessions.
+        if (player && cfg.autoPrice && !player.manualMax && Date.now() - (player.checkedAt || 0) > cfg.repriceMinutes * 60e3) {
+          const ok = await this.priceCheck([player]);
+          this.save(); ui.renderPlayers(); ui.renderTrade();
+          if (!this.running) return;
+          if (!ok) return this.stop('price check stopped by EA — see log');
+          await this.wait(jitter(cfg.delayMin, cfg.delayMax), 'waiting', 'Next search');
+          continue;
+        }
+
+        const { maxBuy, plan } = this.planFor(player);
+        if (!maxBuy) {
+          if (player && !skipped.has(player.id)) {
+            skipped.add(player.id);
+            ui.log(`${player.name}: no profitable buy price yet (needs a price check, or Min profit is too high) — skipping`, 'warn');
+          }
+          i++;
+          if (cfg.players.every((p) => skipped.has(p.id))) return this.stop('no player can be traded for profit — check prices / Min profit');
+          continue;
+        }
+        const tradeFull = cfg.mode === 'trade' && fut.transferSpace() <= 0;
+        if (tradeFull && !fullWarned) { fullWarned = true; ui.log('Transfer list full — waiting for sales before buying more', 'warn'); }
+        if (!tradeFull) fullWarned = false;
+
+        const bidTurn = cfg.bidSnipe && cfg.mode !== 'alert' && i % 2 === 1;
+        this.setStatus('searching', `${bidTurn ? 'Auctions' : 'Searching'} ${player ? player.name : ''} ≤ ${fmt(maxBuy)}`.replace('  ', ' '));
+        const res = await fut.search(bidTurn ? fut.criteria(cfg, player, 0, i, maxBuy) : fut.criteria(cfg, player, maxBuy, i));
+        i++;
         this.stats.searches++;
         this.countUsage('searches');
 
@@ -1444,6 +1630,9 @@
           errors++;
           ui.log(`Search error ${res.status} (${errors}/${SAFETY.maxConsecutiveErrors})`, 'warn');
           if (errors >= SAFETY.maxConsecutiveErrors) return this.halt('errors', `${errors} errors in a row (${res.status})`);
+        } else if (bidTurn) {
+          errors = 0;
+          if (!tradeFull) await this.bidOn(res.listings, player, maxBuy, plan, spendable);
         } else {
           errors = 0;
           const targets = pickTargets(res.listings, { ...cfg, maxBuy }, cfg.mode === 'alert' ? Infinity : spendable);
@@ -1456,8 +1645,8 @@
               ui.toast(`${t.name} at ${fmt(t.buyNowPrice)}`, 'alert');
               sounds.alert();
               notify.discord('alert', { name: t.name, price: t.buyNowPrice, maxBuy });
-            } else {
-              await this.attempt(t, player);
+            } else if (!tradeFull) {
+              await this.attempt(t, player, plan);
             }
           }
         }
@@ -1474,8 +1663,75 @@
       }
     },
 
-    async attempt(t, player) {
+    // -- bidding: auctions about to end, under your max --
+
+    /** Before stopping: wait for open bids to end (max ~1 min) and collect them. */
+    async finishBids() {
+      if (!this.bids.size || !this.running) return;
+      const last = Math.max(...[...this.bids.values()].map((b) => b.endsAt));
+      const waitMs = Math.min(70e3, Math.max(0, last - Date.now()) + 6000);
+      ui.log(`Waiting for ${this.bids.size} open bid${this.bids.size === 1 ? '' : 's'} to end…`, 'muted');
+      await this.wait(waitMs, 'waiting', 'Collecting bids');
+      if (this.running) await this.upkeep(true);
+    },
+
+    bids: new Map(), // tradeId -> { name, amount, endsAt, player, plan }
+
+    async bidOn(listings, player, maxBid, plan, spendable) {
       const cfg = this.cfg;
+      const committed = [...this.bids.values()].reduce((a, b) => a + b.amount, 0);
+      for (const l of listings.slice().sort((a, b) => (a.expires || 0) - (b.expires || 0))) {
+        if (!this.running || this.bids.size >= cfg.maxActiveBids) break;
+        if (this.bids.has(l.tradeId)) continue;
+        const amount = bidAmount(l, maxBid, cfg.bidWindow);
+        if (!amount || amount + committed > spendable) continue;
+        const r = await fut.placeBid(l, amount);
+        if (!r.ok) {
+          const kind = classifyStatus(r.status);
+          if (kind === 'captcha' || kind === 'throttled') return this.halt(kind, `blocked while bidding (${r.status})`);
+          if (kind === 'coins') return;
+          ui.log(`Bid on ${l.name} at ${fmt(amount)} failed (${r.status})`, 'muted');
+          continue;
+        }
+        this.bids.set(l.tradeId, { name: l.name, amount, endsAt: Date.now() + (l.expires || 30) * 1000, player, plan });
+        this.nextUpkeep = Math.min(this.nextUpkeep, Date.now() + ((l.expires || 30) + 8) * 1000);
+        ui.log(`🔨 Bid ${fmt(amount)} on ${l.name} (${l.rating || '?'}) — ends in ${Math.round(l.expires)}s`, 'ok');
+        await sleep(jitter(700, 1400));
+      }
+    },
+
+    /** Buy history entry + optional relist after a Buy Now or a won auction. */
+    async bought(item, info, player, plan, via) {
+      const cfg = this.cfg;
+      this.stats.buys++;
+      this.stats.spent += info.price;
+      this.countUsage('buys');
+      ui.log(`✅ ${via === 'bid' ? 'Won' : 'Bought'} ${info.name} (${info.rating || '?'}) for ${fmt(info.price)}`, 'ok');
+      ui.toast(`${via === 'bid' ? 'Won' : 'Bought'} ${info.name} for ${fmt(info.price)}`, 'ok');
+      sounds.buy();
+      const entry = { at: Date.now(), id: info.defId, itemId: item && item.id, name: info.name, rating: info.rating, price: info.price, sell: 0, via, mode: cfg.mode };
+      const sell = plan ? plan.sell : planSellPrice(info.price, cfg, player);
+      if (sell && item) {
+        await sleep(jitter(800, 1600));
+        const l = await fut.list(item, sell, cfg.listDuration);
+        if (l.ok) {
+          entry.sell = sell;
+          this.stats.listed++;
+          this.stats.profit += profit(info.price, sell);
+          ui.log(`Listed for ${fmt(sell)} (≈ ${fmt(profit(info.price, sell))} profit after tax)`, 'ok');
+        } else {
+          ui.log(`Couldn't list (${l.status}) — it's in your unassigned items`, 'warn');
+        }
+      } else if (item && via === 'bid') {
+        await fut.move([item], w.ItemPile.CLUB);
+      }
+      this.history = addHistory(this.history, entry);
+      store.set(KEYS.history, this.history);
+      ui.renderStats(); ui.renderHistory(); ui.renderTrade();
+      notify.discord('buy', entry);
+    },
+
+    async attempt(t, player, plan) {
       const r = await fut.buy(t);
       if (!r.ok) {
         this.stats.missed++;
@@ -1485,31 +1741,75 @@
         ui.log(`Missed ${t.name} at ${fmt(t.buyNowPrice)} (${r.status})`, 'muted');
         return;
       }
-      this.stats.buys++;
-      this.stats.spent += t.buyNowPrice;
-      this.countUsage('buys');
-      ui.log(`✅ Bought ${t.name} (${t.rating || '?'}) for ${fmt(t.buyNowPrice)}`, 'ok');
-      ui.toast(`Bought ${t.name} for ${fmt(t.buyNowPrice)}`, 'ok');
-      sounds.buy();
+      await this.bought(t.item, { name: t.name, rating: t.rating, defId: t.defId, price: t.buyNowPrice }, player, plan, 'buy');
+    },
 
-      const entry = { at: Date.now(), id: t.defId, name: t.name, rating: t.rating, price: t.buyNowPrice, sell: 0 };
-      const sell = planSellPrice(t.buyNowPrice, cfg, player);
-      if (sell) {
-        await sleep(jitter(800, 1600));
-        const l = await fut.list(t.item, sell, cfg.listDuration);
-        if (l.ok) {
-          entry.sell = sell;
-          this.stats.listed++;
-          this.stats.profit += profit(t.buyNowPrice, sell);
-          ui.log(`Listed for ${fmt(sell)} (≈ ${fmt(profit(t.buyNowPrice, sell))} profit)`, 'ok');
-        } else {
-          ui.log(`Couldn't list (${l.status}) — it's in your unassigned items`, 'warn');
-        }
+    // -- transfer list upkeep: record sales, clear sold, relist expired, collect won bids --
+
+    async upkeep(manual) {
+      this.setStatus('pricing', 'Checking transfer list…');
+      const out = { sold: 0, realized: 0, relisted: 0, won: 0, lost: 0, active: 0 };
+      const items = await fut.transferList();
+      if (!items) { ui.log('Couldn’t read your transfer list', 'warn'); return out; }
+      const sold = [];
+      let expired = 0;
+      for (const it of items) {
+        const st = fut.auctionState(it);
+        if (st.state === 'sold') sold.push({ itemId: it.id, price: st.price });
+        else if (st.state === 'expired') expired++;
+        else if (st.state === 'active') out.active++;
       }
-      this.history = addHistory(this.history, entry);
-      store.set(KEYS.history, this.history);
-      ui.renderStats(); ui.renderHistory();
-      notify.discord('buy', entry);
+      if (sold.length) {
+        const r = settleSales(this.history, sold, Date.now());
+        this.history = r.history;
+        store.set(KEYS.history, this.history);
+        out.sold = sold.length;
+        out.realized = r.realized;
+        const cleared = await fut.clearSold();
+        ui.log(`💰 ${sold.length} sold${r.matched ? ` · profit ${fmt(r.realized)} after tax` : ''}${cleared ? ' · cleared' : ''}`, 'ok');
+        if (r.matched) notify.discord('info', { title: `💰 Sold ${sold.length}`, text: `Profit ${fmt(r.realized)} after tax` });
+        await sleep(jitter(800, 1500));
+      }
+      if (expired && (this.cfg.mode === 'trade' || this.cfg.autoRelist)) {
+        if (await fut.relistExpired()) { out.relisted = expired; ui.log(`Relisted ${expired} expired item${expired === 1 ? '' : 's'}`, 'muted'); }
+        await sleep(jitter(800, 1500));
+      }
+      // Auctions we bid on.
+      const due = [...this.bids.entries()].filter(([, b]) => Date.now() >= b.endsAt);
+      if (due.length || manual) {
+        const watched = await fut.watched();
+        if (watched) {
+          const lost = [];
+          for (const it of watched) {
+            const st = fut.auctionState(it);
+            const bid = this.bids.get(st.tradeId);
+            if (st.state === 'won') {
+              const p = fut.toPlayer(it);
+              this.bids.delete(st.tradeId);
+              out.won++;
+              await this.bought(it, { name: p.name, rating: p.rating, defId: p.id, price: st.price || (bid && bid.amount) || 0 }, bid && bid.player, bid && bid.plan, 'bid');
+            } else if (st.state === 'lost' || st.state === 'expired') {
+              lost.push(it);
+              this.bids.delete(st.tradeId);
+            }
+          }
+          if (lost.length) { await fut.untarget(lost); out.lost = lost.length; ui.log(`Outbid on ${lost.length} auction${lost.length === 1 ? '' : 's'} — cleared`, 'muted'); }
+        }
+        // Forget bids long past their end that never showed up.
+        for (const [id, b] of this.bids) if (Date.now() - b.endsAt > 10 * 60e3) this.bids.delete(id);
+      }
+      this.listedNow = out.active;
+      ui.renderTrade(); ui.renderHistory();
+      if (this.running) this.setStatus('waiting', 'Next search');
+      return out;
+    },
+
+    async upkeepNow() {
+      if (this.running) { this.nextUpkeep = 0; ui.log('Transfer list check queued', 'muted'); return; }
+      await jobs.run('Checking transfer list', async () => {
+        const r = await this.upkeep(true);
+        ui.log(`Transfer list: ${r.active} listed · ${r.sold} sold · ${r.relisted} relisted${r.won || r.lost ? ` · ${r.won} won · ${r.lost} lost` : ''}`, 'ok');
+      });
     },
 
     async tidy() {
@@ -2047,17 +2347,31 @@
 
   // [key, label, type, options/hint]
   const TABS = [
-    ['snipe', 'Snipe'],
-    ['upgrades', 'Upgrades'],
-    ['packs', 'Packs'],
-    ['sbc', 'SBC'],
-    ['filters', 'Filters'],
-    ['sell', 'Sell'],
-    ['safety', 'Safety'],
-    ['history', 'History'],
+    ['snipe', 'Snipe'], ['trade', 'Trade'], ['squad', 'Squad'], ['packs', 'Packs'],
+    ['sbc', 'SBC'], ['history', 'History'], ['log', 'Log'], ['settings', 'Settings'],
   ];
+  const OLD_TABS = { upgrades: 'squad', filters: 'settings', sell: 'settings', safety: 'settings' };
+  const DURATIONS = OPT([['3600', '1 hour'], ['10800', '3 hours'], ['21600', '6 hours'], ['43200', '12 hours'], ['86400', '1 day'], ['259200', '3 days']]);
+
+  // [key, label, type, options/hint] — type 'sec' shows seconds but stores milliseconds
   const FIELDS = {
-    upgrades: [
+    snipe: [
+      ['mode', 'Mode', 'seg', OPT([['buy', 'Buy'], ['trade', 'Trade'], ['alert', 'Alert']])],
+      ['discount', 'Snipe % under avg', 'number'],
+      ['minCoins', 'Keep coins', 'number'],
+      ['maxBuys', 'Buys per session', 'number'],
+      ['bidSnipe', 'Also bid on auctions ending soon', 'toggle'],
+      ['bidWindow', 'Bid in the last (seconds)', 'number'],
+    ],
+    trade: [
+      ['undercut', 'List % under market avg', 'number'],
+      ['minProfit', 'Min profit per card (after tax)', 'number'],
+      ['minProfitPct', 'Min profit % of sell price', 'number'],
+      ['listDuration', 'List for', 'select', DURATIONS],
+      ['upkeepMinutes', 'Check transfer list every (min)', 'number'],
+      ['repriceMinutes', 'Refresh prices every (min)', 'number'],
+    ],
+    squad: [
       ['upgradeBudget', 'Budget (0 = my coins)', 'number'],
       ['upgradeMarket', 'Also search the market', 'toggle'],
     ],
@@ -2072,12 +2386,6 @@
       ['sbcMaxRating', 'Max player rating to use', 'number'],
       ['sbcRepeat', 'Repeat repeatable SBCs', 'number'],
     ],
-    snipe: [
-      ['mode', 'Mode', 'seg', OPT([['buy', 'Buy'], ['alert', 'Alert only']])],
-      ['discount', 'Snipe % under avg', 'number'],
-      ['minCoins', 'Keep coins', 'number'],
-      ['maxBuys', 'Buys per session', 'number'],
-    ],
     filters: [
       ['autoPrice', 'Auto max buy from price', 'toggle'],
       ['maxBuy', 'Default max buy', 'number', 'Used when there’s no price'],
@@ -2091,22 +2399,23 @@
       ['maxBuysPerSearch', 'Buys per search', 'number'],
     ],
     sell: [
-      ['sellMode', 'After buying', 'select', OPT([['off', 'Keep the card'], ['profit', 'List for min profit'], ['market', 'List at market avg'], ['fixed', 'List at my price']])],
+      ['sellMode', 'After buying (Buy mode)', 'select', OPT([['off', 'Keep the card'], ['profit', 'List for min profit'], ['market', 'List at market avg'], ['fixed', 'List at my price']])],
       ['sellPrice', 'My sell price', 'number'],
-      ['minProfit', 'Min profit (after tax)', 'number'],
-      ['listDuration', 'List for', 'select', OPT([['3600', '1 hour'], ['10800', '3 hours'], ['21600', '6 hours'], ['43200', '12 hours'], ['86400', '1 day'], ['259200', '3 days']])],
       ['autoRelist', 'Relist expired & clear sold on start', 'toggle'],
     ],
     safety: [
-      ['delayMin', 'Delay min (ms, ≥ 3000)', 'number'],
-      ['delayMax', 'Delay max (ms)', 'number'],
+      ['delayMin', 'Wait between searches, min (s)', 'sec'],
+      ['delayMax', 'Wait between searches, max (s)', 'sec'],
       ['pauseEvery', 'Rest every N searches (≤ 60)', 'number'],
-      ['pauseMin', 'Rest min (ms)', 'number'],
-      ['pauseMax', 'Rest max (ms)', 'number'],
+      ['pauseMin', 'Rest min (s)', 'sec'],
+      ['pauseMax', 'Rest max (s)', 'sec'],
       ['sessionMinutes', 'Session length (min)', 'number'],
       ['maxSearches', 'Searches per session', 'number'],
       ['searchesPerDay', 'Searches per day', 'number'],
       ['buysPerDay', 'Buys per day', 'number'],
+      ['maxActiveBids', 'Open bids at once', 'number'],
+    ],
+    notify: [
       ['sound', 'Sound & vibration', 'toggle'],
       ['discordWebhook', 'Discord webhook', 'text', 'https://discord.com/api/webhooks/…'],
     ],
@@ -2128,8 +2437,10 @@
         `<option value="${o.v}" ${String(v) === o.v ? 'selected' : ''}>${o.l}</option>`).join('')}</select></label>`;
     }
     const wide = key === 'discordWebhook';
-    return `<label class="row${wide ? ' wide' : ''}"><span>${label}</span><input type="${type === 'number' ? 'number' : 'text'}" inputmode="${type === 'number' ? 'numeric' : 'text'}"
-      data-k="${key}" value="${esc(v)}" placeholder="${esc(extra || '')}" autocomplete="off"></label>`;
+    const num = type === 'number' || type === 'sec';
+    const shown = type === 'sec' ? Math.round((v || 0) / 100) / 10 : v;
+    return `<label class="row${wide ? ' wide' : ''}"><span>${label}</span><input type="${num ? 'number' : 'text'}" inputmode="${type === 'sec' ? 'decimal' : num ? 'numeric' : 'text'}"
+      data-k="${key}"${type === 'sec' ? ' data-unit="s" step="0.5"' : ''} value="${esc(shown)}" placeholder="${esc(extra || '')}" autocomplete="off"></label>`;
   }
 
   const CSS = `
@@ -2161,10 +2472,16 @@
   #fcs .fold{width:30px;height:32px;display:grid;place-items:center;color:var(--muted);border-radius:8px;transition:transform .2s}
   #fcs.min .fold{transform:rotate(180deg)}
 
-  #fcs .tabs{display:flex;gap:2px;padding:0 10px;border-bottom:1px solid var(--line);overflow-x:auto;scrollbar-width:none}
-  #fcs .tabs::-webkit-scrollbar{display:none}
-  #fcs .tabs button{padding:9px 9px 10px;color:var(--muted);font-weight:600;border-bottom:2px solid transparent;white-space:nowrap}
-  #fcs .tabs button.on{color:var(--text);border-bottom-color:var(--green)}
+  #fcs .hd,#fcs .tabs{flex:none}
+  #fcs .tabs{display:grid;grid-template-columns:repeat(4,1fr);gap:4px;padding:2px 10px 10px;border-bottom:1px solid var(--line)}
+  #fcs .tabs button{padding:7px 2px;color:var(--muted);font-weight:600;font-size:12px;border-radius:8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  #fcs .tabs button.on{color:var(--text);background:var(--card2);box-shadow:inset 0 -2px 0 var(--green)}
+  #fcs .body{flex:1;min-height:0}
+  #fcs .last{margin:6px 0 0;font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  #fcs .last:empty{display:none}
+  #fcs .last.ok{color:var(--green)}#fcs .last.warn{color:var(--amber)}#fcs .last.err{color:var(--red)}#fcs .last.alert{color:#ffe08a}
+  #fcs .btn.go-btn{background:var(--green);border-color:var(--green);color:var(--green-ink)}
+  #fcs .log{max-height:none}
   #fcs .body{overflow:auto;padding:12px 14px 14px;overscroll-behavior:contain;-webkit-overflow-scrolling:touch}
   #fcs.min .tabs,#fcs.min .body{display:none}
   #fcs .pane{display:none}#fcs .pane.on{display:block}
@@ -2198,7 +2515,7 @@
   #fcs .chips:empty{display:none}
   #fcs .chip{display:flex;align-items:center;gap:8px;background:var(--card2);border:1px solid var(--line);border-radius:10px;padding:7px 6px 7px 10px}
   #fcs .chip .ovr{font-weight:800;color:var(--green);font-size:12px;min-width:22px}
-  #fcs .chip .nm{flex:1;min-width:0;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  #fcs .chip .nm{flex:1;min-width:0;font-weight:600;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;line-height:1.25}
   #fcs .chip .nm small{display:block;font-weight:400;color:var(--dim);font-size:11px}
   #fcs .chip .mx{font-weight:700;color:var(--amber);font-variant-numeric:tabular-nums;padding:4px 7px;border-radius:7px;background:rgba(255,200,87,.08)}
   #fcs .chip .mx.manual{color:var(--blue);background:rgba(90,169,255,.1)}
@@ -2253,7 +2570,9 @@
   #fcs.mob .hd{cursor:default;padding:12px 12px 10px 16px}
   #fcs.mob .hd::before{content:"";position:absolute;left:50%;top:5px;width:36px;height:4px;margin-left:-18px;border-radius:9px;background:var(--line)}
   #fcs.mob .go{width:48px;height:40px}#fcs.mob .fold{width:40px;height:40px}
-  #fcs.mob .tabs button{padding:11px 10px 12px;font-size:14px}
+  #fcs.mob:not(.min){height:min(80vh,720px)}
+  #fcs.mob .tabs button{padding:9px 2px;font-size:13.5px}
+  #fcs.mob .last{font-size:13px}
   #fcs.mob input,#fcs.mob select{font-size:16px;padding:10px}
   #fcs.mob .row{padding:7px 0}#fcs.mob .seg button{padding:8px 4px;font-size:14px}
   #fcs.mob .btn{padding:13px}#fcs.mob .chip{padding:9px 6px 9px 12px}#fcs.mob .chip .rm{width:34px;height:34px}
@@ -2264,12 +2583,18 @@
   #fcs.mob.min .hd{padding:6px;gap:6px;cursor:grab}
   #fcs.mob.min .hd::before,#fcs.mob.min .brand b,#fcs.mob.min .coins,#fcs.mob.min .pill{display:none}
   #fcs.mob.min .brand{flex:none}
+  @media (max-width:375px){
+    #fcs .brand b{display:none}
+    #fcs .coins{font-size:12px}
+    #fcs .pill{padding:2px 6px}
+    #fcs.mob .tabs button{font-size:12.5px}
+  }
   #fcs.mob.min .logo{width:32px;height:32px;flex:none}
   #fcs.mob.min .go{width:42px;height:36px}#fcs.mob.min .fold{width:30px;height:36px}`;
 
   const ui = {
     root: null,
-    tab: store.get(KEYS.ui, {}).tab || 'snipe',
+    tab: (() => { const t = store.get(KEYS.ui, {}).tab || 'snipe'; return OLD_TABS[t] || t; })(),
 
     q(sel) { return this.root.querySelector(sel); },
     qa(sel) { return [...this.root.querySelectorAll(sel)]; },
@@ -2291,6 +2616,7 @@
           <section class="pane" data-pane="snipe">
             <div class="card">
               <div class="status"><b data-r="state">Idle</b><small data-r="clock"></small></div>
+              <p class="last" data-r="last"></p>
               <div class="bars">
                 <div class="bar" data-r="bar-s"><span><em>Searches today</em><em data-r="use-s"></em></span><div><i></i></div></div>
                 <div class="bar" data-r="bar-b"><span><em>Buys today</em><em data-r="use-b"></em></span><div><i></i></div></div>
@@ -2304,24 +2630,32 @@
               <button class="btn blue" data-a="price">Check prices</button>
               <p class="note">Tap a price to set your own max buy.</p>
             </div>
-            <div class="card">${FIELDS.snipe.map(fieldHtml).join('')}</div>
+            <div class="card">${FIELDS.snipe.map(fieldHtml).join('')}
+              <p class="note"><b>Buy</b> snipes cards under your max. <b>Trade</b> buys under value and relists for profit (see Trade). <b>Alert</b> only notifies you.</p></div>
             <div class="card"><h4>This session</h4>
               <div class="stats">
                 <div><b data-s="searches">0</b>Searches</div><div><b data-s="buys">0</b>Bought</div><div><b data-s="missed">0</b>Missed</div>
                 <div><b data-s="spent">0</b>Spent</div><div><b data-s="listed">0</b>Listed</div><div><b data-s="profit">0</b>Est. profit</div>
               </div>
             </div>
-            <div class="card"><h4>Activity</h4><div class="log" data-r="log"></div>
-              <button class="btn" data-a="copy-log">Copy log (to send for help)</button></div>
           </section>
-          <section class="pane" data-pane="upgrades">
+          <section class="pane" data-pane="trade">
+            <div class="card"><h4>Resell bot</h4>
+              <div class="kpi" data-r="tkpi"></div>
+              <div data-r="tplans"></div>
+              <button class="btn go-btn" data-a="trade-start">Start trading</button>
+              <button class="btn" data-a="upkeep">Check transfer list now</button>
+              <p class="note">For each player on the Snipe tab it lists a little under the market average so cards sell, and only buys low enough to keep your min profit after EA’s 5% tax. Every few minutes it records sales, clears sold items, relists expired ones, and pauses buying when your transfer list is full. Same safety limits as sniping.</p></div>
+            <div class="card"><h4>Trade settings</h4>${FIELDS.trade.map(fieldHtml).join('')}</div>
+          </section>
+          <section class="pane" data-pane="squad">
             <div class="card"><h4>Your team</h4><div data-r="team"><p class="empty">Reads your active squad and finds the best upgrades for your weakest spots.</p></div>
               <button class="btn blue" data-a="analyse">Analyse my team</button></div>
             <div data-r="upg"></div>
             <div class="card"><h4>Formation coach</h4><div data-r="forms"><p class="empty">Compares your lineup with popular competitive formations, built from players you own.</p></div>
               <button class="btn blue" data-a="forms">Compare formations</button>
               <p class="note">Formations are a built-in list of popular competitive setups, not live pro data. “Create squad” makes a new squad, so your current one isn’t touched.</p></div>
-            <div class="card">${FIELDS.upgrades.map(fieldHtml).join('')}
+            <div class="card">${FIELDS.squad.map(fieldHtml).join('')}
               <p class="note">Owned players are suggested first. Market suggestions match your squad’s main league or nation so you keep chemistry, and cost a few searches.</p></div>
           </section>
           <section class="pane" data-pane="packs">
@@ -2335,23 +2669,27 @@
             <div class="card"><h4>Squad Building Challenges</h4><div data-r="sbc"><p class="empty">Load SBCs to see which ones can be solved from your club.</p></div>
               <button class="btn blue" data-a="sbc-load">Load SBCs</button></div>
             <div class="card">${FIELDS.sbc.map(fieldHtml).join('')}
-              <p class="note">Never uses your active squad (starters, subs, reserves), loans, evolutions, specials or tradeables unless you allow them, or anyone above your max rating — and checks every player again right before sending. Uses your cheapest fodder first: SBC storage and duplicates, then untradeables. Solves rating, quality, rare and min/max rating requirements; chemistry and league/nation/club counts aren’t automatic yet.</p></div>
-          </section>
-          <section class="pane" data-pane="filters"><div class="card">${FIELDS.filters.map(fieldHtml).join('')}
-            <p class="note">Players match every version of the card. Use Min rating to target one version.</p></div></section>
-          <section class="pane" data-pane="sell"><div class="card">${FIELDS.sell.map(fieldHtml).join('')}
-            <p class="note">EA keeps 5% of every sale. Profit shown is after tax.</p></div></section>
-          <section class="pane" data-pane="safety">
-            <div class="card"><h4>Limits</h4>${FIELDS.safety.slice(0, 9).map(fieldHtml).join('')}
-              <p class="note">Minimums are enforced. A captcha locks the bot for 3 h, a market limit for 24 h.</p>
-              <p class="note" data-r="lock"></p></div>
-            <div class="card"><h4>Notifications</h4>${FIELDS.safety.slice(9).map(fieldHtml).join('')}
-              <button class="btn" data-a="discord-test">Send test notification</button></div>
+              <p class="note">Never uses your active squad (starters, subs, reserves), loans, evolutions, specials or tradeables unless you allow them, or anyone above your max rating — and checks every player again right before sending. Cheapest fodder first: SBC storage and duplicates, then untradeables. Chemistry and league/nation/club counts aren’t automatic yet.</p></div>
           </section>
           <section class="pane" data-pane="history">
             <div class="card"><h4>Totals</h4><div class="stats" data-r="totals"></div></div>
             <div class="card"><h4>Recent buys</h4><div class="hist" data-r="hist"></div>
               <button class="btn red" data-a="clear-history">Clear history</button></div>
+          </section>
+          <section class="pane" data-pane="log">
+            <div class="card"><h4>Activity</h4><div class="log" data-r="log"></div>
+              <button class="btn" data-a="copy-log">Copy log (to send for help)</button></div>
+          </section>
+          <section class="pane" data-pane="settings">
+            <div class="card"><h4>Targets & filters</h4>${FIELDS.filters.map(fieldHtml).join('')}
+              <p class="note">Players match every version of the card. Use Min rating to target one version.</p></div>
+            <div class="card"><h4>After buying</h4>${FIELDS.sell.map(fieldHtml).join('')}
+              <p class="note">Min profit and listing time are on the Trade tab. EA keeps 5% of every sale; profit shown is after tax.</p></div>
+            <div class="card"><h4>Safety limits</h4>${FIELDS.safety.map(fieldHtml).join('')}
+              <p class="note">Minimums are enforced. A captcha locks the bot for 3 h, a market limit for 24 h.</p>
+              <p class="note" data-r="lock"></p></div>
+            <div class="card"><h4>Notifications</h4>${FIELDS.notify.map(fieldHtml).join('')}
+              <button class="btn" data-a="discord-test">Send test notification</button></div>
           </section>
         </div>`;
       document.body.appendChild(root);
@@ -2361,7 +2699,7 @@
       this.bind();
       this.mountPicker();
       this.showTab(this.tab);
-      this.renderPlayers(); this.renderStats(); this.renderHistory(); this.renderStatus();
+      this.renderPlayers(); this.renderStats(); this.renderHistory(); this.renderStatus(); this.renderTrade();
       setInterval(() => this.tick(), 500);
 
       this.log(isMobile() ? 'Ready — tap ▶ to start' : 'Ready — Alt+S to start/stop', 'muted');
@@ -2386,6 +2724,14 @@
           case 'fold': return root.classList.toggle('min');
           case 'price': return engine.checkPricesNow();
           case 'analyse': return upgrades.analyse();
+          case 'trade-start':
+            if (engine.running) return;
+            this.commit();
+            engine.cfg = { ...engine.cfg, mode: 'trade' };
+            engine.save(); this.syncForm();
+            if (!engine.cfg.players.length) { this.showTab('snipe'); this.log('Add the players you want to trade on the Snipe tab first', 'warn'); this.toast('Add players to trade first', 'alert'); return; }
+            return engine.start();
+          case 'upkeep': return engine.upkeepNow();
           case 'forms': return upgrades.compareFormations();
           case 'form-view': this.formOpen = this.formOpen === Number(btn.dataset.i) ? -1 : Number(btn.dataset.i); return this.renderFormations();
           case 'form-create': return upgrades.createSquad(Number(btn.dataset.i));
@@ -2454,6 +2800,8 @@
       this.qa('[data-tab]').forEach((b) => b.classList.toggle('on', b.dataset.tab === tab));
       this.qa('[data-pane]').forEach((p) => p.classList.toggle('on', p.dataset.pane === tab));
       store.set(KEYS.ui, { ...store.get(KEYS.ui, {}), tab });
+      if (tab === 'trade') this.renderTrade();
+      if (tab === 'squad' && upgrades) this.renderUpgrades();
     },
 
     /** Read every field into the config and save it. */
@@ -2463,6 +2811,7 @@
         const k = el.dataset.k;
         if (el.classList.contains('seg')) cfg[k] = el.querySelector('.on')?.dataset.v ?? cfg[k];
         else if (el.type === 'checkbox') cfg[k] = el.checked;
+        else if (el.dataset.unit === 's') cfg[k] = Math.round((Number(el.value) || 0) * 1000);
         else if (typeof DEFAULT_CONFIG[k] === 'number') cfg[k] = Number(el.value) || 0;
         else cfg[k] = el.value.trim();
       });
@@ -2477,6 +2826,7 @@
         const v = engine.cfg[el.dataset.k];
         if (el.classList.contains('seg')) el.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === String(v)));
         else if (el.type === 'checkbox') el.checked = !!v;
+        else if (el.dataset.unit === 's') el.value = Math.round((v || 0) / 100) / 10;
         else el.value = v ?? '';
       });
     },
@@ -2556,7 +2906,7 @@
       if (v === null) return;
       const n = parseInt(String(v).replace(/[^\d]/g, ''), 10);
       p.manualMax = n >= MIN_PRICE ? roundPrice(n) : 0;
-      engine.save(); this.renderPlayers();
+      engine.save(); this.renderPlayers(); this.renderTrade();
       this.log(p.manualMax ? `${p.name}: max buy set to ${fmt(p.manualMax)}` : `${p.name}: back to automatic price`, 'muted');
     },
 
@@ -2640,6 +2990,25 @@
         <button class="btn red" data-a="sbc-discard">Discard</button>`;
     },
 
+    renderTrade() {
+      if (!this.root) return;
+      const cfg = engine.cfg;
+      const sum = summarizeHistory(engine.history, Date.now());
+      const listed = engine.listedNow ?? '—';
+      this.q('[data-r=tkpi]').innerHTML = `
+        <div><b>${listed}</b>Listed now</div><div><b>${fmt(sum.today.soldToday)}</b>Sold today</div><div><b class="${sum.today.realizedToday >= 0 ? 'up' : 'down'}">${fmt(sum.today.realizedToday)}</b>Profit today</div>`;
+      this.q('[data-r=tplans]').innerHTML = cfg.players.length ? `<div class="list">${cfg.players.map((p) => {
+        const plan = flipPlan(p.avg, tradeOpts(p.avg, cfg));
+        const buyAt = plan && Math.min(plan.maxBuy, p.manualMax || Infinity);
+        const short = plan ? Math.max(0, roundPrice(buyAt) - (fut.coins() - cfg.minCoins)) : 0;
+        const sub = !p.avg ? 'needs a price check (Check prices on the Snipe tab)'
+          : !plan ? `avg ${fmt(p.avg)} — no profitable price at your min profit`
+          : `avg ${fmt(p.avg)} · buy ≤ ${fmt(buyAt)} · sell ${fmt(plan.sell)}${short > 0 ? ` · <span class="down">you can only buy listings under ${fmt(fut.coins() - cfg.minCoins)}</span>` : ''}`;
+        return `<div class="li"><span class="t"><b>${esc(p.name)}</b><small>${sub}</small></span>${plan ? `<b class="up">+${fmt(plan.profit)}</b>` : ''}</div>`;
+      }).join('')}</div><p class="note">All-time realized profit: <b class="${sum.all.realized >= 0 ? 'up' : 'down'}">${fmt(sum.all.realized)}</b> from ${fmt(sum.all.sold)} sales.</p>`
+        : '<p class="empty">Add players on the Snipe tab, check their prices, then start trading.</p>';
+    },
+
     renderFormations() {
       const list = upgrades.formations;
       const names = (arr) => arr.map((p) => `${esc(p.name)} ${p.rating}`).join(', ');
@@ -2699,12 +3068,12 @@
       const sum = summarizeHistory(engine.history, Date.now());
       this.q('[data-r=totals]').innerHTML = `
         <div><b>${fmt(sum.today.buys)}</b>Buys today</div><div><b>${fmt(sum.today.spent)}</b>Spent today</div><div><b>${fmt(sum.today.profit)}</b>Profit today</div>
-        <div><b>${fmt(sum.all.buys)}</b>All buys</div><div><b>${fmt(sum.all.spent)}</b>All spent</div><div><b>${fmt(sum.all.profit)}</b>All profit</div>`;
+        <div><b>${fmt(sum.all.buys)}</b>All buys</div><div><b>${fmt(sum.all.sold)}</b>Sold</div><div><b>${fmt(sum.all.realized)}</b>Real profit</div>`;
       const list = engine.history.slice(0, 50);
       this.q('[data-r=hist]').innerHTML = list.length ? list.map((e) => `
         <div><span>${esc(e.name)}${e.rating ? ` · ${e.rating}` : ''}</span><span class="p">${fmt(e.price)}</span>
         <small>${new Date(e.at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</small>
-        <small class="p ${e.sell ? 'g' : ''}">${e.sell ? `listed ${fmt(e.sell)} · +${fmt(profit(e.price, e.sell))}` : 'kept'}</small></div>`).join('')
+        <small class="p ${e.sell || e.soldFor ? 'g' : ''}">${e.soldFor ? `sold ${fmt(e.soldFor)} · +${fmt(afterTax(e.soldFor) - e.price)}` : e.sell ? `listed ${fmt(e.sell)} · +${fmt(profit(e.price, e.sell))}` : e.via === 'bid' ? 'won bid · kept' : 'kept'}</small></div>`).join('')
         : '<p class="empty">No buys yet</p>';
     },
 
@@ -2772,7 +3141,9 @@
       line.innerHTML = `<time>${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })}</time>`;
       line.append(document.createTextNode(msg));
       box.prepend(line);
-      while (box.childNodes.length > 200) box.lastChild.remove();
+      while (box.childNodes.length > 300) box.lastChild.remove();
+      const last = this.q('[data-r=last]');
+      if (last) { last.textContent = msg; last.className = `last ${cls}`; }
     },
 
     toast(msg, kind = 'ok') {

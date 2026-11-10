@@ -98,8 +98,11 @@ test('history: newest first, capped, with totals', () => {
   h = c.addHistory(h, { at: now, price: 1000, sell: 1500 });
   assert.equal(h[0].price, 1000);
   const sum = c.summarizeHistory(h, now);
-  assert.deepEqual(sum.today, { buys: 2, spent: 41000, profit: 425 });
-  assert.deepEqual(sum.all, { buys: 3, spent: 51000, profit: 425 + 1400 });
+  assert.equal(sum.today.buys, 2);
+  assert.equal(sum.today.spent, 41000);
+  assert.equal(sum.today.profit, 425);
+  assert.equal(sum.all.buys, 3);
+  assert.equal(sum.all.profit, 425 + 1400);
   assert.equal(c.addHistory(Array(300).fill({}), { at: 1 }).length, 300);
 });
 
@@ -493,4 +496,49 @@ test('min and max team rating together', () => {
   const sol = c.solveSbc(clubPool([[75, 10], [78, 10], [80, 10], [83, 10], [86, 5]]), k);
   assert.ok(sol && sol.rating >= 80 && sol.rating <= 81, `rating ${sol && sol.rating}`);
   assert.equal(c.solveSbc(clubPool([[86, 15]]), k), null);
+});
+
+// ---- trading & bidding --------------------------------------------------------------
+
+test('flipPlan: undercut sell, buy low enough for min profit after tax', () => {
+  const p = c.flipPlan(52000, { minProfit: 1000, undercut: 3 });
+  assert.equal(p.sell, 50000); // 52000 × 0.97 = 50,440 → rounded down (500 steps above 50k)
+  assert.ok(c.profit(p.maxBuy, p.sell) >= 1000);
+  assert.ok(c.profit(c.nextPrice(p.maxBuy), p.sell) < 1000, 'max buy is the highest profitable price');
+  assert.equal(c.flipPlan(0, {}), null);
+  assert.equal(c.flipPlan(300, { minProfit: 5000 }), null); // impossible
+  const cheap = c.flipPlan(1000, { minProfit: 50, undercut: 0 });
+  assert.ok(cheap && cheap.maxBuy <= 900 && c.profit(cheap.maxBuy, 1000) >= 50);
+});
+
+test('bidAmount: only near the end, under max, never above Buy Now', () => {
+  assert.equal(c.bidAmount({ expires: 20, currentBid: 0, startingBid: 200, buyNowPrice: 1000 }, 500), 200);
+  assert.equal(c.bidAmount({ expires: 20, currentBid: 450, startingBid: 200, buyNowPrice: 1000 }, 500), 500);
+  assert.equal(c.bidAmount({ expires: 20, currentBid: 500, startingBid: 200, buyNowPrice: 1000 }, 500), 0); // next 550 > max
+  assert.equal(c.bidAmount({ expires: 120, currentBid: 0, startingBid: 200 }, 500, 30), 0); // too early
+  assert.equal(c.bidAmount({ expires: 10, currentBid: 0, startingBid: 200, bidState: 'highest' }, 500), 0); // already winning
+  assert.equal(c.bidAmount({ expires: 10, currentBid: 950, startingBid: 200, buyNowPrice: 1000 }, 5000), 0); // next bid = Buy Now → buy instead
+  assert.equal(c.bidAmount({ expires: 10, currentBid: 9900, startingBid: 200, buyNowPrice: 50000 }, 20000), 10000);
+});
+
+test('settleSales records realized profit once', () => {
+  const now = Date.now();
+  const h = [{ at: now, itemId: 1, price: 40000, sell: 50000 }, { at: now, itemId: 2, price: 1000 }];
+  const r = c.settleSales(h, [{ itemId: 1, price: 50000 }, { itemId: 99, price: 5 }], now);
+  assert.equal(r.matched, 1);
+  assert.equal(r.realized, 47500 - 40000);
+  assert.equal(r.history[0].soldFor, 50000);
+  const again = c.settleSales(r.history, [{ itemId: 1, price: 50000 }], now);
+  assert.equal(again.matched, 0, 'not counted twice');
+  const sum = c.summarizeHistory(r.history, now);
+  assert.equal(sum.today.soldToday, 1);
+  assert.equal(sum.today.realizedToday, 7500);
+  assert.equal(sum.all.realized, 7500);
+});
+
+test('tradeOpts: min profit is the larger of coins and % of price', () => {
+  assert.equal(c.tradeOpts(1800000, { minProfit: 200, minProfitPct: 3, undercut: 3 }).minProfit, 54000);
+  assert.equal(c.tradeOpts(5000, { minProfit: 200, minProfitPct: 3, undercut: 3 }).minProfit, 200);
+  const p = c.flipPlan(1868000, c.tradeOpts(1868000, { minProfit: 200, minProfitPct: 3, undercut: 3 }));
+  assert.ok(p && p.profit >= 0.03 * 1868000 * 0.95, `profit ${p && p.profit}`);
 });

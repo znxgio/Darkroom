@@ -1,0 +1,131 @@
+// End-to-end test for Trade mode (resell bot) and auction bidding against a mocked Web App.
+// Usage: node test/e2e-trade.js [screenshot-dir]   (needs Playwright; ~2 minutes)
+const { chromium, devices } = require('playwright');
+const fs = require('fs');
+const path = require('path');
+
+const S = process.argv[2] || require('os').tmpdir();
+const SCRIPT = fs.readFileSync(path.join(__dirname, '..', 'fc-sniper.user.js'), 'utf8');
+const results = [];
+const check = (name, ok, info = '') => results.push(`${ok ? 'PASS' : 'FAIL'}  ${name}${info ? `  — ${info}` : ''}`);
+
+function installTradeMock() {
+  const obs = (res, ms = 5) => ({ observe(ctx, cb) { setTimeout(() => cb({ unobserve() {} }, res), ms); } });
+  const PILE = { CLUB: 1, PURCHASED: 3, TRANSFER: 5, STORAGE: 6 };
+  window.ItemPile = PILE;
+  window.UTSearchCriteriaDTO = function () {};
+  let id = 1000;
+  const auction = (o) => {
+    const a = { tradeId: String(o.tradeId), buyNowPrice: o.bin || 0, currentBid: o.bid || 0, startingBid: o.start || 150, expires: o.expires ?? 3600,
+      _tradeState: o.trade || 'active', _bidState: o.bidState || 'none' };
+    a.isSold = () => a._tradeState === 'closed' && a._bidState !== 'highest' && a.currentBid > 0;
+    a.isWon = () => a._tradeState === 'closed' && a._bidState === 'highest';
+    a.isExpired = () => a._tradeState === 'expired';
+    a.isSelling = () => a._tradeState === 'active';
+    return a;
+  };
+  const card = (o) => {
+    const it = { id: o.id || ++id, definitionId: 231747, rating: 91, rareflag: 1, untradeable: false, preferredPosition: 25,
+      _staticData: { name: 'Mbappé' }, isPlayer: () => true };
+    it._auction = auction(o);
+    it.getAuctionData = () => it._auction;
+    return it;
+  };
+  window.T = { coins: 300000, bought: [], bids: [], listed: [], cleared: 0, relisted: 0, untargeted: 0, searches: [] };
+  // transfer list: an earlier buy (item 501) has sold for 50,000; another expired
+  const transfer = [card({ id: 501, tradeId: 9001, bin: 50000, bid: 50000, trade: 'closed' }), card({ id: 502, tradeId: 9002, bin: 52000, trade: 'expired' })];
+  const watched = [];
+  let auctionShown = false;
+  window.services = {
+    User: { getUser: () => ({ coins: { amount: T.coins } }) },
+    Item: {
+      clearTransferMarketCache() {},
+      searchTransferMarket(c) {
+        T.searches.push({ maxBuy: c.maxBuy, maxBid: c.maxBid, minBid: c.minBid, minBuy: c.minBuy });
+        if (c.maxBid) {
+          // auction search: one auction about to end (shown once)
+          const items = auctionShown ? [] : [card({ tradeId: 7001, bin: 90000, bid: 30000, expires: 2 })];
+          auctionShown = true;
+          return obs({ success: true, data: { items } });
+        }
+        const items = [];
+        for (let i = 0; i < 40; i++) items.push(card({ tradeId: 100 + i, bin: 50000 + i * 1000 }));
+        if (c.minBid !== undefined) items.push(card({ tradeId: 555, bin: 45000 })); // a snipe, only in snipe searches
+        return obs({ success: true, data: { items: items.filter((x) => !c.maxBuy || x._auction.buyNowPrice <= c.maxBuy).slice(0, 20) } });
+      },
+      bid(item, amount) {
+        if (amount === item._auction.buyNowPrice) { T.bought.push(amount); T.coins -= amount; return obs({ success: true }); }
+        T.bids.push(amount);
+        item._auction.currentBid = amount; item._auction._bidState = 'highest';
+        watched.push(item);
+        // auction ends and we win it shortly after
+        setTimeout(() => { item._auction._tradeState = 'closed'; }, 2500);
+        return obs({ success: true });
+      },
+      move(items) { return obs({ success: true }); },
+      list(item, start, bn) { T.listed.push(bn); return obs({ success: true }); },
+      requestTransferItems: () => obs({ success: true, data: { items: transfer.slice() } }),
+      clearSoldItems() { T.cleared++; transfer.splice(0, transfer.length, ...transfer.filter((x) => !x._auction.isSold())); return obs({ success: true }); },
+      relistExpiredAuctions() { T.relisted++; transfer.forEach((x) => { if (x._auction.isExpired()) x._auction._tradeState = 'active'; }); return obs({ success: true }); },
+      requestWatchedItems: () => obs({ success: true, data: { items: watched.slice() } }),
+      untarget(items) { T.untargeted += items.length; return obs({ success: true }); },
+    },
+  };
+  window.repositories = { Item: { getPileSize: () => 100, numItemsInCache: () => transfer.length, isPileFull: () => false } };
+  // an earlier buy of item 501 at 40,000, listed at 50,000
+  localStorage.setItem('fc-sniper:history', JSON.stringify([{ at: Date.now() - 3600e3, id: 231747, itemId: 501, name: 'Mbappé', rating: 91, price: 40000, sell: 50000 }]));
+  localStorage.setItem('fc-sniper:config', JSON.stringify({
+    players: [{ id: 231747, name: 'Mbappé', rating: 91 }],
+    bidSnipe: true, bidWindow: 30, minProfit: 1000, undercut: 3, maxBuys: 2, delayMin: 3000, delayMax: 4500,
+  }));
+}
+
+(async () => {
+  const b = await chromium.launch();
+  const p = await (await b.newContext(devices['iPhone 13'])).newPage();
+  const errors = [];
+  p.on('pageerror', (e) => errors.push(e.message));
+  await p.route('http://fake.test/**', (r) => r.fulfill({ contentType: 'text/html', body: '<html><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"></head><body style="margin:0;background:#1d2b3a"></body></html>' }));
+  await p.goto('http://fake.test/');
+  await p.evaluate(installTradeMock);
+  await p.addScriptTag({ content: SCRIPT });
+  await p.waitForSelector('#fcs');
+  const log = () => p.evaluate(() => [...document.querySelectorAll('#fcs [data-r=log] div')].reverse().map((d) => d.textContent.replace(/^\d\d:\d\d:\d\d\s*/, '')));
+
+  await p.tap('#fcs [data-a=fold]');
+  await p.tap('#fcs [data-tab=trade]');
+  await p.screenshot({ path: `${S}/trade-0.png` });
+  await p.tap('#fcs [data-a=trade-start]');
+  await p.waitForFunction(() => !document.querySelector('#fcs [data-a=toggle]').classList.contains('on') && window.T.searches.length > 3, null, { timeout: 150000 });
+  await p.waitForTimeout(500);
+  const t = await p.evaluate(() => window.T);
+  const lines = await log();
+  const plan = { sell: 48500 };
+
+  check('mode switched to Trade', await p.evaluate(() => JSON.parse(localStorage.getItem('fc-sniper:config')).mode === 'trade'));
+  check('first upkeep recorded the earlier sale', lines.some((l) => /💰 1 sold · profit 7,500 after tax/.test(l)), lines.find((l) => /sold/.test(l)));
+  check('sold items cleared, expired relisted', t.cleared === 1 && t.relisted >= 1, `cleared ${t.cleared}, relisted ${t.relisted}`);
+  check('price checked before trading', lines.some((l) => /avg/.test(l)));
+  check('bought the 45k snipe under the profitable max', t.bought.includes(45000), `bought ${t.bought}`);
+  check('relisted under market average', t.listed.length >= 1 && t.listed.every((x) => x === t.listed[0]) && t.listed[0] < 52000, `listed ${t.listed}`);
+  const buy = t.searches.find((x) => x.maxBuy && x.minBid !== undefined);
+  check('snipe search max buy keeps min profit', buy && 0.95 * t.listed[0] - buy.maxBuy >= 1000, JSON.stringify(buy));
+  check('auction searches use max bid', t.searches.some((x) => x.maxBid && !x.maxBuy), JSON.stringify(t.searches.filter((x) => x.maxBid)[0]));
+  check('bid placed on ending auction', t.bids.includes(30250), `bids ${t.bids}`);
+  check('won auction collected and listed', lines.some((l) => /Won Mbappé/.test(l)) && t.listed.length >= 2, lines.filter((l) => /Won|Bid/.test(l)).join(' | '));
+  check('stopped at session buy limit', lines.some((l) => /session buy limit/.test(l)));
+  const hist = await p.evaluate(() => JSON.parse(localStorage.getItem('fc-sniper:history')));
+  check('history: sale realized, bid recorded', hist.some((e) => e.itemId === 501 && e.soldFor === 50000) && hist.some((e) => e.via === 'bid'));
+  await p.tap('#fcs [data-tab=trade]');
+  await p.waitForTimeout(200);
+  const kpi = await p.textContent('#fcs [data-r=tkpi]');
+  check('Trade tab shows sold today and profit', /1Sold today/.test(kpi) && /7,500Profit today/.test(kpi), kpi.replace(/\s+/g, ' '));
+  const plans = await p.textContent('#fcs [data-r=tplans]');
+  check('Trade tab shows the flip plan', /buy ≤/.test(plans) && /sell/.test(plans), plans.replace(/\s+/g, ' ').slice(0, 120));
+  await p.screenshot({ path: `${S}/trade-1.png` });
+  check('no page errors', errors.length === 0, errors.join('; '));
+  console.log('log:\n  ' + lines.join('\n  '));
+  await b.close();
+  console.log('\n' + results.join('\n'));
+  if (results.some((r) => r.startsWith('FAIL'))) process.exit(1);
+})().catch((e) => { console.error(e); console.log('\n' + results.join('\n')); process.exit(1); });

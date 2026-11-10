@@ -73,10 +73,10 @@ const idle = (p) => p.waitForFunction(() => !document.querySelector('#fcs [data-
   await p.click('#fcs .chip:nth-child(2) .mx');
   check('manual max buy via tap', (await p.textContent('#fcs .chip:nth-child(2) .mx')).includes('70,000'));
   // selling: market avg + relist, discord webhook
-  await p.click('#fcs [data-tab=sell]');
+  await p.click('#fcs [data-tab=settings]');
   await p.selectOption('#fcs [data-k=sellMode]', 'market');
   await p.click('#fcs [data-k=autoRelist] + i');
-  await p.click('#fcs [data-tab=safety]');
+  await p.click('#fcs [data-tab=settings]');
   await p.fill('#fcs [data-k=discordWebhook]', 'https://discord.com/api/webhooks/1/abc');
   await p.click('#fcs [data-a=discord-test]');
   await p.waitForTimeout(300);
@@ -102,7 +102,7 @@ const idle = (p) => p.waitForFunction(() => !document.querySelector('#fcs [data-
   // alert mode: should not buy
   await p.click('#fcs [data-tab=snipe]');
   await p.click('#fcs .seg [data-v=alert]');
-  await p.click('#fcs [data-tab=safety]');
+  await p.click('#fcs [data-tab=settings]');
   await p.fill('#fcs [data-k=maxSearches]', '2');
   await p.click('#fcs [data-tab=snipe]');
   await p.evaluate(() => { T.bought.length = 0; });
@@ -116,7 +116,7 @@ const idle = (p) => p.waitForFunction(() => !document.querySelector('#fcs [data-
   // captcha lock
   await p.click('#fcs .seg [data-v=buy]');
   await p.evaluate(() => { T.failNext = 458; });
-  await p.click('#fcs [data-tab=safety]');
+  await p.click('#fcs [data-tab=settings]');
   await p.fill('#fcs [data-k=maxSearches]', '50');
   await p.click('#fcs [data-tab=snipe]');
   await p.click('#fcs [data-a=toggle]');
@@ -136,7 +136,7 @@ const idle = (p) => p.waitForFunction(() => !document.querySelector('#fcs [data-
   await m.waitForFunction(() => /avg/.test(document.querySelector('#fcs .chip small')?.textContent || ''), null, { timeout: 60000 });
   await m.waitForTimeout(400);
   await m.screenshot({ path: `${S}/v1-mobile-snipe.png` });
-  await m.tap('#fcs [data-tab=sell]');
+  await m.tap('#fcs [data-tab=settings]');
   await m.screenshot({ path: `${S}/v1-mobile-sell.png` });
   check('no page errors (mobile)', m.errors.length === 0, m.errors.join('; '));
 
