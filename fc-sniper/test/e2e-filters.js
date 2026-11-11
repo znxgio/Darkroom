@@ -136,7 +136,7 @@ function installMock() {
   await p.waitForTimeout(500);
   if (!copied) copied = await p.evaluate(() => navigator.clipboard.readText().catch(() => ''));
   const G = await p.evaluate(() => ({ calls: F.galleryCalls, graded: !!F.galleryGraded }));
-  check('gallery probe finds the service, its methods, globals and data shape', /gallery-like services: Gallery/.test(copied) && /requestGallerySets\(0\)/.test(copied) && /UTGallerySetEntity/.test(copied) && /keys sets/.test(copied), (copied || '').split('\n').filter((l) => /gallery probe/.test(l)).slice(0, 3).join(' | ').slice(0, 300));
+  check('gallery probe finds the service, its methods, globals and data shape', /gallery-like services: .*Gallery/.test(copied) && /requestGallerySets\(0\)/.test(copied) && /UTGallerySetEntity/.test(copied) && /keys sets/.test(copied), (copied || '').split('\n').filter((l) => /gallery probe/.test(l)).slice(0, 3).join(' | ').slice(0, 300));
   check('gallery probe is read-only (one read request, no grading)', G.calls === 1 && !G.graded, JSON.stringify(G));
   void prev;
   check('no page errors', !errors.length, errors.join('; '));

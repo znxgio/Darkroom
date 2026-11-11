@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FC Sniper
 // @namespace    https://github.com/znxgio/darkroom
-// @version      2.1.1
+// @version      2.1.2
 // @description  Sniper, pack opener, SBC solver and team upgrade advisor for the EA SPORTS FC Ultimate Team Web App, with built-in safety limits.
 // @match        https://www.ea.com/*ultimate-team/web-app*
 // @match        https://www.ea.com/ea-sports-fc/ultimate-team/web-app*
@@ -1424,7 +1424,7 @@
 
   const w = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '2.1.1';
+  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '2.1.2';
   const errText = (e) => (e && e.message ? e.message : String(e));
   const fmt = (n) => Number(n || 0).toLocaleString();
 
@@ -1829,7 +1829,7 @@
      * so we can see the data's shape. Changes nothing. Returns lines for Copy log.
      */
     async galleryProbe() {
-      const rx = /galler|collection|album|sticker|(?<!up)grade|gtag|token ?store/i;
+      const rx = /galler|showcase|eventtoken|collection|album|sticker|(?<!up)grade|gtag|token ?store/i;
       const lines = [];
       const short = (v, n = 300) => { try { return (typeof v === 'string' ? v : JSON.stringify(v, (k, x) => (typeof x === 'function' ? 'fn' : x))).replace(/\s+/g, ' ').slice(0, n); } catch { return String(v).slice(0, n); } };
       const methods = (obj) => {
@@ -1847,6 +1847,8 @@
       const svcNames = Object.keys(S);
       lines.push(`services (${svcNames.length}): ${svcNames.join(',')}`.slice(0, 900));
       const hits = svcNames.filter((k) => rx.test(k));
+      // FC 27 names the Gallery "Showcase" inside the Web App (tokens: EventToken)
+      for (const k of ['Showcase', 'EventToken']) if (S[k] && !hits.includes(k)) hits.unshift(k);
       // services whose methods mention the gallery
       for (const k of svcNames) {
         if (hits.includes(k)) continue;
@@ -1857,13 +1859,12 @@
       for (const k of hits.slice(0, 6)) {
         const ms = methods(S[k]);
         lines.push(`services.${k} methods: ${ms.map((m) => `${m.k}(${m.n})`).join(', ')}`.slice(0, 1200));
-        for (const m of ms.filter((x) => rx.test(x.k) || /request|get|fetch|submit|grade|claim|add|slot/i.test(x.k)).slice(0, 12)) {
-          lines.push(`  ${k}.${m.k}: ${short(m.src, 220)}`);
-        }
-        const r = ms.find((m) => m.n === 0 && /^request/i.test(m.k) && rx.test(m.k));
-        if (r) requests.push([k, r.k]);
+        for (const m of ms.slice(0, 25)) lines.push(`  ${k}.${m.k}(${m.n}): ${short(m.src, 260)}`);
+        // read-only requests only (never claim/submit/grade/add/buy…)
+        const reads = ms.filter((m) => m.n === 0 && /^(request|get|fetch|load)/i.test(m.k) && !/claim|submit|grade|purchase|buy|open|redeem|place|delete|remove|save|update/i.test(m.k));
+        reads.slice(0, 3).forEach((m) => requests.push([k, m.k]));
       }
-      const globals = Object.getOwnPropertyNames(w).filter((g) => rx.test(g));
+      const globals = Object.getOwnPropertyNames(w).filter((g) => rx.test(g) && !/^HTML/.test(g));
       lines.push(`globals: ${globals.join(',') || 'none'}`.slice(0, 1200));
       for (const g of globals.filter((x) => w[x] && typeof w[x] === 'object' && !Array.isArray(w[x])).slice(0, 8)) {
         lines.push(`  ${g} = ${short(w[g], 250)}`);
@@ -1873,10 +1874,10 @@
         const rk = Object.keys(repo).filter((k) => rx.test(k) || methods(repo[k]).some((m) => rx.test(m.k)));
         lines.push(`repositories: ${Object.keys(repo).join(',')} · gallery-like: ${rk.join(',') || 'none'}`.slice(0, 700));
       } catch { /* ignore */ }
-      const navText = [...document.querySelectorAll('button, a, .ut-tab-bar-item, h1, h2')].map((e) => (e.textContent || '').trim()).filter((t) => t && t.length < 40 && /galler|collection/i.test(t));
+      const navText = [...document.querySelectorAll('button, a, .ut-tab-bar-item, h1, h2')].filter((e) => !e.closest('#fcs')).map((e) => (e.textContent || '').trim()).filter((t) => t && t.length < 40 && /galler|collection/i.test(t));
       lines.push(`menu text: ${[...new Set(navText)].join(' | ') || 'none'}`);
-      // a read-only look at the data (like opening the Gallery page), at most twice
-      for (const [k, m] of requests.slice(0, 2)) {
+      // a read-only look at the data (like opening the Gallery page), at most 4 requests
+      for (const [k, m] of requests.slice(0, 4)) {
         try {
           const res = await observe(S[k][m](), 15000);
           const d = res.data;
@@ -1884,6 +1885,13 @@
         } catch (e) { lines.push(`${k}.${m}() threw ${errText(e)}`); }
         await sleep(jitter(1500, 2500));
       }
+      // repositories for those services (cached data, no request)
+      try {
+        for (const k of ['Showcase', 'EventToken']) {
+          const rp = w.repositories && w.repositories[k];
+          if (rp) lines.push(`repositories.${k}: ${methods(rp).map((m) => `${m.k}(${m.n})`).join(', ')} · ${short(rp, 400)}`.slice(0, 900));
+        }
+      } catch { /* ignore */ }
       return { lines, found: hits.length > 0 || globals.length > 0 };
     },
 
