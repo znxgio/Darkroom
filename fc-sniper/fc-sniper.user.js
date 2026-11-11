@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FC Sniper
 // @namespace    https://github.com/znxgio/darkroom
-// @version      1.7.6
+// @version      1.7.7
 // @description  Sniper, pack opener, SBC solver and team upgrade advisor for the EA SPORTS FC Ultimate Team Web App, with built-in safety limits.
 // @match        https://www.ea.com/*ultimate-team/web-app*
 // @match        https://www.ea.com/ea-sports-fc/ultimate-team/web-app*
@@ -1277,7 +1277,7 @@
 
   const w = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '1.7.6';
+  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '1.7.7';
   const errText = (e) => (e && e.message ? e.message : String(e));
   const fmt = (n) => Number(n || 0).toLocaleString();
 
@@ -2535,8 +2535,22 @@
     /** 💎 points SBC: open it and record where EA keeps the points (nothing is handed in). */
     async probe(set, entry) {
       await jobs.run('Checking points SBC', async () => {
-        const load = await fut.loadChallenge(entry.challenge);
-        jobs.check(load, 'loading the challenge');
+        // Points SBCs may not open with the usual call: try it, then the other loader, and probe anyway.
+        const ch = entry.challenge;
+        const load = await fut.loadChallenge(ch);
+        let alt = null;
+        if (!load.ok) {
+          const kind = classifyStatus(load.status);
+          if (kind === 'captcha' || kind === 'throttled') jobs.check(load, 'loading the challenge');
+          try {
+            if (w.services.SBC.sbcDAO && typeof w.services.SBC.sbcDAO.loadChallenge === 'function') {
+              const inProgress = typeof ch.isInProgress === 'function' ? ch.isInProgress() : false;
+              alt = await observe(w.services.SBC.sbcDAO.loadChallenge(ch.id, inProgress));
+            }
+          } catch (e) { alt = { success: false, status: errText(e) }; }
+        }
+        debugLog.push(`points SBC load "${ch.name}": loadChallenge ${load.ok ? 'ok' : load.status}${alt ? ` · sbcDAO ${alt.success ? 'ok' : alt.status} keys ${Object.keys(alt.data || {}).join(',')}` : ''}`);
+        if (alt && alt.success && alt.data) debugLog.push(`points SBC dao data: ${(() => { try { return JSON.stringify(alt.data, (k, v) => (typeof v === 'object' && v && Object.keys(v).length > 40 ? '[big]' : v)).slice(0, 700); } catch { return 'unserializable'; } })()}`);
         await this.pool();
         const sample = (this.raw || []).find((p) => p.player);
         debugLog.push(`points SBC probe "${entry.challenge.name}": ${fut.pointsProbe(entry.challenge, set, sample && sample.item)}`);
