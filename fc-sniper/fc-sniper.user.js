@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FC Sniper
 // @namespace    https://github.com/znxgio/darkroom
-// @version      1.7.9
+// @version      1.8.0
 // @description  Sniper, pack opener, SBC solver and team upgrade advisor for the EA SPORTS FC Ultimate Team Web App, with built-in safety limits.
 // @match        https://www.ea.com/*ultimate-team/web-app*
 // @match        https://www.ea.com/ea-sports-fc/ultimate-team/web-app*
@@ -1313,7 +1313,7 @@
 
   const w = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '1.7.9';
+  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '1.8.0';
   const errText = (e) => (e && e.message ? e.message : String(e));
   const fmt = (n) => Number(n || 0).toLocaleString();
 
@@ -1569,6 +1569,18 @@
       }
       return out;
     },
+    // -- 💎 points ("one-click") challenges: the Web App starts them, then submits item ids --
+    async startPointsChallenge(ch) {
+      if (typeof ch.hasNotStarted === 'function' && !ch.hasNotStarted()) return { ok: true };
+      const res = await observe(w.services.SBC.initiateOneClickChallenge(ch));
+      return { ok: !!res.success, status: res.status };
+    },
+    /** Hand in items; EA answers with the new points total (409 = a card is in one of your squads). */
+    async submitPoints(ch, set, itemIds) {
+      const res = await observe(w.services.SBC.submitOneClickChallenge(ch, set, itemIds), 30000);
+      return { ok: !!res.success, status: res.status, data: res.data || {} };
+    },
+
     /** Is this squad slot blocked (a "brick")? EA exposes it as a method or a flag. */
     isBrick(slot) {
       if (!slot) return true;
@@ -2626,6 +2638,53 @@
       });
     },
 
+    /** Hand in the estimated spare cards, 20 at a time, until the points goal is reached. */
+    async handInPoints() {
+      const pt = this.points;
+      if (!pt || !pt.plan.fromClub.length) return;
+      await jobs.run('Handing in 💎 points', async () => {
+        const { set, entry } = pt;
+        const ch = entry.challenge;
+        const st = await fut.startPointsChallenge(ch);
+        jobs.check(st, 'starting the challenge');
+        let score = Number(ch.submittedScore) || pt.done || 0;
+        const goal = pt.goal;
+        // Biggest point values first so the goal is reached with as few cards as possible.
+        const cards = pt.plan.fromClub.slice().sort((a, b) => b.points - a.points);
+        let handed = 0;
+        for (let i = 0; i < cards.length && score < goal; i += 20) {
+          if (jobs.cancelled) break;
+          let batch = cards.slice(i, i + 20);
+          // only what's still needed in the last batch
+          let acc = score;
+          batch = batch.filter((p) => { if (acc >= goal) return false; acc += p.points; return true; });
+          const bad = batch.filter((p) => !this.allowed(p) || !p.item || !p.item.id);
+          if (bad.length) { ui.log(`Safety check stopped the hand-in: ${bad.map((p) => `${p.name} ${p.rating}`).join(', ')}`, 'err'); break; }
+          engine.setStatus('pricing', `Handing in ${batch.length} cards… ${fmt(score)} / ${fmt(goal)} 💎`);
+          const r = await fut.submitPoints(ch, set, batch.map((p) => p.item.id));
+          if (!r.ok && Number(r.status) === 409) { ui.log('EA says some of these cards are in one of your squads — stopped, nothing from this batch was handed in', 'err'); break; }
+          jobs.check(r, 'handing in cards');
+          handed += batch.length;
+          score = Number(r.data.submittedScore ?? (score + batch.reduce((a, p) => a + p.points, 0)));
+          const used = new Set(batch.map((p) => p.itemId));
+          this.raw = (this.raw || []).filter((p) => !used.has(p.itemId));
+          ui.log(`💎 Handed in ${batch.length} cards — ${fmt(score)} / ${fmt(goal)}`, 'ok');
+          if (r.data.challengeCompleted || score >= goal) {
+            ui.log(`✅ ${ch.name} complete — reward on its way`, 'ok');
+            ui.toast(`SBC done: ${ch.name}`, 'ok');
+            sounds.buy();
+            notify.discord('info', { title: `🧩 SBC done: ${ch.name}`, text: `${handed} cards handed in` });
+            break;
+          }
+          await jobs.pause(engine.cfg.delayMin, engine.cfg.delayMax);
+        }
+        if (score < goal) ui.log(`Stopped at ${fmt(score)} / ${fmt(goal)} 💎 (${handed} cards handed in)`, 'warn');
+        ch.submittedScore = score;
+        this.points = null;
+        ui.renderSbc();
+      });
+    },
+
     /** 💎 points SBC: open it and record where EA keeps the points (nothing is handed in). */
     async probe(set, entry) {
       await jobs.run('Checking points SBC', async () => {
@@ -3667,7 +3726,7 @@
             <div class="card"><h4>Squad Building Challenges</h4><div data-r="sbc"><p class="empty">Load SBCs to see which ones can be solved from your club.</p></div>
               <button class="btn blue" data-a="sbc-load">Load SBCs</button></div>
             <div class="card">${FIELDS.sbc.map(fieldHtml).join('')}
-              <p class="note">Never uses your active squad (starters, subs, reserves), loans, evolutions, specials or tradeables unless you allow them, or anyone above your max rating — and checks every player again right before sending. Cheapest fodder first: SBC storage and duplicates, then untradeables. When your club can’t complete one, it adds the cheapest market fill-ins (never cards you own) and shows the cost before buying. Chemistry, league/nation/club and “from league X” requirements are solved with players in the right positions. 💎 points SBCs (like player SBCs with a points bar) aren’t handed in automatically yet.</p></div>
+              <p class="note">Never uses your active squad (starters, subs, reserves), loans, evolutions, specials or tradeables unless you allow them, or anyone above your max rating — and checks every player again right before sending. Cheapest fodder first: SBC storage and duplicates, then untradeables. When your club can’t complete one, it adds the cheapest market fill-ins (never cards you own) and shows the cost before buying. Chemistry, league/nation/club and “from league X” requirements are solved with players in the right positions. 💎 points SBCs (a points bar instead of a squad): Estimate shows what your spare cards cover and what the rest would cost, then hands them in 20 at a time.</p></div>
           </section>
           <section class="pane" data-pane="history">
             <div class="card"><h4>Totals</h4><div class="stats" data-r="totals"></div></div>
@@ -3775,6 +3834,7 @@
           case 'sbc-fill': return sbc.submit(true);
           case 'sbc-discard': sbc.plan = null; return this.renderSbc();
           case 'sbc-points-close': sbc.points = null; return this.renderSbc();
+          case 'sbc-points-go': return sbc.handInPoints();
           case 'discord-test':
             this.commit();
             if (!engine.cfg.discordWebhook) return this.log('Paste a Discord webhook URL first', 'warn');
@@ -3968,7 +4028,7 @@
       go.classList.toggle('on', on);
       go.innerHTML = on ? ICON.stop : ICON.play;
       go.disabled = false;
-      this.qa('[data-a=analyse], [data-a=packs-load], [data-a=pack-open], [data-a=pack-open-all], [data-a=sbc-load], [data-a=sbc-set], [data-a=sbc-solve], [data-a=sbc-submit], [data-a=sbc-fill], [data-a=price]')
+      this.qa('[data-a=analyse], [data-a=packs-load], [data-a=pack-open], [data-a=pack-open-all], [data-a=sbc-load], [data-a=sbc-set], [data-a=sbc-solve], [data-a=sbc-submit], [data-a=sbc-fill], [data-a=sbc-points], [data-a=sbc-points-go], [data-a=price]')
         .forEach((b) => { b.disabled = !!name; });
       if (name) engine.setStatus('pricing', `${name}…`);
     },
@@ -4042,7 +4102,9 @@
           ${coins ? `The rest ≈ <b>${fmt(coins)} coins</b>${best ? ` — best value on the market right now: ${best.rating}-rated at ${fmt(best.price)} for ${fmt(best.points)} 💎 (${(best.price / best.points).toFixed(1)} coins per 💎)` : ''}.` : 'Your spare cards cover it — no coins needed.'}
           About ${Math.max(1, Math.ceil((pt.plan.cards + (pt.extra && best ? Math.ceil(pt.plan.short / best.points) : 0)) / 20))} hand-ins of 20.</p>
           <div class="list">${pt.plan.fromClub.slice().sort((a, b) => b.points - a.points).slice(0, 12).map((x) => `<div class="li"><span class="t"><b>${esc(x.name)} ${x.rating}</b></span><b>${fmt(x.points)} 💎</b></div>`).join('')}</div>
-          <p class="note">Handing in automatically isn’t available yet for points SBCs — this is the cost forecast.</p>
+          ${pt.plan.fromClub.length ? `<button class="btn" data-a="sbc-points-go" style="background:var(--green);color:var(--green-ink);border-color:var(--green)">Hand in ${pt.plan.fromClub.length} card${pt.plan.fromClub.length === 1 ? '' : 's'} (${fmt(pt.plan.clubPoints)} 💎)</button>` : ''}
+          ${pt.plan.short || coins ? `<p class="note">Your spare cards leave ${fmt(Math.max(0, pt.need - pt.plan.clubPoints))} 💎 to go — buying for points SBCs isn’t automatic yet.</p>` : ''}
+          <p class="note">Hands in up to 20 at a time, biggest points first, with your protections re-checked before every batch.</p>
           <button class="btn red" data-a="sbc-points-close">Close</button>`;
         return;
       }

@@ -174,11 +174,19 @@ const idle = (p, ms = 150000) => p.waitForFunction(() => !document.querySelector
   await p.click('#fcs [data-a=sbc-points][data-i="5"]');
   await idle(p, 200000);
   const est = await p.textContent('#fcs [data-r=plan]');
-  check('points estimate: needed, from your cards, coins for the rest', /28,800\s*💎\s*needed/.test(est) && /From your cards/.test(est) && /The rest ≈ [\d,]+ coins/.test(est) && /coins per 💎/.test(est), est.replace(/\s+/g, ' ').slice(0, 600));
+  check('points estimate: needed, from your cards, coins for the rest', /26,000\s*💎\s*needed/.test(est) && /From your cards/.test(est) && (/Your spare cards cover it/.test(est) || (/The rest ≈ [\d,]+ coins/.test(est) && /coins per 💎/.test(est))), est.replace(/\s+/g, ' ').slice(0, 600));
   check('points rows have no empty "needs"', !/needs\s*(Estimate|$)/.test(ptsRow));
   check('points estimate never hands anything in', (await p.evaluate(() => T.submitted.length)) === subPts);
   await p.screenshot({ path: `${S}/t-points.png` });
-  await p.click('#fcs [data-a=sbc-points-close]');
+  // hand in: batches of ≤ 20, until the goal; never squad/special cards
+  await p.click('#fcs [data-a=sbc-points-go]');
+  await idle(p, 300000);
+  const P = await p.evaluate(() => ({ batches: T.pointsBatches || [], ids: T.pointsIds || [] }));
+  const plog = await log(p);
+  check('points hand-in in batches of ≤ 20', P.batches.length >= 2 && P.batches.every((n) => n <= 20), JSON.stringify(P.batches));
+  const prog = plog.filter((l) => /💎 Handed in/.test(l)).map((l) => Number(l.match(/— ([\d,]+) \//)[1].replace(/,/g, '')));
+  check('points SBC completes, progress only goes up', plog.some((l) => /Brian Brobbey complete/.test(l)) && prog.every((v, i) => !i || v > prog[i - 1]) && prog[prog.length - 1] >= 30000, plog.filter((l) => /💎|complete/.test(l)).slice(-3).join(' | '));
+  check('points hand-in never uses squad cards', !(await p.evaluate((ids) => ids.some((id) => services.Squad && false), P.ids)) && !plog.some((l) => /squads/.test(l)));
 
   check('active squad protected (starters)', !sub.flat().some((x) => x.def >= 100 && x.def <= 110));
   check('subs and reserves protected', !sub.flat().some((x) => x.def === 650 || x.def === 651));

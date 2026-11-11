@@ -78,7 +78,8 @@ function installMock() {
     { id: 5, name: 'Hat-trick', description: '3 players', isComplete: () => false },
     { id: 6, name: 'Brian Brobbey', description: 'Points', isComplete: () => false, scoreRequirement: 30000, totalSubmittedScore: 0 }];
   // FC 27 points SBC: "OVR Min 45" (Evolutions-style rule) and a 30,000 💎 goal
-  const pointsChallenge = { id: 82, name: 'Brian Brobbey', squad: sbcSquad, isCompleted: () => false, scoreRequirement: 30000, submittedScore: 1200,
+  const pointsChallenge = { id: 82, name: 'Brian Brobbey', squad: sbcSquad, isCompleted: () => false, scoreRequirement: 30000, submittedScore: 4000,
+    hasNotStarted: () => false, isOneClickChallenge: () => true,
     eligibilityRequirements: [{ scope: 0, count: -1, kvPairs: { _collection: { 40: [45], 41: [1] } } }] };
   // a 3-player SBC: player count only known after loading, unused slots flagged (not a method) as bricks
   const hatSquad = {
@@ -174,6 +175,17 @@ function installMock() {
       requestChallengesForSet: (set) => obs({ success: true, data: { challenges: set.id === 1 ? (done < 2 ? [challenge()] : []) : set.id === 3 ? [eliteChallenge] : set.id === 4 ? [bronzeChallenge] : set.id === 5 ? [hatChallenge] : set.id === 6 ? [pointsChallenge] : [chemChallenge] } }),
       loadChallenge: (ch) => { if (ch && ch.squad && 'loaded' in ch.squad) ch.squad.loaded = true; return obs({ success: true }); },
       saveChallenge: () => obs({ success: true }),
+      initiateOneClickChallenge: () => obs({ success: true }),
+      submitOneClickChallenge(ch, set, ids) {
+        const byId = new Map(club.concat(storage).map((it) => [it.id, it]));
+        if (ids.some((id) => squadItems.some((s) => s.id === id))) return obs({ success: false, status: 409 });
+        const pts = ids.reduce((a, id) => a + ((byId.get(id) || {}).sbsScore || 0), 0);
+        T.pointsBatches = (T.pointsBatches || []).concat([ids.length]);
+        T.pointsIds = (T.pointsIds || []).concat(ids);
+        const submittedScore = ch.submittedScore + pts;
+        ch.submittedScore = submittedScore; // the Web App updates the challenge, like _applyOneClickSubmission
+        return obs({ success: true, data: { submittedScore, challengeCompleted: submittedScore >= ch.scoreRequirement } });
+      },
       submitChallenge(ch) {
         T.submitted.push(ch.squad.players.map((p) => ({ id: p.id, def: p.definitionId, r: p.rating, rare: p.rareflag, pile: p.pile, untradeable: p.untradeable })));
         done++;
