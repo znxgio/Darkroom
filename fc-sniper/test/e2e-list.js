@@ -22,7 +22,7 @@ function installListMock(opts) {
       searchTransferMarket(c) {
         L.searched.push({ id: c.maskedDefId, max: c.maxBuy });
         const price = opts.prices[c.maskedDefId];
-        const items = price && price <= c.maxBuy ? [{ id: tid, definitionId: c.maskedDefId, rating: 88, _staticData: { name: names[c.maskedDefId] },
+        const items = price && (!c.maxBuy || price <= c.maxBuy) ? [{ id: tid, definitionId: c.maskedDefId, rating: 88, _staticData: { name: names[c.maskedDefId] },
           _auction: { tradeId: tid++, buyNowPrice: price } }] : [];
         return obs({ success: true, data: { items } });
       },
@@ -32,8 +32,8 @@ function installListMock(opts) {
     },
   };
   localStorage.setItem('fc-sniper:config', JSON.stringify({
-    players: [{ id: 1, name: 'Top Target', rating: 88, manualMax: 50000 }, { id: 2, name: 'Second Target', rating: 85, manualMax: 20000 }],
-    spendLimit: 60000, buyOnce: true, reserveForHigher: opts.reserve, autoPrice: false, maxSearches: opts.maxSearches || 20, delayMin: 3000, delayMax: 3500,
+    players: opts.players || [{ id: 1, name: 'Top Target', rating: 88, manualMax: 50000 }, { id: 2, name: 'Second Target', rating: 85, manualMax: 20000 }],
+    spendLimit: opts.spendLimit ?? 60000, buyOnce: true, reserveForHigher: opts.reserve, autoPrice: !!opts.autoPrice, maxSearches: opts.maxSearches || 20, delayMin: 3000, delayMax: 3500,
   }));
 }
 
@@ -48,7 +48,7 @@ async function run(b, opts) {
   await p.waitForSelector('#fcs');
   if (opts.screenshot) await p.screenshot({ path: opts.screenshot });
   await p.click('#fcs [data-a=toggle]');
-  await p.waitForFunction(() => !document.querySelector('#fcs [data-a=toggle]').classList.contains('on') && window.L.searched.length > 0, null, { timeout: 120000 });
+  await p.waitForFunction(() => !document.querySelector('#fcs [data-a=toggle]').classList.contains('on') && window.L.searched.length > 0, null, { timeout: opts.timeout || 120000 });
   const out = {
     L: await p.evaluate(() => window.L),
     cfg: await p.evaluate(() => JSON.parse(localStorage.getItem('fc-sniper:config'))),
@@ -73,7 +73,12 @@ async function run(b, opts) {
   // 2) keep coins for the higher player: #2 at 18k would leave 42k < #1's 50k max → skip
   const r = await run(b, { prices: { 2: 18000 }, reserve: true, maxSearches: 4 });
   check('keeps coins for higher players', r.L.bought.length === 0 && r.log.some((l) => /keeping coins for players higher/.test(l)), r.log.filter((l) => /Skipped|Bought/.test(l)).join(' | '));
-  check('no page errors', !a.errors.length && !r.errors.length, [...a.errors, ...r.errors].join('; '));
+  // 3) a 2.9M player with 300k coins is skipped; the affordable one is hunted, with a "still sniping" summary
+  const o = await run(b, { prices: { 1: 2900000, 2: 18000 }, reserve: false, autoPrice: true, spendLimit: 0, maxSearches: 26, players: [{ id: 1, name: 'Top Target', rating: 91 }, { id: 2, name: 'Second Target', rating: 87 }], timeout: 400000 });
+  check('out-of-reach player flagged', o.log.some((l) => /⏭️ Top Target: out of reach/.test(l)), o.log.filter((l) => /Top Target/.test(l)).join(' | '));
+  check('out-of-reach player never sniped (searches go to the affordable one)', !o.L.searched.some((x) => x.id === 1 && x.max && x.max < 1e6) && o.L.searched.filter((x) => x.id === 2).length >= 20, JSON.stringify(o.L.searched.slice(-3)));
+  check('"still sniping" summary every 25 searches', o.log.some((l) => /🔎 Still sniping — 25 searches \(Second Target 25\) · 0 listings under your max · Second Target 16,000 vs cheapest 18,000 \(11% under\)/.test(l)), o.log.filter((l) => /🔎/.test(l)).join(' | '));
+  check('no page errors', !a.errors.length && !r.errors.length && !o.errors.length, [...a.errors, ...r.errors, ...o.errors].join('; '));
   await b.close();
   console.log(results.join('\n'));
   if (results.some((x) => x.startsWith('FAIL'))) process.exit(1);

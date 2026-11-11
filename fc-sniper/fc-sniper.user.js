@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FC Sniper
 // @namespace    https://github.com/znxgio/darkroom
-// @version      2.1.2
+// @version      2.2.0
 // @description  Sniper, pack opener, SBC solver and team upgrade advisor for the EA SPORTS FC Ultimate Team Web App, with built-in safety limits.
 // @match        https://www.ea.com/*ultimate-team/web-app*
 // @match        https://www.ea.com/ea-sports-fc/ultimate-team/web-app*
@@ -497,6 +497,20 @@
   /** What the sniper hunts each round: your priority list, then every active search filter. */
   function sniperTargets(cfg) {
     return [...(cfg.players || []), ...(cfg.filters || []).filter((f) => f.on)];
+  }
+
+  /**
+   * Is a snipe at `maxBuy` realistic? Not when your coins cap it far under the
+   * cheapest listing (e.g. 241k for a 2.9M card): nobody lists that low, and the
+   * searches are better spent on players you can buy.
+   */
+  function withinReach(maxBuy, lowest, pct = 0.6) {
+    return !lowest || maxBuy >= lowest * pct;
+  }
+
+  /** Players and filters the sniper hunts: out-of-reach players are left out. */
+  function huntTargets(cfg) {
+    return sniperTargets(cfg).filter((p) => !p.outOfReach || p.manualMax);
   }
 
   /** Players are searched in rotation, one per search request. */
@@ -1403,7 +1417,7 @@
     priceStep, roundPrice, nextPrice, prevPrice, afterTax, profit, breakEvenSell,
     cacheBustBid, jitter, pickTargets, planSellPrice, classifyStatus,
     normalizeName, parsePlayerDb, searchPlayers, playerForIteration, migrateConfig, filterSummary, sniperTargets, LEAGUES,
-    findMarketPrice, planMaxBuy, effectiveMaxBuy, flipPlan, tradeOpts, bidAmount, settleSales,
+    findMarketPrice, planMaxBuy, effectiveMaxBuy, withinReach, huntTargets, flipPlan, tradeOpts, bidAmount, settleSales,
     listSpendable, reserveOk, afterListBuy,
     aggregateListings, hotScore, rankHot, priceBands, provenFlips, flipValue, priceLadder, sbcCostEstimate,
     addHistory, summarizeHistory, isDiscordWebhook, discordPayload,
@@ -1424,7 +1438,7 @@
 
   const w = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '2.1.2';
+  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '2.2.0';
   const errText = (e) => (e && e.message ? e.message : String(e));
   const fmt = (n) => Number(n || 0).toLocaleString();
 
@@ -2214,7 +2228,8 @@
           continue;
         }
         const plan = planMaxBuy(r.avg, this.cfg.discount, fut.coins() - this.cfg.minCoins);
-        Object.assign(player, { avg: r.avg, lowest: r.lowest, maxBuy: plan.maxBuy });
+        const reach = this.cfg.mode === 'trade' || isFilter || withinReach(plan.maxBuy, r.lowest);
+        Object.assign(player, { avg: r.avg, lowest: r.lowest, maxBuy: plan.maxBuy, outOfReach: !reach });
         const flip = this.cfg.mode === 'trade' && flipPlan(r.avg, tradeOpts(r.avg, this.cfg));
         if (this.cfg.mode === 'trade') {
           ui.log(`${player.name}: avg ${fmt(r.avg)} · ${flip ? `trade: buy ≤ ${fmt(flip.maxBuy)}, sell ${fmt(flip.sell)} (+${fmt(flip.profit)})` : 'no profitable trade at your min profit'}`, flip ? 'ok' : 'warn');
@@ -2222,6 +2237,7 @@
           ui.log(`${player.name}: avg ${fmt(r.avg)} · lowest ${fmt(r.lowest)} · ${r.count} listed → max ${fmt(plan.maxBuy)}`
             + (plan.cappedByCoins ? ' (all your coins)' : ` (${this.cfg.discount}% under)`)
             + (player.manualMax ? ` — your manual ${fmt(player.manualMax)} is used instead` : ''), 'ok');
+          if (!reach && !player.manualMax) ui.log(`⏭️ ${player.name}: out of reach — your max is ${Math.round(plan.maxBuy / r.lowest * 100)}% of the cheapest listing, so it's skipped while sniping (set a manual max to hunt him anyway)`, 'warn');
         }
       }
       return true;
@@ -2287,8 +2303,12 @@
           }
         }
         if (!this.running) return;
-        const who = sniperTargets(cfg).length
-          ? sniperTargets(cfg).map((p) => {
+        if (sniperTargets(cfg).length && !huntTargets(cfg).length && !hasFilter) {
+          this.stop('every player on your list costs far more than your coins — add players you can afford, or set a manual max');
+          return;
+        }
+        const who = huntTargets(cfg).length
+          ? huntTargets(cfg).map((p) => {
             const { maxBuy, plan } = this.planFor(p);
             return plan ? `${p.name} (buy ≤ ${fmt(maxBuy)} → sell ${fmt(plan.sell)})` : `${p.name} ≤ ${fmt(maxBuy)}`;
           }).join(', ')
@@ -2318,6 +2338,7 @@
       let errors = 0;
       let i = 0;
       let fullWarned = false;
+      const beat = { next: 25, per: new Map(), under: 0 };
       this.listStarted = sniperTargets(cfg).length > 0;
       this.reserveWarned = new Set();
       this.nextUpkeep = cfg.mode === 'trade' ? Date.now() : Date.now() + cfg.upkeepMinutes * 60e3;
@@ -2343,7 +2364,9 @@
           if (!this.running) return;
         }
 
-        const player = playerForIteration(sniperTargets(cfg), i);
+        // Never fall back to "any card" because every player went out of reach.
+        if (sniperTargets(cfg).length && !huntTargets(cfg).length) { await this.finishBids(); return this.stop('every player left is out of reach of your coins'); }
+        const player = playerForIteration(huntTargets(cfg), i);
         // Prices drift — refresh a player's (or filter's) average during long sessions.
         if (player && cfg.autoPrice && !player.manualMax && Date.now() - (player.checkedAt || 0) > cfg.repriceMinutes * 60e3) {
           const ok = await this.priceCheck([player]);
@@ -2361,7 +2384,7 @@
             ui.log(`${player.name}: no profitable buy price yet (needs a price check, or Min profit is too high) — skipping`, 'warn');
           }
           i++;
-          if (sniperTargets(cfg).every((p) => skipped.has(p.id))) return this.stop('no player or filter can be traded for profit — check prices / Min profit');
+          if (huntTargets(cfg).every((p) => skipped.has(p.id))) return this.stop('no player or filter can be traded for profit — check prices / Min profit');
           continue;
         }
         const tradeFull = cfg.mode === 'trade' && fut.transferSpace() <= 0;
@@ -2374,6 +2397,16 @@
         i++;
         this.stats.searches++;
         this.countUsage('searches');
+        if (player) beat.per.set(player.name, (beat.per.get(player.name) || 0) + 1);
+        if (res.ok) beat.under += res.listings.filter((l) => l.buyNowPrice > 0 && l.buyNowPrice <= maxBuy).length;
+        if (this.stats.searches - startSearches >= beat.next) {
+          beat.next += 25;
+          const gaps = huntTargets(cfg).filter((p) => p.lowest && p.kind !== 'filter').map((p) => {
+            const mx = effectiveMaxBuy(p, cfg);
+            return `${p.name} ${fmt(mx)} vs cheapest ${fmt(p.lowest)} (${Math.max(0, Math.round((1 - mx / p.lowest) * 100))}% under)`;
+          });
+          ui.log(`🔎 Still sniping — ${this.stats.searches - startSearches} searches (${[...beat.per].map(([n, c]) => `${n} ${c}`).join(', ')}) · ${beat.under} listing${beat.under === 1 ? '' : 's'} under your max${gaps.length ? ` · ${gaps.join(' · ')}` : ''}`, 'muted');
+        }
 
         if (!res.ok) {
           const kind = classifyStatus(res.status);
@@ -4778,7 +4811,7 @@
       }
       this.q('[data-r=chips]').innerHTML = cfg.players.map((p, i) => {
         const max = effectiveMaxBuy(p, cfg);
-        const sub = `${p.hot ? '🔥 ' : ''}${p.autofill ? `🧩 ${esc(p.autofill)} · ` : ''}${p.manualMax ? (p.autofill && p.lowest ? `cheapest ${fmt(p.lowest)}` : 'your max') : p.avg ? `avg ${fmt(p.avg)}` : p.checkedAt ? 'none listed' : 'not priced yet'}`;
+        const sub = `${p.outOfReach && !p.manualMax ? '⏭️ out of reach · ' : ''}${p.hot ? '🔥 ' : ''}${p.autofill ? `🧩 ${esc(p.autofill)} · ` : ''}${p.manualMax ? (p.autofill && p.lowest ? `cheapest ${fmt(p.lowest)}` : 'your max') : p.avg ? `avg ${fmt(p.avg)}` : p.checkedAt ? 'none listed' : 'not priced yet'}`;
         return `<div class="chip">
           <div class="top"><span class="num">${i + 1}</span><span class="ovr">${p.rating || ''}</span>
             <span class="nm">${esc(p.name)}<small>${sub}</small></span>

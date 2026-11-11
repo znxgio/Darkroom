@@ -855,3 +855,12 @@ test('sbcCostEstimate: cheapest cards per rating for each challenge', () => {
   assert.equal(c.sbcCostEstimate([k(95)], ladder).unknown, 1);
   assert.equal(c.sbcCostEstimate([k(84)], {}).unknown, 1);
 });
+
+test('withinReach / huntTargets: skip players your coins can never snipe', () => {
+  assert.equal(c.withinReach(241000, 2917000), false);
+  assert.equal(c.withinReach(241000, 677000), false);
+  assert.equal(c.withinReach(176000, 193000), true);
+  assert.equal(c.withinReach(5000, 0), true, 'unpriced players stay in');
+  const cfg = { players: [{ id: 1, outOfReach: true }, { id: 2 }, { id: 3, outOfReach: true, manualMax: 100000 }], filters: [{ id: 'f', on: true }] };
+  assert.deepEqual(c.huntTargets(cfg).map((p) => p.id), [2, 3, 'f']);
+});
