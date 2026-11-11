@@ -87,7 +87,7 @@ async function run(b, opts) {
   check('"still sniping" summary every 25 searches', o.log.some((l) => /🔎 Still sniping — 25 searches \(Second Target 25\) · 0 listings under your max · Second Target 16,000 vs cheapest 18,000 \(11% under\)/.test(l)), o.log.filter((l) => /🔎/.test(l)).join(' | '));
   // 4) smart sniping: copies at 17,000 (5.6% under 18,000) — only the 4% arm can buy; most buys are lost races
   const sm = await run(b, { prices: { 2: 18000 }, snipe: { 2: 17000 }, failEvery: 3, reserve: false, autoPrice: true, spendLimit: 0, maxSearches: 40, timeout: 500000,
-    players: [{ id: 2, name: 'Second Target', rating: 87 }], extra: { buyOnce: false, maxBuys: 2, smartProbeEvery: 2 } });
+    players: [{ id: 2, name: 'Second Target', rating: 87 }], extra: { buyOnce: false, maxBuys: 2, smartProbeEvery: 2, discount: 4 } }); // learner never goes closer than Snipe % under avg
   const mem = sm.learn && sm.learn.targets && sm.learn.targets['p:2'];
   const a4 = mem && mem.arms[4];
   check('smart sniping tries several discounts', mem && Object.keys(mem.arms).length >= 3, mem && JSON.stringify(mem.arms));
