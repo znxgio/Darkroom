@@ -84,6 +84,7 @@ const idle = (p) => p.waitForFunction(() => !document.querySelector('#fcs [data-
   await p.screenshot({ path: `${S}/v1-desktop-safety.png` });
   await p.click('#fcs [data-tab=snipe]');
   await p.fill('#fcs [data-k=maxBuys]', '1');
+  await p.click('#fcs [data-k=smartSnipe] + i'); // classic fixed-discount path (smart sniping has its own test)
   await p.evaluate(() => { T.snipe = true; T.calls.length = 0; });
   await p.click('#fcs [data-a=toggle]');
   await idle(p);

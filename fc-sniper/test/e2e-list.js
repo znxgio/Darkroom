@@ -21,19 +21,24 @@ function installListMock(opts) {
       clearTransferMarketCache() {},
       searchTransferMarket(c) {
         L.searched.push({ id: c.maskedDefId, max: c.maxBuy });
-        const price = opts.prices[c.maskedDefId];
+        let price = opts.prices[c.maskedDefId];
+        // a cheap copy that appears in snipe searches (they set a min bid to refresh results)
+        if (opts.snipe && opts.snipe[c.maskedDefId] && c.minBid !== undefined && c.maxBuy >= opts.snipe[c.maskedDefId]) price = opts.snipe[c.maskedDefId];
         const items = price && (!c.maxBuy || price <= c.maxBuy) ? [{ id: tid, definitionId: c.maskedDefId, rating: 88, _staticData: { name: names[c.maskedDefId] },
           _auction: { tradeId: tid++, buyNowPrice: price } }] : [];
         return obs({ success: true, data: { items } });
       },
-      bid(item, price) { L.bought.push({ id: item.definitionId, price }); L.coins -= price; return obs({ success: true }); },
+      bid(item, price) {
+        L.bids = (L.bids || 0) + 1;
+        if (opts.failEvery && L.bids % opts.failEvery !== 0) return obs({ success: false, status: 461 }); // someone was faster
+        L.bought.push({ id: item.definitionId, price }); L.coins -= price; return obs({ success: true }); },
       move: () => obs({ success: true }),
       list: () => obs({ success: true }),
     },
   };
   localStorage.setItem('fc-sniper:config', JSON.stringify({
     players: opts.players || [{ id: 1, name: 'Top Target', rating: 88, manualMax: 50000 }, { id: 2, name: 'Second Target', rating: 85, manualMax: 20000 }],
-    spendLimit: opts.spendLimit ?? 60000, buyOnce: true, reserveForHigher: opts.reserve, autoPrice: !!opts.autoPrice, maxSearches: opts.maxSearches || 20, delayMin: 3000, delayMax: 3500,
+    spendLimit: opts.spendLimit ?? 60000, buyOnce: true, reserveForHigher: opts.reserve, autoPrice: !!opts.autoPrice, ...(opts.extra || {}), maxSearches: opts.maxSearches || 20, delayMin: 3000, delayMax: 3500,
   }));
 }
 
@@ -54,6 +59,8 @@ async function run(b, opts) {
     cfg: await p.evaluate(() => JSON.parse(localStorage.getItem('fc-sniper:config'))),
     log: await p.evaluate(() => [...document.querySelectorAll('#fcs [data-r=log] div')].reverse().map((d) => d.textContent.replace(/^\d\d:\d\d:\d\d\s*/, ''))),
     spend: await p.textContent('#fcs [data-r=spend]'),
+    learn: await p.evaluate(() => JSON.parse(localStorage.getItem('fc-sniper:learn') || 'null')),
+    learnText: await p.textContent('#fcs [data-r=learn]'),
     errors,
   };
   await p.context().close();
@@ -78,7 +85,18 @@ async function run(b, opts) {
   check('out-of-reach player flagged', o.log.some((l) => /⏭️ Top Target: out of reach/.test(l)), o.log.filter((l) => /Top Target/.test(l)).join(' | '));
   check('out-of-reach player never sniped (searches go to the affordable one)', !o.L.searched.some((x) => x.id === 1 && x.max && x.max < 1e6) && o.L.searched.filter((x) => x.id === 2).length >= 20, JSON.stringify(o.L.searched.slice(-3)));
   check('"still sniping" summary every 25 searches', o.log.some((l) => /🔎 Still sniping — 25 searches \(Second Target 25\) · 0 listings under your max · Second Target 16,000 vs cheapest 18,000 \(11% under\)/.test(l)), o.log.filter((l) => /🔎/.test(l)).join(' | '));
-  check('no page errors', !a.errors.length && !r.errors.length && !o.errors.length, [...a.errors, ...r.errors, ...o.errors].join('; '));
+  // 4) smart sniping: copies at 17,000 (5.6% under 18,000) — only the 4% arm can buy; most buys are lost races
+  const sm = await run(b, { prices: { 2: 18000 }, snipe: { 2: 17000 }, failEvery: 3, reserve: false, autoPrice: true, spendLimit: 0, maxSearches: 40, timeout: 500000,
+    players: [{ id: 2, name: 'Second Target', rating: 87 }], extra: { buyOnce: false, maxBuys: 2, smartProbeEvery: 2 } });
+  const mem = sm.learn && sm.learn.targets && sm.learn.targets['p:2'];
+  const a4 = mem && mem.arms[4];
+  check('smart sniping tries several discounts', mem && Object.keys(mem.arms).length >= 3, mem && JSON.stringify(mem.arms));
+  check('lost races and buys recorded at the discount that hits', a4 && a4.misses >= 1 && a4.hits >= 1 && sm.L.bought.every((x) => x.price === 17000), JSON.stringify(a4));
+  check('near misses spotted just above the max (never bought above it)', Object.values(mem.arms).some((x) => x.near > 0) && sm.L.bought.every((x) => x.price <= 17250), JSON.stringify(mem.arms));
+  check('missed buys say someone was faster, with your speed', sm.log.some((l) => /Missed Second Target at 17,000 \(461\) — someone was faster · you: \d+ ms to react \+ \d+ ms to EA/.test(l)), sm.log.filter((l) => /Missed/.test(l))[0]);
+  check('Learning card shows the best discount', /Second Target best 4% under/.test(sm.learnText.replace(/\s+/g, ' ')), sm.learnText.replace(/\s+/g, ' ').slice(0, 200));
+  check('never buys above the learned max', sm.L.bought.length >= 1 && sm.L.bought.every((x) => x.price <= 17250), JSON.stringify(sm.L.bought));
+  check('no page errors', !a.errors.length && !r.errors.length && !o.errors.length && !sm.errors.length, [...a.errors, ...r.errors, ...o.errors, ...sm.errors].join('; '));
   await b.close();
   console.log(results.join('\n'));
   if (results.some((x) => x.startsWith('FAIL'))) process.exit(1);

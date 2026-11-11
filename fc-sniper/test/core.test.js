@@ -864,3 +864,54 @@ test('withinReach / huntTargets: skip players your coins can never snipe', () =>
   const cfg = { players: [{ id: 1, outOfReach: true }, { id: 2 }, { id: 3, outOfReach: true, manualMax: 100000 }], filters: [{ id: 'f', on: true }] };
   assert.deepEqual(c.huntTargets(cfg).map((p) => p.id), [2, 3, 'f']);
 });
+
+// ---- smart sniping ---------------------------------------------------------------------
+
+const seeded = (seed = 1) => () => { seed = (seed * 16807) % 2147483647; return (seed - 1) / 2147483646; };
+
+test('smartLevels: even steps between min and max', () => {
+  assert.deepEqual(c.smartLevels(4, 14), [4, 6, 8, 10, 12, 14]);
+  assert.deepEqual(c.smartLevels(5, 10), [5, 7, 9, 10]);
+  assert.deepEqual(c.smartLevels(12, 6), [12]);
+});
+
+test('betaSample: mean close to a/(a+b)', () => {
+  const r = seeded(7);
+  let sum = 0;
+  for (let i = 0; i < 4000; i++) sum += c.betaSample(3, 7, r);
+  assert.ok(Math.abs(sum / 4000 - 0.3) < 0.02, String(sum / 4000));
+});
+
+test('chooseDiscount: learns the discount that actually pays', () => {
+  const levels = c.smartLevels(4, 14);
+  // deep discounts never show anything; 6% gets regular lost races and buys
+  const arms = { 4: { n: 40, hits: 2, misses: 6, near: 4 }, 6: { n: 60, hits: 3, misses: 8, near: 6 }, 8: { n: 60, near: 1 }, 10: { n: 80 }, 12: { n: 80 }, 14: { n: 80 } };
+  const r = seeded(3);
+  const counts = {};
+  for (let i = 0; i < 500; i++) { const p = c.chooseDiscount(arms, levels, r).pct; counts[p] = (counts[p] || 0) + 1; }
+  assert.ok((counts[6] || 0) + (counts[4] || 0) > 400, JSON.stringify(counts));
+  assert.ok((counts[6] || 0) > (counts[4] || 0), 'saves more at the same rate');
+  // with no data every arm gets explored
+  const fresh = {};
+  for (let i = 0; i < 600; i++) { const p = c.chooseDiscount({}, levels, r).pct; fresh[p] = 1; }
+  assert.equal(Object.keys(fresh).length, levels.length);
+});
+
+test('chooseTarget: searches go where coins are saved, not to dead targets', () => {
+  const levels = [6, 10];
+  const dead = { key: 'a', avg: 196000, arms: { 6: { n: 300 }, 10: { n: 300 } } };
+  const live = { key: 'b', avg: 20000, arms: { 6: { n: 100, hits: 4, misses: 10 }, 10: { n: 60, misses: 3 } } };
+  const r = seeded(11);
+  let b = 0;
+  for (let i = 0; i < 300; i++) if (c.chooseTarget([dead, live], levels, r).target.key === 'b') b++;
+  assert.ok(b > 200, String(b));
+});
+
+test('recordArm / bestArm / armSignals', () => {
+  let arms = c.recordArm({}, 6, { miss: 1 });
+  arms = c.recordArm(arms, 6, {});
+  arms = c.recordArm(arms, 10, {});
+  assert.deepEqual({ n: arms[6].n, misses: arms[6].misses }, { n: 2, misses: 1 });
+  assert.equal(c.bestArm(arms, [6, 10]).pct, 6);
+  assert.equal(c.armSignals({ hits: 1, misses: 1, near: 2 }), 1 + 0.8 + 0.7);
+});
