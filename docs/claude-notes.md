@@ -88,4 +88,7 @@ Newest learnings go at the end of each section. Dates are when the note was writ
 - 2.4.0 fixes from the Fable review: bidding spend guard (in progress with Fable), smart-sniping floor (done by intern),
   "nothing listed" fallback, jobs skipping daily caps, run token for stop/start, SBC fill-in hard cap, learner reward tuning.
 - Gallery collector (buy → register → resell near break-even): parked until the user checks that a Web App buy registers in the Gallery.
+- User OK'd auction bidding as a sniping method (2026-11-11: "buy now is a harder snipe"). After the 2.4.0 bid spend guard:
+  ask whether to switch bidding on for them; idea: let smart sniping learn auctions too (win rate per bid level, outbid rate)
+  and split searches between Buy Now and auctions by what lands. Never chase outbids or bid at/above Buy Now.
 - Other ideas offered: lock players, exact-card sniping, objectives claim, Discord daily summary, profit chart.
