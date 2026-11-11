@@ -756,3 +756,10 @@ test('marketLevel: quality from rating limits', () => {
   assert.equal(lvl([{ key: 'PLAYER_QUALITY', scope: 'LOWER', values: [2], count: -1 }]), 'silver');
   assert.equal(lvl([]), null);
 });
+
+test('FC 27 Evolutions-style rule: key 40 + attribute 1 = OVR min', () => {
+  const r = c.parseRequirements([{ key: 'ACADEMY_PLAYER_SLOTTING', scope: 'GREATER', values: [45], count: -1 }, { key: 'PLAYER_ATTRIBUTE', scope: 'GREATER', values: [1], count: -1 }], 20);
+  assert.deepEqual(r.unsupported, []);
+  assert.equal(r.constraints.minOvr, 45);
+  assert.deepEqual(c.parseRequirements([{ key: 'ACADEMY_PLAYER_SLOTTING', values: [80] }, { key: 'PLAYER_ATTRIBUTE', values: [7] }]).unsupported, ['attribute 7 minimum']);
+});

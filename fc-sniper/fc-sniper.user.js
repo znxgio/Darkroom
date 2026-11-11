@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FC Sniper
 // @namespace    https://github.com/znxgio/darkroom
-// @version      1.7.5
+// @version      1.7.6
 // @description  Sniper, pack opener, SBC solver and team upgrade advisor for the EA SPORTS FC Ultimate Team Web App, with built-in safety limits.
 // @match        https://www.ea.com/*ultimate-team/web-app*
 // @match        https://www.ea.com/ea-sports-fc/ultimate-team/web-app*
@@ -826,6 +826,9 @@
       needsSearch: false,
     };
     const unsupported = [];
+    // FC 27 reuses the Evolutions rule format: ACADEMY_PLAYER_SLOTTING (a minimum)
+    // paired with PLAYER_ATTRIBUTE (which attribute; 1 = overall) — e.g. "OVR Min: 45".
+    const attr = (reqs || []).find((r) => r.key === 'PLAYER_ATTRIBUTE');
     const GROUP = { SAME_LEAGUE_COUNT: 'league', SAME_NATION_COUNT: 'nation', SAME_CLUB_COUNT: 'club', LEAGUE_COUNT: 'league', NATION_COUNT: 'nation', CLUB_COUNT: 'club' };
     const IDS = { LEAGUE_ID: 'league', NATION_ID: 'nation', CLUB_ID: 'club', PLAYER_RARITY: 'rarity' };
     for (const r of reqs || []) {
@@ -841,6 +844,11 @@
           else if (ex) { c.teamRating = Math.max(c.teamRating, v); c.teamRatingMax = Math.min(c.teamRatingMax, v); }
           else c.teamRating = Math.max(c.teamRating, v);
           break;
+        case 'ACADEMY_PLAYER_SLOTTING':
+          if (!attr || Number(attr.values[0]) === 1) c.minOvr = Math.max(c.minOvr, v);
+          else unsupported.push(`attribute ${attr.values[0]} minimum`);
+          break;
+        case 'PLAYER_ATTRIBUTE':
         case 'PLAYER_COUNT':
         case 'SCOPE':
         case 'PLAYER_TRADABILITY': // untradeables are allowed everywhere; tradeables only if you allow them
@@ -1269,7 +1277,7 @@
 
   const w = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '1.7.5';
+  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '1.7.6';
   const errText = (e) => (e && e.message ? e.message : String(e));
   const fmt = (n) => Number(n || 0).toLocaleString();
 
@@ -1292,7 +1300,7 @@
     6: 'SAME_CLUB_COUNT', 7: 'NATION_COUNT', 8: 'LEAGUE_COUNT', 9: 'CLUB_COUNT', 10: 'NATION_ID', 11: 'LEAGUE_ID',
     12: 'CLUB_ID', 13: 'SCOPE', 15: 'LEGEND_COUNT', 16: 'NUM_TROPHY_REQUIRED', 17: 'PLAYER_LEVEL', 18: 'PLAYER_RARITY',
     19: 'TEAM_RATING', 21: 'PLAYER_COUNT_COMBINED', 25: 'PLAYER_RARITY_GROUP', 26: 'PLAYER_MIN_OVR', 27: 'PLAYER_EXACT_OVR',
-    28: 'PLAYER_MAX_OVR', 30: 'FIRST_OWNER_PLAYERS_COUNT', 33: 'PLAYER_TRADABILITY', 35: 'CHEMISTRY_POINTS', 36: 'ALL_PLAYERS_CHEMISTRY_POINTS',
+    28: 'PLAYER_MAX_OVR', 30: 'FIRST_OWNER_PLAYERS_COUNT', 33: 'PLAYER_TRADABILITY', 35: 'CHEMISTRY_POINTS', 36: 'ALL_PLAYERS_CHEMISTRY_POINTS', 40: 'ACADEMY_PLAYER_SLOTTING', 41: 'PLAYER_ATTRIBUTE',
   };
   /** { NAME: number } enum → { number: NAME }, or the fallback. */
   function invert(enumObj, fallback) {
@@ -1549,6 +1557,37 @@
       return this.challengeOpen(ch).map((x) => x.position);
     },
     /** Players the challenge needs: EA's own count, else its "number of players" rule, else 11. */
+    /**
+     * Where does EA keep the 💎 points of points-SBCs? Lists fields and methods
+     * that mention points / progress / goal on the challenge, its set and a
+     * club item, with their values where cheap to read. Goes to Copy log.
+     */
+    pointsProbe(ch, set, item) {
+      const rx = /point|progress|goal|target|value|exchange|score|total/i;
+      const dump = (label, obj) => {
+        if (!obj) return `${label}: none`;
+        const out = [];
+        const seen = new Set();
+        for (let o = obj, depth = 0; o && depth < 3; o = Object.getPrototypeOf(o), depth++) {
+          for (const k of Object.getOwnPropertyNames(o)) {
+            if (seen.has(k) || !rx.test(k)) continue;
+            seen.add(k);
+            let v;
+            try {
+              const d = Object.getOwnPropertyDescriptor(o, k);
+              if (d && typeof d.value === 'function') {
+                v = d.value.length === 0 ? (() => { try { const r = obj[k](); return typeof r === 'object' ? JSON.stringify(r).slice(0, 80) : r; } catch { return 'fn!'; } })() : `fn(${d.value.length})`;
+              } else v = obj[k];
+              if (v && typeof v === 'object') v = JSON.stringify(v).slice(0, 80);
+            } catch { v = '?'; }
+            out.push(`${k}=${v}`);
+          }
+        }
+        return `${label}: ${out.join(', ').slice(0, 600) || 'nothing matching'}`;
+      };
+      return [dump('challenge', ch), dump('set', set), dump('item', item)].join(' || ');
+    },
+
     /** EA's raw requirement data, for Copy log: numbers, names, values, scope, count and any text fields. */
     rawRequirements(ch) {
       const keyNames = invert(w.SBCEligibilityKey, SBC_KEYS);
@@ -2424,6 +2463,7 @@
         this.open.set(set.id, list.map((challenge) => {
           const reqs = fut.requirements(challenge);
           const parsed = parseRequirements(reqs, fut.requiredPlayers(challenge));
+          parsed.points = reqs.some((r) => r.key === 'ACADEMY_PLAYER_SLOTTING');
           if (parsed.unsupported.length) debugLog.push(`manual SBC "${challenge.name}": ${fut.rawRequirements(challenge)}`);
           return { challenge, reqs, parsed };
         }));
@@ -2490,6 +2530,19 @@
       if (p.special && !cfg.sbcUseSpecials) return false;
       if (!(p.untradeable || p.storage || cfg.sbcUseTradeables)) return false;
       return true;
+    },
+
+    /** 💎 points SBC: open it and record where EA keeps the points (nothing is handed in). */
+    async probe(set, entry) {
+      await jobs.run('Checking points SBC', async () => {
+        const load = await fut.loadChallenge(entry.challenge);
+        jobs.check(load, 'loading the challenge');
+        await this.pool();
+        const sample = (this.raw || []).find((p) => p.player);
+        debugLog.push(`points SBC probe "${entry.challenge.name}": ${fut.pointsProbe(entry.challenge, set, sample && sample.item)}`);
+        debugLog.push(`points SBC raw "${entry.challenge.name}": ${fut.rawRequirements(entry.challenge)} · needs ${fut.requiredPlayers(entry.challenge)} · slots ${fut.challengeSlots(entry.challenge).length}`);
+        ui.log(`💎 ${entry.challenge.name}: points details saved — Log tab → Copy log and send it`, 'ok');
+      });
     },
 
     /** Cheapest solution from a pool; chemistry/group SBCs use the position-aware search. */
@@ -2567,7 +2620,13 @@
         const load = await fut.loadChallenge(challenge);
         jobs.check(load, 'loading the challenge');
         // The number of players is only known once the challenge is loaded.
+        entry.reqs = fut.requirements(challenge);
         entry.parsed = parseRequirements(entry.reqs, fut.requiredPlayers(challenge));
+        if (entry.reqs.some((r) => r.key === 'ACADEMY_PLAYER_SLOTTING')) {
+          const sample = (this.raw || [])[0];
+          debugLog.push(`points SBC probe "${challenge.name}": ${fut.pointsProbe(challenge, set, sample && sample.item)}`);
+          ui.log('This looks like a 💎 points SBC — details saved to Copy log', 'muted');
+        }
         const parsedNow = entry.parsed;
         const slots = fut.challengeSlots(challenge);
         if (parsedNow.constraints.players !== slots.length) parsedNow.constraints.players = slots.length;
@@ -3487,7 +3546,7 @@
             <div class="card"><h4>Squad Building Challenges</h4><div data-r="sbc"><p class="empty">Load SBCs to see which ones can be solved from your club.</p></div>
               <button class="btn blue" data-a="sbc-load">Load SBCs</button></div>
             <div class="card">${FIELDS.sbc.map(fieldHtml).join('')}
-              <p class="note">Never uses your active squad (starters, subs, reserves), loans, evolutions, specials or tradeables unless you allow them, or anyone above your max rating — and checks every player again right before sending. Cheapest fodder first: SBC storage and duplicates, then untradeables. When your club can’t complete one, it adds the cheapest market fill-ins (never cards you own) and shows the cost before buying. Chemistry, league/nation/club and “from league X” requirements are solved with players in the right positions.</p></div>
+              <p class="note">Never uses your active squad (starters, subs, reserves), loans, evolutions, specials or tradeables unless you allow them, or anyone above your max rating — and checks every player again right before sending. Cheapest fodder first: SBC storage and duplicates, then untradeables. When your club can’t complete one, it adds the cheapest market fill-ins (never cards you own) and shows the cost before buying. Chemistry, league/nation/club and “from league X” requirements are solved with players in the right positions. 💎 points SBCs (like player SBCs with a points bar) aren’t handed in automatically yet.</p></div>
           </section>
           <section class="pane" data-pane="history">
             <div class="card"><h4>Totals</h4><div class="stats" data-r="totals"></div></div>
@@ -3582,6 +3641,10 @@
           case 'sbc-solve': {
             const set = sbc.sets[Number(btn.dataset.i)];
             return set && sbc.solve(set, sbc.open.get(set.id)[Number(btn.dataset.j)]);
+          }
+          case 'sbc-probe': {
+            const set = sbc.sets[Number(btn.dataset.i)];
+            return set && sbc.probe(set, sbc.open.get(set.id)[Number(btn.dataset.j)]);
           }
           case 'sbc-submit': return sbc.submit(false);
           case 'sbc-fill': return sbc.submit(true);
@@ -3802,6 +3865,8 @@
       const per = r.count > 0 ? `${r.count}× ` : '';
       switch (r.key) {
         case 'TEAM_RATING': return `Team rating ${sym} ${v}`;
+        case 'ACADEMY_PLAYER_SLOTTING': return `OVR min ${v}`;
+        case 'PLAYER_ATTRIBUTE': return '';
         case 'PLAYER_QUALITY': case 'PLAYER_LEVEL': return `${per}Quality ${sym} ${r.values.map((x) => q[x] || x).join('/')}`;
         case 'PLAYER_RARITY_GROUP': return `${per}Rare ${sym} ${r.count > 0 ? '' : 'all'}`.trim();
         case 'PLAYER_MIN_OVR': return `Each player ≥ ${v}`;
@@ -3828,10 +3893,11 @@
         const loaded = sbc.open.get(set.id);
         const rep = set.repeatable || set.timesCompleted ? `<span class="tag">${set.timesCompleted || 0} done</span>` : '';
         const sub = loaded ? `<div class="sub">${loaded.length ? loaded.map((e, j) => {
-          const ok = !e.parsed.unsupported.length;
-          return `<div class="li"><span class="t"><b>${esc(e.challenge.name || set.name)}${ok ? '<span class="tag ok">auto</span>' : '<span class="tag no">manual</span>'}</b>
-            <small>${esc(e.reqs.filter((r) => r.key !== 'SCOPE' && r.key !== 'PLAYER_COUNT').map((r) => this.reqText(r)).join(' · ') || `${fut.requiredPlayers(e.challenge)} players`)}${ok ? '' : ` — needs ${esc(e.parsed.unsupported.join(', '))}`}</small></span>
-            ${ok ? `<button class="mini go2" data-a="sbc-solve" data-i="${i}" data-j="${j}">Solve</button>` : ''}</div>`;
+          const ok = !e.parsed.unsupported.length && !e.parsed.points;
+          const tagHtml = e.parsed.points ? '<span class="tag">💎 points</span>' : ok ? '<span class="tag ok">auto</span>' : '<span class="tag no">manual</span>';
+          return `<div class="li"><span class="t"><b>${esc(e.challenge.name || set.name)}${tagHtml}</b>
+            <small>${esc(e.reqs.filter((r) => r.key !== 'SCOPE' && r.key !== 'PLAYER_COUNT').map((r) => this.reqText(r)).filter(Boolean).join(' · ') || `${fut.requiredPlayers(e.challenge)} players`)}${ok ? '' : ` — needs ${esc(e.parsed.unsupported.join(', '))}`}</small></span>
+            ${ok ? `<button class="mini go2" data-a="sbc-solve" data-i="${i}" data-j="${j}">Solve</button>` : e.parsed.points ? `<button class="mini" data-a="sbc-probe" data-i="${i}" data-j="${j}">Check points</button>` : ''}</div>`;
         }).join('') : '<p class="empty">All done</p>'}</div>` : '';
         return `<div class="li"><span class="t"><b>${esc(set.name)}${rep}</b><small>${esc(set.description || '')}</small></span>
           ${loaded ? '' : `<button class="mini" data-a="sbc-set" data-i="${i}">View</button>`}</div>${sub}`;
