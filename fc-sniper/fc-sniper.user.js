@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FC Sniper
 // @namespace    https://github.com/znxgio/darkroom
-// @version      1.7.8
+// @version      1.7.9
 // @description  Sniper, pack opener, SBC solver and team upgrade advisor for the EA SPORTS FC Ultimate Team Web App, with built-in safety limits.
 // @match        https://www.ea.com/*ultimate-team/web-app*
 // @match        https://www.ea.com/ea-sports-fc/ultimate-team/web-app*
@@ -1313,7 +1313,7 @@
 
   const w = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '1.7.8';
+  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '1.7.9';
   const errText = (e) => (e && e.message ? e.message : String(e));
   const fmt = (n) => Number(n || 0).toLocaleString();
 
@@ -2653,6 +2653,14 @@
         debugLog.push(`SBC service: ${fnNames(w.services.SBC).slice(0, 700)}`);
         if (w.services.SBC.sbcDAO) debugLog.push(`SBC dao: ${fnNames(w.services.SBC.sbcDAO).slice(0, 500)}`);
         debugLog.push(`challenge fns: ${fnNames(entry.challenge).slice(0, 500)}`);
+        // How the Web App hands in a points ("one-click") challenge: save the code of those functions.
+        const src = (label, fn) => { try { return `${label}: ${String(fn).replace(/\s+/g, ' ').slice(0, 900)}`; } catch { return `${label}: ?`; } };
+        const S = w.services.SBC;
+        const D = S.sbcDAO || {};
+        debugLog.push(`oneClick=${typeof entry.challenge.isOneClickChallenge === 'function' ? entry.challenge.isOneClickChallenge() : '?'}`);
+        [['svc.initiateOneClickChallenge', S.initiateOneClickChallenge], ['svc.submitOneClickChallenge', S.submitOneClickChallenge],
+          ['svc._applyOneClickSubmission', S._applyOneClickSubmission], ['dao.initiateOneClickChallenge', D.initiateOneClickChallenge],
+          ['dao.submitPlayers', D.submitPlayers]].forEach(([l, f]) => { if (f) debugLog.push(src(l, f)); });
         ui.log(`💎 ${entry.challenge.name}: points details saved — Log tab → Copy log and send it`, 'ok');
       });
     },
@@ -4114,7 +4122,7 @@
 
     async copyLog() {
       const lines = this.qa('[data-r=log] div').map((d) => d.textContent).reverse();
-      const text = [`FC Sniper ${VERSION} · ${navigator.userAgent}`, ...lines, '--- details ---', ...debugLog.slice(-20)].join('\n');
+      const text = [`FC Sniper ${VERSION} · ${navigator.userAgent}`, ...lines, '--- details ---', ...debugLog.slice(-30)].join('\n');
       try { await navigator.clipboard.writeText(text); this.toast('Log copied — paste it in the chat', 'ok'); } catch {
         w.prompt('Copy this log:', text);
       }
