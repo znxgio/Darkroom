@@ -634,6 +634,53 @@ test('afterListBuy counts spend and removes the player once bought', () => {
   assert.equal(c.afterListBuy({ ...cfg, buyOnce: false }, 1, 5).players.length, 2);
 });
 
+test('freeCoins: open bids come off the coins and the spend limit', () => {
+  assert.equal(c.freeCoins({ mode: 'trade', minCoins: 10000 }, 100000, []), 90000);
+  assert.equal(c.freeCoins({ mode: 'trade', minCoins: 10000 }, 100000, [{ amount: 30000 }, { amount: 20000 }]), 40000);
+  // EA already took a debited bid off the balance — don't subtract it twice
+  assert.equal(c.freeCoins({ mode: 'trade', minCoins: 10000 }, 70000, [{ amount: 30000, debited: true }]), 60000);
+  // ...but it still counts against the spend limit (Buy mode only)
+  assert.equal(c.freeCoins({ mode: 'buy', minCoins: 0, spendLimit: 100000, listSpent: 50000 }, 500000, [{ amount: 30000, debited: true }]), 20000);
+  assert.equal(c.freeCoins({ mode: 'trade', minCoins: 0, spendLimit: 100000, listSpent: 50000 }, 500000, [{ amount: 30000 }]), 470000);
+  assert.equal(c.freeCoins({ mode: 'buy', minCoins: 90000 }, 100000, [{ amount: 30000 }]), 0); // never negative
+  assert.equal(c.freeCoins({ mode: 'buy', minCoins: 0, spendLimit: 0 }, 1000, undefined), 1000);
+});
+
+test('bidBlock: a bid obeys Keep coins, spend limit, buy limit, buy-once and the reserve', () => {
+  const p1 = { id: 1, manualMax: 150000 };
+  const p2 = { id: 2, manualMax: 60000 };
+  const trade = { mode: 'trade', minCoins: 50000, maxBuys: 10, players: [p1, p2] };
+  assert.equal(c.bidBlock(30000, p1, trade, 100000, [], 0), '');
+  // Keep coins: 100k - 50k keep - 30k open bid = 20k free
+  assert.equal(c.bidBlock(30000, p1, trade, 100000, [{ amount: 30000, player: p1 }], 0), 'coins');
+  assert.equal(c.bidBlock(20000, p1, trade, 100000, [{ amount: 30000, player: p1 }], 0), ''); // Trade mode may hold several copies
+  assert.equal(c.bidBlock(20000, p1, trade, 70000, [{ amount: 30000, player: p1, debited: true }], 0), '');
+  assert.equal(c.bidBlock(20250, p1, trade, 70000, [{ amount: 30000, player: p1, debited: true }], 0), 'coins');
+  // session buy limit: open bids count as buys that may still happen
+  assert.equal(c.bidBlock(1000, p1, { ...trade, maxBuys: 2 }, 100000, [{ amount: 1000, player: p1 }], 1), 'buys');
+  assert.equal(c.bidBlock(1000, p1, { ...trade, maxBuys: 2 }, 100000, [], 2), 'buys');
+  assert.equal(c.bidBlock(1000, p1, { ...trade, maxBuys: 2 }, 100000, [], 1), '');
+
+  const buy = { mode: 'buy', minCoins: 0, maxBuys: 10, buyOnce: true, spendLimit: 100000, listSpent: 60000, players: [p1, p2], maxBuy: 1000 };
+  // spend limit: 40k left, 30k already bid
+  assert.equal(c.bidBlock(10000, p2, buy, 900000, [{ amount: 30000, player: p1 }], 0), '');
+  assert.equal(c.bidBlock(10250, p2, buy, 900000, [{ amount: 30000, player: p1 }], 0), 'coins');
+  assert.equal(c.bidBlock(10250, p2, buy, 900000, [{ amount: 30000, player: p1, debited: true }], 0), 'coins');
+  // buy each player once: an open bid on him, or already bought (off the list)
+  assert.equal(c.bidBlock(1000, p1, buy, 900000, [{ amount: 1000, player: { id: 1 } }], 0), 'once');
+  assert.equal(c.bidBlock(1000, { id: 3 }, buy, 900000, [], 0), 'once');
+  assert.equal(c.bidBlock(1000, p1, { ...buy, buyOnce: false }, 900000, [{ amount: 1000, player: p1 }], 0), '');
+  // a filter is never ticked off, and has no place in the reserve order
+  assert.equal(c.bidBlock(1000, { id: 'f1', kind: 'filter' }, buy, 900000, [{ amount: 1000, player: { id: 'f1', kind: 'filter' } }], 0), '');
+  // keep coins for higher players: p2 may only bid what leaves p1's 150k
+  const res = { ...buy, spendLimit: 0, reserveForHigher: true };
+  assert.equal(c.bidBlock(50000, p2, res, 200000, [], 0), '');
+  assert.equal(c.bidBlock(50250, p2, res, 200000, [], 0), 'reserve');
+  assert.equal(c.bidBlock(30000, p2, res, 200000, [{ amount: 30000, player: p1 }], 0), 'reserve'); // 170k free - 30k < 150k
+  assert.equal(c.bidBlock(150000, p1, res, 200000, [], 0), ''); // top of the list
+  assert.equal(c.bidBlock(1000, undefined, { mode: 'buy', maxBuys: 5, buyOnce: true, players: [] }, 5000, [], 0), ''); // no player (plain filter search)
+});
+
 test('rankUpgrades by meta finds stat upgrades and chemistry sidegrades', () => {
   const mk = (id, rating, leagueId, nationId, pos, stats) => ({ id, name: `P${id}`, rating, nationId, leagueId, teamId: id, positions: [pos], stats });
   // ST slot: 84 with poor pace; others share league 13

@@ -84,8 +84,18 @@ Newest learnings go at the end of each section. Dates are when the note was writ
   Lesson: give it the exact old and new lines; it then needs no judgment. It did not notice the change would break an
   e2e expectation — that is Opus's job when reviewing.
 
+- 2026-11-11 Fable FIX of the bidding spend-limit bug (brief: change only this bug, add tests, don't touch other files):
+  138 lines across 3 files; a pure `bidBlock`/`freeCoins` guard shared with Buy Now, a running committed-coins total,
+  buy-once/reserve/session-cap checks, filter rating range on bids, open bids saved to localStorage and collected after a
+  reload, plus unit tests and 3 e2e checks. All suites passed first try; it stayed in scope. It noticed on its own that it
+  didn't know if EA takes coins on bid and detected it from the balance (the user then confirmed EA does).
+  But the agent was stopped before it sent its report (an interrupted turn ends background helpers) — Opus had to
+  review the diff and run the tests itself. Lessons: big fixes from big-brother are good quality but slow (~15+ min) and
+  can be lost to interruptions; prefer "advisor diagnoses, Opus fixes" (team v2 rule), or run big fixes in an isolated
+  worktree and check the diff, not only the report.
+
 ## 7. Open work and ideas
-- 2.4.0 fixes from the Fable review: bidding spend guard (in progress with Fable), smart-sniping floor (done by intern),
+- Shipped in 2.3.1: bidding spend guard (Fable), smart-sniping floor (intern). Still open from the Fable review:
   "nothing listed" fallback, jobs skipping daily caps, run token for stop/start, SBC fill-in hard cap, learner reward tuning.
 - Gallery collector (buy → register → resell near break-even): parked until the user checks that a Web App buy registers in the Gallery.
 - User OK'd auction bidding as a sniping method (2026-11-11: "buy now is a harder snipe"). After the 2.4.0 bid spend guard:

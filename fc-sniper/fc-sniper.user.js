@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FC Sniper
 // @namespace    https://github.com/znxgio/darkroom
-// @version      2.3.0
+// @version      2.3.1
 // @description  Sniper, pack opener, SBC solver and team upgrade advisor for the EA SPORTS FC Ultimate Team Web App, with built-in safety limits.
 // @match        https://www.ea.com/*ultimate-team/web-app*
 // @match        https://www.ea.com/ea-sports-fc/ultimate-team/web-app*
@@ -202,6 +202,37 @@
     if (next > maxBid) return 0;
     if (l.buyNowPrice && next >= l.buyNowPrice) return 0; // Buy Now is the better move
     return next;
+  }
+
+  /**
+   * Coins free to spend while auction bids are open: coins minus Keep coins and
+   * open bids, capped (Buy mode) by what's left of the spend limit.
+   * bids: [{ amount, debited }] — debited = EA already took the coins off your balance.
+   */
+  function freeCoins(cfg, coins, bids) {
+    const open = bids || [];
+    const all = open.reduce((a, b) => a + b.amount, 0);
+    const pending = open.reduce((a, b) => a + (b.debited ? 0 : b.amount), 0);
+    const own = coins - pending - (cfg.minCoins || 0);
+    const left = cfg.mode === 'buy' && cfg.spendLimit > 0 ? cfg.spendLimit - (cfg.listSpent || 0) - all : Infinity;
+    return Math.max(0, Math.min(own, left));
+  }
+
+  /**
+   * May we bid `amount` on `player`? Every open bid counts as a buy that may
+   * still happen. Returns '' when allowed, else why not:
+   *   buys (session limit) | once (Buy each player once) | coins (Keep coins / spend limit) | reserve (coins kept for higher players).
+   * bids: open bids [{ amount, debited, player }]; sessionBuys: buys so far this session.
+   */
+  function bidBlock(amount, player, cfg, coins, bids, sessionBuys) {
+    const open = bids || [];
+    if (sessionBuys + open.length >= cfg.maxBuys) return 'buys';
+    const listed = cfg.mode === 'buy' && player && player.kind !== 'filter';
+    if (listed && cfg.buyOnce && (!(cfg.players || []).some((p) => p.id === player.id) || open.some((b) => b.player && b.player.id === player.id))) return 'once';
+    const free = freeCoins(cfg, coins, open);
+    if (amount > free) return 'coins';
+    if (listed && !reserveOk(cfg.players || [], (cfg.players || []).findIndex((p) => p.id === player.id), amount, free, cfg)) return 'reserve';
+    return '';
   }
 
   /** Records sales from your transfer list. sold: [{ itemId, price }]. */
@@ -1525,7 +1556,7 @@
     cacheBustBid, jitter, pickTargets, planSellPrice, classifyStatus,
     normalizeName, parsePlayerDb, searchPlayers, playerForIteration, migrateConfig, filterSummary, sniperTargets, LEAGUES,
     findMarketPrice, planMaxBuy, effectiveMaxBuy, withinReach, huntTargets,
-    smartLevels, gammaSample, betaSample, armSignals, chooseDiscount, chooseTarget, recordArm, bestArm, flipPlan, tradeOpts, bidAmount, settleSales,
+    smartLevels, gammaSample, betaSample, armSignals, chooseDiscount, chooseTarget, recordArm, bestArm, flipPlan, tradeOpts, bidAmount, freeCoins, bidBlock, settleSales,
     listSpendable, reserveOk, afterListBuy,
     aggregateListings, hotScore, rankHot, priceBands, provenFlips, flipValue, priceLadder, sbcCostEstimate,
     addHistory, summarizeHistory, isDiscordWebhook, discordPayload,
@@ -1546,13 +1577,13 @@
 
   const w = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '2.3.0';
+  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '2.3.1';
   const errText = (e) => (e && e.message ? e.message : String(e));
   const fmt = (n) => Number(n || 0).toLocaleString();
 
   // ---- Storage ----------------------------------------------------------------
 
-  const KEYS = { cfg: 'fc-sniper:config', safety: 'fc-sniper:safety', history: 'fc-sniper:history', ui: 'fc-sniper:ui', log: 'fc-sniper:log', learn: 'fc-sniper:learn' };
+  const KEYS = { cfg: 'fc-sniper:config', safety: 'fc-sniper:safety', history: 'fc-sniper:history', ui: 'fc-sniper:ui', log: 'fc-sniper:log', learn: 'fc-sniper:learn', bids: 'fc-sniper:bids' };
   const store = {
     get(key, fallback) {
       try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : fallback; } catch { return fallback; }
@@ -2234,7 +2265,8 @@
     data: store.get(KEYS.learn, { targets: {}, hours: {}, speed: { n: 0, ms: 0, lost: 0 } }),
     save() { store.set(KEYS.learn, this.data); },
     key(p) { return `${p.kind === 'filter' ? 'f' : 'p'}:${p.id}`; },
-    levels(cfg) { return smartLevels(cfg.smartMinPct, cfg.smartMaxPct); },
+    // never closer than your own "Snipe % under avg" (cfg.discount)
+    levels(cfg) { const d = cfg.discount || 0; return smartLevels(Math.max(cfg.smartMinPct, d), Math.max(cfg.smartMaxPct, d)); },
     /** Targets the learner may price: priced, no manual max, Buy or Trade mode. */
     usable(p, cfg) { return !!p && cfg.smartSnipe && cfg.mode !== 'alert' && p.avg > 0 && !p.manualMax; },
     arms(p) { const t = this.data.targets[this.key(p)]; return (t && t.arms) || {}; },
@@ -2493,6 +2525,8 @@
       this.listStarted = sniperTargets(cfg).length > 0;
       this.reserveWarned = new Set();
       this.nextUpkeep = cfg.mode === 'trade' ? Date.now() : Date.now() + cfg.upkeepMinutes * 60e3;
+      // Bids restored after a reload: collect them as soon as they have ended.
+      for (const b of this.bids.values()) this.nextUpkeep = Math.min(this.nextUpkeep, b.endsAt + 8000);
 
       while (this.running) {
         let limit = '';
@@ -2535,7 +2569,7 @@
         // Smart sniping: the learned discount, never above your coins / profitable price.
         let smartPct = 0;
         if (pick.pct && maxBuy) {
-          const cap = cfg.mode === 'trade' ? maxBuy : roundPrice(spendable, 'down');
+          const cap = cfg.mode === 'trade' ? maxBuy : Math.min(roundPrice(spendable, 'down'), roundPrice(player.avg * (1 - (cfg.discount || 0) / 100), 'down'));
           const learned = roundPrice(player.avg * (1 - pick.pct / 100), 'down');
           if (learned >= MIN_PRICE && learned <= cap) { maxBuy = learned; smartPct = pick.pct; }
           else if (learned > cap && cfg.mode === 'trade') smartPct = 0;
@@ -2584,11 +2618,11 @@
           if (errors >= SAFETY.maxConsecutiveErrors) return this.halt('errors', `${errors} errors in a row (${res.status})`);
         } else if (bidTurn) {
           errors = 0;
-          if (!tradeFull) await this.bidOn(res.listings, player, maxBuy, plan, spendable);
+          if (!tradeFull) await this.bidOn(res.listings, player, maxBuy, plan, this.stats.buys - startBuys);
         } else {
           errors = 0;
           const range = player && player.kind === 'filter' ? { minRating: player.minRating || 0, maxRating: player.maxRating || 0 } : {};
-          const targets = pickTargets(res.listings, { ...cfg, ...range, maxBuy }, cfg.mode === 'alert' ? Infinity : spendable);
+          const targets = pickTargets(res.listings, { ...cfg, ...range, maxBuy }, cfg.mode === 'alert' ? Infinity : Math.min(spendable, freeCoins(cfg, fut.coins(), [...this.bids.values()])));
           const outcome = { hit: 0, miss: 0, near: 0 };
           const mine = res.listings.filter((l) => l.buyNowPrice > 0 && (!player || player.kind === 'filter' || l.defId === player.id || baseId(l.defId) === baseId(player.id)));
           if (probe) outcome.near = mine.some((l) => l.buyNowPrice > maxBuy && l.buyNowPrice <= searchMax) ? 1 : 0;
@@ -2596,9 +2630,9 @@
             if (!this.running) break;
             if (cfg.mode !== 'alert') {
               // Several buys from one search: re-check the limits before each one.
-              if (this.stats.buys - startBuys >= cfg.maxBuys) break;
+              if (this.stats.buys - startBuys + this.bids.size >= cfg.maxBuys) break; // an open bid may still become a buy
               if (listMode && cfg.buyOnce && player && player.kind !== 'filter' && !cfg.players.some((p) => p.id === player.id)) break;
-              const left = listMode ? listSpendable(cfg, fut.coins()) : fut.coins() - cfg.minCoins;
+              const left = freeCoins(cfg, fut.coins(), [...this.bids.values()]); // coins held for open bids are not free
               if (t.buyNowPrice > left) continue;
             }
             if (cfg.mode === 'alert') {
@@ -2644,16 +2678,28 @@
       if (this.running) await this.upkeep(true);
     },
 
-    bids: new Map(), // tradeId -> { name, amount, endsAt, player, plan }
+    // tradeId -> { name, amount, endsAt, player, plan, debited } — saved, so won auctions are still collected and counted after a reload
+    bids: new Map((() => { const v = store.get(KEYS.bids, []); return Array.isArray(v) ? v.filter((e) => Array.isArray(e) && e[1] && e[1].amount > 0) : []; })()),
+    saveBids() {
+      store.set(KEYS.bids, [...this.bids].map(([id, b]) => [id, { ...b, player: b.player ? { id: b.player.id, name: b.player.name, kind: b.player.kind, avg: b.player.avg } : null }]));
+    },
 
-    async bidOn(listings, player, maxBid, plan, spendable) {
+    async bidOn(listings, player, maxBid, plan, sessionBuys) {
       const cfg = this.cfg;
-      const committed = [...this.bids.values()].reduce((a, b) => a + b.amount, 0);
+      // A filter's rating range, like pickTargets does for Buy Now.
+      const lo = (player && player.kind === 'filter' && player.minRating) || 0;
+      const hi = (player && player.kind === 'filter' && player.maxRating) || 0;
       for (const l of listings.slice().sort((a, b) => (a.expires || 0) - (b.expires || 0))) {
         if (!this.running || this.bids.size >= cfg.maxActiveBids) break;
         if (this.bids.has(l.tradeId)) continue;
+        if ((lo && (l.rating || 0) < lo) || (hi && (l.rating || 0) > hi)) continue;
         const amount = bidAmount(l, maxBid, cfg.bidWindow);
-        if (!amount || amount + committed > spendable) continue;
+        if (!amount) continue;
+        // Same limits as Buy Now, with every open bid counted as coins spent and a buy made.
+        const before = fut.coins();
+        const block = bidBlock(amount, player, cfg, before, [...this.bids.values()], sessionBuys);
+        if (block === 'buys' || block === 'once') break;
+        if (block) continue;
         const r = await fut.placeBid(l, amount);
         if (!r.ok) {
           const kind = classifyStatus(r.status);
@@ -2662,7 +2708,8 @@
           ui.log(`Bid on ${l.name} at ${fmt(amount)} failed (${r.status})`, 'muted');
           continue;
         }
-        this.bids.set(l.tradeId, { name: l.name, amount, endsAt: Date.now() + (l.expires || 30) * 1000, player, plan });
+        this.bids.set(l.tradeId, { name: l.name, amount, endsAt: Date.now() + (l.expires || 30) * 1000, player, plan, debited: before - fut.coins() >= amount });
+        this.saveBids();
         this.nextUpkeep = Math.min(this.nextUpkeep, Date.now() + ((l.expires || 30) + 8) * 1000);
         ui.log(`🔨 Bid ${fmt(amount)} on ${l.name} (${l.rating || '?'}) — ends in ${Math.round(l.expires)}s`, 'ok');
         await sleep(jitter(700, 1400));
@@ -2777,6 +2824,7 @@
             if (st.state === 'won') {
               const p = fut.toPlayer(it);
               this.bids.delete(st.tradeId);
+              this.saveBids();
               out.won++;
               await this.bought(it, { name: p.name, rating: p.rating, defId: p.id, price: st.price || (bid && bid.amount) || 0 }, bid && bid.player, bid && bid.plan, 'bid');
             } else if (st.state === 'lost' || st.state === 'expired') {
@@ -2788,6 +2836,7 @@
         }
         // Forget bids long past their end that never showed up.
         for (const [id, b] of this.bids) if (Date.now() - b.endsAt > 10 * 60e3) this.bids.delete(id);
+        this.saveBids();
       }
       this.listedNow = out.active;
       ui.renderTrade(); ui.renderHistory();

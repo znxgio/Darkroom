@@ -9,7 +9,7 @@ const SCRIPT = fs.readFileSync(path.join(__dirname, '..', 'fc-sniper.user.js'), 
 const results = [];
 const check = (name, ok, info = '') => results.push(`${ok ? 'PASS' : 'FAIL'}  ${name}${info ? `  — ${info}` : ''}`);
 
-function installTradeMock() {
+function installTradeMock(opts) {
   const obs = (res, ms = 5) => ({ observe(ctx, cb) { setTimeout(() => cb({ unobserve() {} }, res), ms); } });
   const PILE = { CLUB: 1, PURCHASED: 3, TRANSFER: 5, STORAGE: 6 };
   window.ItemPile = PILE;
@@ -44,7 +44,8 @@ function installTradeMock() {
         T.searches.push({ maxBuy: c.maxBuy, maxBid: c.maxBid, minBid: c.minBid, minBuy: c.minBuy });
         if (c.maxBid) {
           // auction search: one auction about to end (shown once)
-          const items = auctionShown ? [] : [card({ tradeId: 7001, bin: 90000, bid: 30000, expires: 2 })];
+          // (the second one fits the max bid, but together with the first it would dip into Keep coins)
+          const items = auctionShown ? [] : [card({ tradeId: 7001, bin: 90000, bid: 30000, expires: 2 }), card({ tradeId: 7002, bin: 90000, bid: 45500, expires: 3 })];
           auctionShown = true;
           return obs({ success: true, data: { items } });
         }
@@ -78,7 +79,14 @@ function installTradeMock() {
   localStorage.setItem('fc-sniper:config', JSON.stringify({
     players: [{ id: 231747, name: 'Mbappé', rating: 91 }],
     bidSnipe: true, bidWindow: 30, minProfit: 1000, undercut: 3, maxBuys: 2, delayMin: 3000, delayMax: 4500,
+    minCoins: 224500, // 75,500 free: the 45,000 snipe and the 30,250 bid fit (in either order), a second bid of 45,750 does not
   }));
+  if (opts && opts.restore) {
+    // after a reload: Buy mode, one bid from before the reload that has been won in the meantime
+    watched.push(card({ id: 601, tradeId: 7100, bin: 90000, bid: 30250, trade: 'closed', bidState: 'highest' }));
+    localStorage.setItem('fc-sniper:config', JSON.stringify({ players: [{ id: 231747, name: 'Mbappé', rating: 91 }], spendLimit: 100000 }));
+    localStorage.setItem('fc-sniper:bids', JSON.stringify([['7100', { name: 'Mbappé', amount: 30250, endsAt: Date.now() - 60e3, player: { id: 231747, name: 'Mbappé' }, plan: null }]]));
+  }
 }
 
 
@@ -138,6 +146,7 @@ function installHotMock() {
   await p.tap('#fcs [data-tab=trade]');
   await p.screenshot({ path: `${S}/trade-0.png` });
   await p.tap('#fcs [data-a=trade-start]');
+  const savedBids = await p.waitForFunction(() => { const v = JSON.parse(localStorage.getItem('fc-sniper:bids') || '[]'); return v.length ? v : null; }, null, { timeout: 150000 }).then((h) => h.jsonValue());
   await p.waitForFunction(() => !document.querySelector('#fcs [data-a=toggle]').classList.contains('on') && window.T.searches.length > 3, null, { timeout: 150000 });
   await p.waitForTimeout(500);
   const t = await p.evaluate(() => window.T);
@@ -156,6 +165,9 @@ function installHotMock() {
   check('snipe search max buy keeps min profit', buy && 0.95 * t.listed[0] - buy.maxBuy >= 1000, JSON.stringify(buy));
   check('auction searches use max bid', t.searches.some((x) => x.maxBid && !x.maxBuy), JSON.stringify(t.searches.filter((x) => x.maxBid)[0]));
   check('bid placed on ending auction', t.bids.includes(30250), `bids ${t.bids}`);
+  check('second bid that would break Keep coins is not placed', t.bids.length === 1, `bids ${t.bids}`);
+  check('open bid saved for a reload, cleared once collected', savedBids.length === 1 && savedBids[0][0] === '7001' && savedBids[0][1].amount === 30250 && savedBids[0][1].player.id === 231747
+    && await p.evaluate(() => localStorage.getItem('fc-sniper:bids') === '[]'), JSON.stringify(savedBids));
   check('won auction collected and listed', lines.some((l) => /Won Mbappé/.test(l)) && t.listed.length >= 2, lines.filter((l) => /Won|Bid/.test(l)).join(' | '));
   check('stopped at session buy limit', lines.some((l) => /session buy limit/.test(l)));
   const hist = await p.evaluate(() => JSON.parse(localStorage.getItem('fc-sniper:history')));
@@ -167,6 +179,21 @@ function installHotMock() {
   const plans = await p.textContent('#fcs [data-r=tplans]');
   check('Trade tab shows the flip plan', /buy ≤/.test(plans) && /sell/.test(plans), plans.replace(/\s+/g, ' ').slice(0, 120));
   await p.screenshot({ path: `${S}/trade-1.png` });
+
+  // ---------- Reload with an open bid: the won auction is still collected and counted
+  const r = await (await b.newContext(devices['iPhone 13'])).newPage();
+  r.on('pageerror', (e) => errors.push(e.message));
+  await r.route('http://fake.test/**', (x) => x.fulfill({ contentType: 'text/html', body: '<html><head><meta charset=utf-8></head><body></body></html>' }));
+  await r.goto('http://fake.test/');
+  await r.evaluate(installTradeMock, { restore: true });
+  await r.addScriptTag({ content: SCRIPT });
+  await r.waitForSelector('#fcs');
+  await r.evaluate(() => document.querySelector('#fcs [data-a=upkeep]').click());
+  await r.waitForFunction(() => localStorage.getItem('fc-sniper:bids') === '[]', null, { timeout: 30000 }).catch(() => {});
+  await r.waitForTimeout(500);
+  const rs = await r.evaluate(() => ({ cfg: JSON.parse(localStorage.getItem('fc-sniper:config')), bids: localStorage.getItem('fc-sniper:bids'), hist: JSON.parse(localStorage.getItem('fc-sniper:history')) }));
+  check('restored bid: won auction counted against the spend limit and ticked off the list', rs.bids === '[]' && rs.cfg.listSpent === 30250 && rs.cfg.players.length === 0 && rs.hist.some((e) => e.via === 'bid' && e.price === 30250),
+    `bids ${rs.bids}, listSpent ${rs.cfg.listSpent}, players ${rs.cfg.players.length}`);
 
   // ---------- Hot cards: scan, rank, auto-pick and start trading
   const h = await (await b.newContext(devices['iPhone 13'])).newPage();
