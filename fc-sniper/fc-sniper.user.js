@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FC Sniper
 // @namespace    https://github.com/znxgio/darkroom
-// @version      1.7.7
+// @version      1.7.8
 // @description  Sniper, pack opener, SBC solver and team upgrade advisor for the EA SPORTS FC Ultimate Team Web App, with built-in safety limits.
 // @match        https://www.ea.com/*ultimate-team/web-app*
 // @match        https://www.ea.com/ea-sports-fc/ultimate-team/web-app*
@@ -1158,6 +1158,42 @@
     return finish(best);
   }
 
+  // ---- 💎 Points SBCs -------------------------------------------------------------------
+
+  /**
+   * How to reach a points goal: your spare cards first (least value given away
+   * per point), then market buys (fewest coins per point). One copy per player.
+   * club: [{ id, points, cost }]; market: [{ id, points, price }].
+   * Returns { fromClub, clubPoints, buys, buyPoints, buyCoins, short, cards, handIns }.
+   */
+  function planPoints(need, club, market, opts = {}) {
+    const perHandIn = opts.perHandIn || 20;
+    const used = new Set();
+    let got = 0;
+    const take = (list, ratio) => {
+      const out = [];
+      let pts = 0;
+      for (const p of list.filter((x) => x.points > 0).sort((a, b) => ratio(a) - ratio(b))) {
+        if (got + pts >= need) break;
+        const key = p.baseId ?? p.id;
+        if (used.has(key)) continue;
+        used.add(key);
+        out.push(p);
+        pts += p.points;
+      }
+      got += pts;
+      return { out, pts };
+    };
+    const c = take(club || [], (p) => p.cost / p.points);
+    const m = take(market || [], (p) => p.price / p.points);
+    const cards = c.out.length + m.out.length;
+    return {
+      fromClub: c.out, clubPoints: c.pts,
+      buys: m.out, buyPoints: m.pts, buyCoins: m.out.reduce((a, p) => a + p.price, 0),
+      short: Math.max(0, need - got), cards, handIns: Math.ceil(cards / perHandIn),
+    };
+  }
+
   // ---- Pack items --------------------------------------------------------------------
 
   /**
@@ -1262,7 +1298,7 @@
     addHistory, summarizeHistory, isDiscordWebhook, discordPayload,
     squadRating, squadChemistry, topValues, rankUpgrades,
     POS_NAMES, normPos, baseId, FORMATIONS, squadRatingExact, lineupScore, bestLineup, metaScore, readStats,
-    fodderValue, playerCost, qualityOf, COIN_WEIGHT, parseRequirements, solveSbc, sortItem, sbcCheck, solveSbcSearch, matchesReq, marketLevel,
+    fodderValue, playerCost, qualityOf, COIN_WEIGHT, parseRequirements, solveSbc, sortItem, sbcCheck, solveSbcSearch, matchesReq, marketLevel, planPoints,
     SAFETY, clampConfig, dayKey, usageFor, lockoutFor, formatDuration, canStart,
   };
 
@@ -1277,7 +1313,7 @@
 
   const w = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '1.7.7';
+  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '1.7.8';
   const errText = (e) => (e && e.message ? e.message : String(e));
   const fmt = (n) => Number(n || 0).toLocaleString();
 
@@ -1411,6 +1447,7 @@
         teamId: item.teamId,
         positions,
         rareflag: item.rareflag || 0,
+        points: Number(item.sbsScore) || 0, // 💎 value in points SBCs
         rare: (item.rareflag || 0) >= 1,
         special: (item.rareflag || 0) > 1,
         untradeable: !!item.untradeable,
@@ -2532,6 +2569,63 @@
       return true;
     },
 
+    /**
+     * 💎 points SBC estimate: points still needed, what your spare cards cover
+     * (same protections as normal SBCs), and what the rest would cost on the
+     * market at the fewest coins per point. Nothing is bought or handed in.
+     */
+    async estimatePoints(set, entry) {
+      await jobs.run('Estimating points SBC', async () => {
+        const cfg = engine.cfg;
+        const ch = entry.challenge;
+        const goal = Number(ch.scoreRequirement ?? set.scoreRequirement) || 0;
+        const done = Number(ch.submittedScore ?? set.totalSubmittedScore) || 0;
+        const need = Math.max(0, goal - done);
+        if (!goal) { ui.log('Couldn’t read this SBC’s points goal', 'warn'); return; }
+        const k = entry.parsed.constraints;
+        const usable = (await this.pool()).filter((p) => p.rating >= (k.minOvr || 0));
+        // points by rating from your own cards (used when a market card doesn't show its value)
+        const byRating = new Map();
+        (this.raw || []).forEach((p) => { if (p.points) byRating.set(p.rating, Math.max(byRating.get(p.rating) || 0, p.points)); });
+        const ptsFor = (p) => p.points || byRating.get(p.rating) || 0;
+        const club = usable.map((p) => ({ ...p, points: ptsFor(p), baseId: baseId(p.defId ?? p.id) }));
+        let market = [];
+        const clubTotal = club.reduce((a, p) => a + p.points, 0);
+        if (clubTotal < need) {
+          const owned = new Set((this.raw || []).map((p) => baseId(p.defId ?? p.id)));
+          const seen = new Set();
+          for (const [i, band] of [[0, 1500], [1000, 3000], [2500, 6000], [5000, 15000]].entries()) {
+            engine.setStatus('pricing', `Checking market points value… ${i + 1}/4`);
+            const c = fut.newCriteria();
+            c.level = 'gold';
+            if (band[0] >= 200) c.minBuy = band[0];
+            c.maxBuy = band[1];
+            const r = await fut.search(c);
+            engine.countUsage('searches');
+            jobs.check(r, 'market search');
+            for (const l of r.listings) {
+              const p = fut.toPlayer(l.item);
+              const b = baseId(p.id);
+              if (!p.player || !l.buyNowPrice || owned.has(b) || seen.has(b) || p.rating < (k.minOvr || 0)) continue;
+              seen.add(b);
+              market.push({ ...p, id: `m${l.tradeId}`, baseId: b, price: l.buyNowPrice, points: ptsFor(p) });
+            }
+            await jobs.pause(cfg.delayMin, cfg.delayMax);
+          }
+          market = market.filter((p) => p.points > 0);
+        }
+        const plan = planPoints(need, club, market);
+        // The market sample is small: extrapolate the rest at the best coins-per-point seen.
+        const best = market.slice().sort((a, b) => a.price / a.points - b.price / b.points)[0];
+        const extra = plan.short && best ? Math.ceil(plan.short / best.points) * best.price : 0;
+        this.points = { set, entry, goal, done, need, plan, best, extra };
+        const perPt = best ? (best.price / best.points).toFixed(1) : null;
+        ui.log(`💎 ${ch.name}: ${fmt(done)}/${fmt(goal)} · your spare cards give ${fmt(plan.clubPoints)} (${plan.fromClub.length} cards)`
+          + (plan.buys.length || extra ? ` · rest ≈ ${fmt(plan.buyCoins + extra)} coins${perPt ? ` (best: ${best.rating}-rated at ${fmt(best.price)} = ${best.points} 💎, ${perPt}/💎)` : ''}` : ''), 'ok');
+        ui.renderSbc();
+      });
+    },
+
     /** 💎 points SBC: open it and record where EA keeps the points (nothing is handed in). */
     async probe(set, entry) {
       await jobs.run('Checking points SBC', async () => {
@@ -2555,6 +2649,10 @@
         const sample = (this.raw || []).find((p) => p.player);
         debugLog.push(`points SBC probe "${entry.challenge.name}": ${fut.pointsProbe(entry.challenge, set, sample && sample.item)}`);
         debugLog.push(`points SBC raw "${entry.challenge.name}": ${fut.rawRequirements(entry.challenge)} · needs ${fut.requiredPlayers(entry.challenge)} · slots ${fut.challengeSlots(entry.challenge).length}`);
+        const fnNames = (o) => { const n = new Set(); for (let x = o, d = 0; x && d < 3; x = Object.getPrototypeOf(x), d++) Object.getOwnPropertyNames(x).forEach((k) => { try { if (typeof o[k] === 'function' && k !== 'constructor') n.add(k); } catch { /* skip */ } }); return [...n].join(','); };
+        debugLog.push(`SBC service: ${fnNames(w.services.SBC).slice(0, 700)}`);
+        if (w.services.SBC.sbcDAO) debugLog.push(`SBC dao: ${fnNames(w.services.SBC.sbcDAO).slice(0, 500)}`);
+        debugLog.push(`challenge fns: ${fnNames(entry.challenge).slice(0, 500)}`);
         ui.log(`💎 ${entry.challenge.name}: points details saved — Log tab → Copy log and send it`, 'ok');
       });
     },
@@ -2678,6 +2776,7 @@
           this.plan = null; ui.renderSbc(); return;
         }
         const buyTotal = buys.reduce((a, p) => a + p.price, 0);
+        this.points = null;
         this.plan = { set, entry, solution, slots, buys, buyTotal };
         ui.log(`Solution: ${solution.players.length} players · rating ${solution.rating || '—'}${parsed.constraints.needsSearch ? ` · chemistry ${solution.chem ?? '—'}` : ''}${buys.length ? ` · buy ${buys.length} for ${fmt(buyTotal)}` : ''} — review it, then submit`, 'ok');
         ui.renderSbc();
@@ -3656,6 +3755,10 @@
             const set = sbc.sets[Number(btn.dataset.i)];
             return set && sbc.solve(set, sbc.open.get(set.id)[Number(btn.dataset.j)]);
           }
+          case 'sbc-points': {
+            const set = sbc.sets[Number(btn.dataset.i)];
+            return set && sbc.estimatePoints(set, sbc.open.get(set.id)[Number(btn.dataset.j)]);
+          }
           case 'sbc-probe': {
             const set = sbc.sets[Number(btn.dataset.i)];
             return set && sbc.probe(set, sbc.open.get(set.id)[Number(btn.dataset.j)]);
@@ -3663,6 +3766,7 @@
           case 'sbc-submit': return sbc.submit(false);
           case 'sbc-fill': return sbc.submit(true);
           case 'sbc-discard': sbc.plan = null; return this.renderSbc();
+          case 'sbc-points-close': sbc.points = null; return this.renderSbc();
           case 'discord-test':
             this.commit();
             if (!engine.cfg.discordWebhook) return this.log('Paste a Discord webhook URL first', 'warn');
@@ -3910,8 +4014,8 @@
           const ok = !e.parsed.unsupported.length && !e.parsed.points;
           const tagHtml = e.parsed.points ? '<span class="tag">💎 points</span>' : ok ? '<span class="tag ok">auto</span>' : '<span class="tag no">manual</span>';
           return `<div class="li"><span class="t"><b>${esc(e.challenge.name || set.name)}${tagHtml}</b>
-            <small>${esc(e.reqs.filter((r) => r.key !== 'SCOPE' && r.key !== 'PLAYER_COUNT').map((r) => this.reqText(r)).filter(Boolean).join(' · ') || `${fut.requiredPlayers(e.challenge)} players`)}${ok ? '' : ` — needs ${esc(e.parsed.unsupported.join(', '))}`}</small></span>
-            ${ok ? `<button class="mini go2" data-a="sbc-solve" data-i="${i}" data-j="${j}">Solve</button>` : e.parsed.points ? `<button class="mini" data-a="sbc-probe" data-i="${i}" data-j="${j}">Check points</button>` : ''}</div>`;
+            <small>${esc(e.reqs.filter((r) => r.key !== 'SCOPE' && r.key !== 'PLAYER_COUNT').map((r) => this.reqText(r)).filter(Boolean).join(' · ') || `${fut.requiredPlayers(e.challenge)} players`)}${e.parsed.unsupported.length ? ` — needs ${esc(e.parsed.unsupported.join(', '))}` : ''}</small></span>
+            ${ok ? `<button class="mini go2" data-a="sbc-solve" data-i="${i}" data-j="${j}">Solve</button>` : e.parsed.points ? `<button class="mini go2" data-a="sbc-points" data-i="${i}" data-j="${j}">Estimate</button><button class="mini" data-a="sbc-probe" data-i="${i}" data-j="${j}">Details</button>` : ''}</div>`;
         }).join('') : '<p class="empty">All done</p>'}</div>` : '';
         return `<div class="li"><span class="t"><b>${esc(set.name)}${rep}</b><small>${esc(set.description || '')}</small></span>
           ${loaded ? '' : `<button class="mini" data-a="sbc-set" data-i="${i}">View</button>`}</div>${sub}`;
@@ -3919,7 +4023,21 @@
 
       const plan = this.q('[data-r=plan]');
       const p = sbc.plan;
-      plan.hidden = !p;
+      const pt = sbc.points;
+      plan.hidden = !p && !pt;
+      if (!p && pt) {
+        const best = pt.best;
+        const coins = pt.plan.buyCoins + pt.extra;
+        plan.innerHTML = `<h4>💎 Estimate — ${esc(pt.entry.challenge.name)}</h4>
+          <div class="kpi"><div><b>${fmt(pt.need)}</b>💎 needed</div><div><b>${fmt(pt.plan.clubPoints)}</b>From your cards</div><div><b>${coins ? fmt(coins) : '0'}</b>Coins to buy rest</div></div>
+          <p class="note" style="margin:0 0 6px">${fmt(pt.done)} of ${fmt(pt.goal)} done. Your spare cards (never your squad, specials, loans, or above ${engine.cfg.sbcMaxRating}): <b>${pt.plan.fromClub.length}</b> cards for ${fmt(pt.plan.clubPoints)} 💎.
+          ${coins ? `The rest ≈ <b>${fmt(coins)} coins</b>${best ? ` — best value on the market right now: ${best.rating}-rated at ${fmt(best.price)} for ${fmt(best.points)} 💎 (${(best.price / best.points).toFixed(1)} coins per 💎)` : ''}.` : 'Your spare cards cover it — no coins needed.'}
+          About ${Math.max(1, Math.ceil((pt.plan.cards + (pt.extra && best ? Math.ceil(pt.plan.short / best.points) : 0)) / 20))} hand-ins of 20.</p>
+          <div class="list">${pt.plan.fromClub.slice().sort((a, b) => b.points - a.points).slice(0, 12).map((x) => `<div class="li"><span class="t"><b>${esc(x.name)} ${x.rating}</b></span><b>${fmt(x.points)} 💎</b></div>`).join('')}</div>
+          <p class="note">Handing in automatically isn’t available yet for points SBCs — this is the cost forecast.</p>
+          <button class="btn red" data-a="sbc-points-close">Close</button>`;
+        return;
+      }
       if (!p) return;
       const tag = (x) => (x.bought ? `<span class="tag ok">bought ${fmt(x.price)}</span>` : x.market ? `<span class="tag no">buy ${fmt(x.price)}</span>` : x.storage ? '<span class="tag">storage</span>' : x.duplicate ? '<span class="tag">duplicate</span>' : x.untradeable ? '<span class="tag">untradeable</span>' : '<span class="tag no">tradeable</span>');
       const slots = p.slots || [];

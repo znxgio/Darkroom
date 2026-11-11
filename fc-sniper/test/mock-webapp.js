@@ -12,7 +12,7 @@ function installMock() {
     const it = {
       id: nextId++, definitionId: defId, rating, rareflag: o.rare ? 1 : (o.special ? 3 : 0), untradeable: o.untradeable !== false,
       pile: o.pile || PILE.CLUB, nationId: o.nation || 18, leagueId: o.league || 13, teamId: o.team || defId,
-      preferredPosition: o.pos || 'CM', possiblePositions: o.alt || [], attributes: o.attrs || [rating - 6, rating - 8, rating - 4, rating - 3, rating - 10, rating - 5], skillMoves: o.sm || 3, weakFoot: o.wf || 3, _staticData: { name: o.name || `Player ${defId}` },
+      preferredPosition: o.pos || 'CM', possiblePositions: o.alt || [], sbsScore: rating < 65 ? 20 : rating < 75 ? 35 : rating < 81 ? 120 : ({ 81: 280, 82: 450, 83: 700, 84: 900, 85: 2000, 86: 3500, 87: 5500 })[rating] || 8000, attributes: o.attrs || [rating - 6, rating - 8, rating - 4, rating - 3, rating - 10, rating - 5], skillMoves: o.sm || 3, weakFoot: o.wf || 3, _staticData: { name: o.name || `Player ${defId}` },
       _auction: o.price ? { tradeId: nextId, buyNowPrice: o.price } : undefined,
       isPlayer() { return o.player !== false; }, isLimitedUse() { return false; },
       isDuplicate() { return o.dup !== undefined ? o.dup : owned.has(defId) && this.pile !== PILE.CLUB; },
@@ -75,7 +75,11 @@ function installMock() {
     { id: 2, name: 'Hybrid Leagues', description: 'Chemistry', isComplete: () => false },
     { id: 3, name: 'Elite 87', description: 'Needs buys', isComplete: () => false },
     { id: 4, name: 'Break Away', description: 'Bronze', isComplete: () => false },
-    { id: 5, name: 'Hat-trick', description: '3 players', isComplete: () => false }];
+    { id: 5, name: 'Hat-trick', description: '3 players', isComplete: () => false },
+    { id: 6, name: 'Brian Brobbey', description: 'Points', isComplete: () => false, scoreRequirement: 30000, totalSubmittedScore: 0 }];
+  // FC 27 points SBC: "OVR Min 45" (Evolutions-style rule) and a 30,000 💎 goal
+  const pointsChallenge = { id: 82, name: 'Brian Brobbey', squad: sbcSquad, isCompleted: () => false, scoreRequirement: 30000, submittedScore: 1200,
+    eligibilityRequirements: [{ scope: 0, count: -1, kvPairs: { _collection: { 40: [45], 41: [1] } } }] };
   // a 3-player SBC: player count only known after loading, unused slots flagged (not a method) as bricks
   const hatSquad = {
     loaded: false, players: [],
@@ -167,7 +171,7 @@ function installMock() {
       create(name, formation, items) { T.created = { name, formation, n: items.filter(Boolean).length, ratings: items.map((i) => i && i.rating) }; return obs({ success: true }); } },
     SBC: {
       requestSets: () => obs({ success: true, data: { sets } }),
-      requestChallengesForSet: (set) => obs({ success: true, data: { challenges: set.id === 1 ? (done < 2 ? [challenge()] : []) : set.id === 3 ? [eliteChallenge] : set.id === 4 ? [bronzeChallenge] : set.id === 5 ? [hatChallenge] : [chemChallenge] } }),
+      requestChallengesForSet: (set) => obs({ success: true, data: { challenges: set.id === 1 ? (done < 2 ? [challenge()] : []) : set.id === 3 ? [eliteChallenge] : set.id === 4 ? [bronzeChallenge] : set.id === 5 ? [hatChallenge] : set.id === 6 ? [pointsChallenge] : [chemChallenge] } }),
       loadChallenge: (ch) => { if (ch && ch.squad && 'loaded' in ch.squad) ch.squad.loaded = true; return obs({ success: true }); },
       saveChallenge: () => obs({ success: true }),
       submitChallenge(ch) {

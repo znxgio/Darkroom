@@ -164,6 +164,22 @@ const idle = (p, ms = 150000) => p.waitForFunction(() => !document.querySelector
   const hat = await p.evaluate(() => ({ sub: T.submitted[T.submitted.length - 1], idx: T.hatIdx, n: T.submitted.length }));
   check('3-player SBC submitted with 3 in the open slots', hat.n >= hatBefore + 1 && hat.sub.length === 3 && JSON.stringify(hat.idx) === '[5,6,7]', JSON.stringify(hat));
 
+  // ---- 💎 points SBC: tagged, not solvable, Estimate forecasts the cost
+  await p.click('#fcs [data-a=sbc-set][data-i="5"]');
+  await p.waitForSelector('#fcs [data-a=sbc-points][data-i="5"]');
+  await idle(p);
+  const ptsRow = await p.textContent('#fcs [data-r=sbc]');
+  check('points SBC tagged 💎 and shows OVR min, no Solve', /Brian Brobbey\s*💎 points/.test(ptsRow) && /OVR min 45/.test(ptsRow) && !(await p.$('#fcs [data-a=sbc-solve][data-i="5"]')), ptsRow.replace(/\s+/g, ' ').slice(-160));
+  const subPts = await p.evaluate(() => T.submitted.length);
+  await p.click('#fcs [data-a=sbc-points][data-i="5"]');
+  await idle(p, 200000);
+  const est = await p.textContent('#fcs [data-r=plan]');
+  check('points estimate: needed, from your cards, coins for the rest', /28,800\s*💎\s*needed/.test(est) && /From your cards/.test(est) && /The rest ≈ [\d,]+ coins/.test(est) && /coins per 💎/.test(est), est.replace(/\s+/g, ' ').slice(0, 600));
+  check('points rows have no empty "needs"', !/needs\s*(Estimate|$)/.test(ptsRow));
+  check('points estimate never hands anything in', (await p.evaluate(() => T.submitted.length)) === subPts);
+  await p.screenshot({ path: `${S}/t-points.png` });
+  await p.click('#fcs [data-a=sbc-points-close]');
+
   check('active squad protected (starters)', !sub.flat().some((x) => x.def >= 100 && x.def <= 110));
   check('subs and reserves protected', !sub.flat().some((x) => x.def === 650 || x.def === 651));
   check('special cards not used', !sub.flat().some((x) => x.def >= 660 && x.def < 670));

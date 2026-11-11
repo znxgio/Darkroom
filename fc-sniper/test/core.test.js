@@ -763,3 +763,22 @@ test('FC 27 Evolutions-style rule: key 40 + attribute 1 = OVR min', () => {
   assert.equal(r.constraints.minOvr, 45);
   assert.deepEqual(c.parseRequirements([{ key: 'ACADEMY_PLAYER_SLOTTING', values: [80] }, { key: 'PLAYER_ATTRIBUTE', values: [7] }]).unsupported, ['attribute 7 minimum']);
 });
+
+test('planPoints: spare cards first by value per point, then cheapest coins per point', () => {
+  const club = [
+    { id: 1, points: 280, cost: 1100 }, // 81: ~3.9 per point
+    { id: 2, points: 20, cost: 200 }, // bronze: 10 per point
+    { id: 3, points: 5500, cost: 30000 }, // 87: 5.5 per point
+    { id: 4, points: 280, cost: 300, baseId: 1 }, // storage duplicate of #1 — only one copy counts
+  ];
+  const market = [{ id: 'm1', points: 900, price: 1500 }, { id: 'm2', points: 280, price: 1000 }, { id: 'm3', points: 900, price: 1600 }];
+  const r = c.planPoints(1000, club, market);
+  assert.equal(r.fromClub[0].id, 4, 'cheapest per point first');
+  assert.ok(!r.fromClub.some((p) => p.id === 1), 'one copy per player');
+  assert.ok(r.clubPoints + r.buyPoints >= 1000 && r.short === 0);
+  const big = c.planPoints(30000, [], market);
+  assert.equal(big.buys[0].id, 'm1', 'best coins per point first');
+  assert.ok(big.short > 0, 'reports what is still missing');
+  assert.equal(c.planPoints(0, club, market).cards, 0);
+  assert.equal(c.planPoints(30000, Array.from({ length: 45 }, (_, i) => ({ id: i, points: 280, cost: 1000 })), []).handIns, 3);
+});
