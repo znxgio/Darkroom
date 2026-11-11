@@ -212,7 +212,10 @@ const idle = (p, ms = 150000) => p.waitForFunction(() => !document.querySelector
   check('team rating + chemistry shown', /Rating/.test(team) && /\/33/.test(team), team.trim().slice(0, 60));
   const firstSlot = await p.textContent('#fcs [data-r=upg] .card');
   check('weakest slot is the 75 striker', /ST — now Weak Striker 75/.test(firstSlot), firstSlot.slice(0, 60));
-  const order = await p.$$eval('#fcs [data-r=upg] .card:first-child .li b', (els) => els.map((e) => e.textContent));
+  const allOrder = await p.$$eval('#fcs [data-r=upg] .card:first-child .li b', (els) => els.map((e) => e.textContent));
+  const firstText = await p.textContent('#fcs [data-r=upg] .card:first-child');
+  check('SBC player suggested with a rough cost', allOrder.some((o) => /^SBC Striker 88/.test(o)) && /SBC “Striker Hero” · ≈ [\d,]+ coins/.test(firstText), allOrder.join(' | '));
+  const order = allOrder.filter((o) => !/^SBC /.test(o));
   check('owned upgrades rank above buying one', /^(Bench|Pacey)/.test(order[0]), order.join(' | '));
   check('best market suggestion keeps chemistry', order.find((o) => !/^(Bench|Pacey)/.test(o)).startsWith('Same League ST 86'), order.join(' | '));
   check('owned strikers suggested', order.filter((o) => /^(Bench|Pacey)/.test(o)).length >= 2, order.join(' | '));

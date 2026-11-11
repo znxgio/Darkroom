@@ -106,7 +106,7 @@ function installHotMock() {
         } else if (c.maskedDefId) {
           H.checks.push(c.maskedDefId);
           const base = c.maskedDefId === 300 ? 10000 : 10000;
-          for (let i = 0; i < 20; i++) items.push(card(c.maskedDefId, c.maskedDefId === 300 ? 'Hot Card' : 'Cold Card', base + i * 100));
+          for (let i = 0; i < (c.maskedDefId === 302 ? 2 : 20); i++) items.push(card(c.maskedDefId, ({ 300: 'Hot Card', 302: 'Thin Card' })[c.maskedDefId] || 'Cold Card', base + i * 100, 0, `p${c.maskedDefId}-${i}`));
           if (c.minBid !== undefined && c.maskedDefId === 300) items.push(card(300, 'Hot Card', 8500)); // a snipe while trading
         }
         return obs({ success: true, data: { items: items.filter((x) => (!c.maxBuy || x._auction.buyNowPrice <= c.maxBuy) && (!c.minBuy || x._auction.buyNowPrice >= c.minBuy)) } });

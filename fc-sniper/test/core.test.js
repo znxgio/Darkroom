@@ -797,3 +797,61 @@ test('filterSummary and sniperTargets', () => {
   const cfg = { players: [{ id: 1 }], filters: [{ id: 'f1', on: true }, { id: 'f2', on: false }] };
   assert.deepEqual(c.sniperTargets(cfg).map((t) => t.id), [1, 'f1']);
 });
+
+// ---- hot-card sourcing -------------------------------------------------------------
+
+test('priceBands: narrow, descending, valid prices, cover down to ~8%', () => {
+  const b = c.priceBands(50000);
+  assert.equal(b.length, 5);
+  assert.equal(b[0][1], 50000);
+  b.forEach(([lo, hi], i) => {
+    assert.ok(lo < hi && c.roundPrice(lo) === lo && c.roundPrice(hi) === hi);
+    assert.ok(hi / lo < 1.8, 'narrow');
+    if (i) assert.ok(hi < b[i - 1][0], 'no overlap');
+  });
+  assert.ok(b[b.length - 1][0] <= 5000);
+  assert.deepEqual(c.priceBands(800), []);
+});
+
+test('provenFlips: profitable sales from the last 14 days, best first', () => {
+  const now = Date.now();
+  const h = [
+    { id: 1, name: 'A', price: 10000, soldFor: 12000, at: now - 7200e3, soldAt: now - 3600e3 },
+    { id: 1, name: 'A', price: 10000, soldFor: 11500, at: now - 9000e3, soldAt: now - 5000e3 },
+    { id: 2, name: 'B', price: 10000, soldFor: 10000, at: now - 3600e3, soldAt: now }, // loss after tax
+    { id: 3, name: 'C', price: 5000, soldFor: 9000, at: now - 30 * 864e5, soldAt: now - 29 * 864e5 }, // too old
+    { id: 4, name: 'D', price: 5000 }, // not sold
+  ];
+  const p = c.provenFlips(h, now);
+  assert.deepEqual(p.map((x) => x.id), [1]);
+  assert.equal(p[0].flips, 2);
+  assert.equal(p[0].profit, 11400 - 10000 + 10925 - 10000);
+  assert.equal(p[0].avgHours, 1.1);
+});
+
+test('flipValue: liquidity, demand and proven history count', () => {
+  const plan = { profit: 1000 };
+  assert.equal(c.flipValue({ plan: null }), 0);
+  assert.ok(c.flipValue({ plan, listed: 10 }) > c.flipValue({ plan, listed: 2 }));
+  assert.ok(c.flipValue({ plan, listed: 10, bids: 5, count: 10 }) > c.flipValue({ plan, listed: 10 }));
+  assert.ok(c.flipValue({ plan, listed: 10, proven: {} }) > c.flipValue({ plan, listed: 10 }));
+});
+
+// ---- SBC players in the upgrade advisor ---------------------------------------------
+
+test('priceLadder: cheapest per rating, never more than a higher rating', () => {
+  const m = c.priceLadder([{ rating: 84, price: 2000 }, { rating: 84, price: 1500 }, { rating: 83, price: 1800 }, { rating: 85, price: 1200 }, { rating: 0, price: 5 }]);
+  assert.deepEqual(m, { 83: 1200, 84: 1200, 85: 1200 });
+});
+
+test('sbcCostEstimate: cheapest cards per rating for each challenge', () => {
+  const ladder = { 82: 600, 83: 800, 84: 1200, 85: 3000, 86: 6000, 87: 12000 };
+  const k = (teamRating) => ({ ...c.parseRequirements([{ key: 'TEAM_RATING', scope: 'GREATER', values: [teamRating], count: -1 }]).constraints });
+  const e = c.sbcCostEstimate([k(84), k(85)], ladder);
+  assert.equal(e.solved, 2);
+  assert.ok(e.cost >= 11 * 1200 && e.cost <= 11 * 1200 + 11 * 3000, String(e.cost));
+  const one = c.sbcCostEstimate([k(84)], ladder).cost;
+  assert.ok(one <= 11 * 1200, 'mixing ratings is never dearer than all 84s');
+  assert.equal(c.sbcCostEstimate([k(95)], ladder).unknown, 1);
+  assert.equal(c.sbcCostEstimate([k(84)], {}).unknown, 1);
+});

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FC Sniper
 // @namespace    https://github.com/znxgio/darkroom
-// @version      2.0.0
+// @version      2.1.0
 // @description  Sniper, pack opener, SBC solver and team upgrade advisor for the EA SPORTS FC Ultimate Team Web App, with built-in safety limits.
 // @match        https://www.ea.com/*ultimate-team/web-app*
 // @match        https://www.ea.com/ea-sports-fc/ultimate-team/web-app*
@@ -258,6 +258,86 @@
 
   function rankHot(cards, opts = {}) {
     return cards.map((c) => ({ ...c, score: hotScore(c, opts) })).filter((c) => c.score > 0).sort((a, b) => b.score - a.score);
+  }
+
+  /**
+   * Narrow price bands for a market sweep, from the budget down to ~8% of it.
+   * Narrow bands make copies of the same card show up together (EA returns
+   * only ~20 listings a page, so a wide band shows 20 different cards once).
+   */
+  function priceBands(budget, n = 5, floorPct = 0.08) {
+    const top = roundPrice(budget, 'down');
+    if (top < 1000) return [];
+    const ratio = Math.pow(1 / floorPct, 1 / n);
+    const out = [];
+    let hi = top;
+    for (let i = 0; i < n; i++) {
+      const lo = roundPrice(hi / ratio, 'down');
+      if (lo < 400 || lo >= hi) break;
+      out.push([lo, hi]);
+      hi = prevPrice(lo);
+    }
+    return out;
+  }
+
+  /**
+   * Cards you've already flipped for a profit (from your buy history, last
+   * `days` days): the most reliable source of trades. Best total profit first.
+   */
+  function provenFlips(history, now, days = 14) {
+    const m = new Map();
+    for (const e of history || []) {
+      if (!e || !e.soldFor || !e.id || now - (e.soldAt || e.at || 0) > days * 864e5) continue;
+      const pr = afterTax(e.soldFor) - e.price;
+      const c = m.get(e.id) || { id: e.id, name: e.name, rating: e.rating, flips: 0, wins: 0, profit: 0, hours: 0, timed: 0 };
+      c.flips++; c.profit += pr; if (pr > 0) c.wins++;
+      if (e.soldAt && e.at) { c.hours += (e.soldAt - e.at) / 36e5; c.timed++; }
+      m.set(e.id, c);
+    }
+    return [...m.values()].filter((c) => c.wins > 0 && c.profit > 0)
+      .map((c) => ({ id: c.id, name: c.name, rating: c.rating, flips: c.flips, wins: c.wins, profit: c.profit, avgHours: c.timed ? Math.round(c.hours / c.timed * 10) / 10 : null }))
+      .sort((a, b) => b.profit - a.profit);
+  }
+
+  /**
+   * Final ranking of price-checked cards: profit per flip, weighted by how
+   * liquid the card is (copies listed) and how much demand it showed (live bids),
+   * with a bonus for cards you've flipped before. c: { plan, listed, bids, count, proven }.
+   */
+  function flipValue(c) {
+    if (!c.plan) return 0;
+    const liquid = Math.min(1, (c.listed || 0) / 8);
+    const demand = c.count ? Math.min(1, (c.bids || 0) / c.count) : 0;
+    return Math.round(c.plan.profit * (0.3 + 0.7 * liquid) * (1 + demand) * (c.proven ? 1.5 : 1));
+  }
+
+  /**
+   * Cheapest price seen per rating, made consistent: a rating never costs more
+   * than a higher one. listings: [{ rating, price }] → { [rating]: price }.
+   */
+  function priceLadder(listings) {
+    const m = {};
+    for (const l of listings || []) if (l && l.rating && l.price > 0 && (!m[l.rating] || l.price < m[l.rating])) m[l.rating] = l.price;
+    const rs = Object.keys(m).map(Number).sort((a, b) => b - a);
+    let min = Infinity;
+    for (const r of rs) { min = Math.min(min, m[r]); m[r] = min; }
+    return m;
+  }
+
+  /**
+   * Rough coin cost of an SBC bought from the market: each challenge solved
+   * with cheapest-per-rating cards. challenges: parsed constraints.
+   * Returns { cost, solved, unknown }.
+   */
+  function sbcCostEstimate(challenges, ladder) {
+    const pool = [];
+    for (const [r, price] of Object.entries(ladder || {})) for (let i = 0; i < 11; i++) pool.push({ id: `${r}-${i}`, rating: Number(r), rare: true, cost: price });
+    let cost = 0; let solved = 0; let unknown = 0;
+    for (const k of challenges || []) {
+      const sol = pool.length ? solveSbc(pool, { minOvr: 0, maxOvr: 99, minQuality: 0, maxQuality: 9, rareMin: 0, teamRating: 0, ...k }) : null;
+      if (sol) { cost += sol.cost; solved++; } else unknown++;
+    }
+    return { cost, solved, unknown };
   }
 
   /** Trade settings for a card: Min profit, or Min profit % of the price, whichever is higher. */
@@ -1268,6 +1348,7 @@
     // trading (resell)
     undercut: 3, // list this % under the market average so it sells
     minProfitPct: 3, // and make at least this % of the sell price (as well as Min profit)
+    hotSearches: 14, // market searches per hot-card scan (plus price checks)
     hotLeagues: '13,53,19,31,16', // leagues to scan for hot cards (Premier League, LaLiga, Bundesliga, Serie A, Ligue 1)
     hotPick: 3, // how many hot cards to trade
     hotRareOnly: true,
@@ -1313,6 +1394,7 @@
     // upgrades
     upgradeBudget: 0, // 0 = your coins minus Keep coins
     upgradeMarket: true, // also search the market (uses searches)
+    upgradeSbc: true, // also suggest players you can get from SBCs (with a rough coin cost)
     lineupBy: 'meta', // formation coach: 'meta' (position-weighted stats) or 'rating'
   };
 
@@ -1323,7 +1405,7 @@
     normalizeName, parsePlayerDb, searchPlayers, playerForIteration, migrateConfig, filterSummary, sniperTargets, LEAGUES,
     findMarketPrice, planMaxBuy, effectiveMaxBuy, flipPlan, tradeOpts, bidAmount, settleSales,
     listSpendable, reserveOk, afterListBuy,
-    aggregateListings, hotScore, rankHot,
+    aggregateListings, hotScore, rankHot, priceBands, provenFlips, flipValue, priceLadder, sbcCostEstimate,
     addHistory, summarizeHistory, isDiscordWebhook, discordPayload,
     squadRating, squadChemistry, topValues, rankUpgrades,
     POS_NAMES, normPos, baseId, FORMATIONS, squadRatingExact, lineupScore, bestLineup, metaScore, readStats,
@@ -1342,7 +1424,7 @@
 
   const w = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '2.0.0';
+  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '2.1.0';
   const errText = (e) => (e && e.message ? e.message : String(e));
   const fmt = (n) => Number(n || 0).toLocaleString();
 
@@ -1427,9 +1509,9 @@
       }
       return c;
     },
-    async search(criteria) {
+    async search(criteria, page = 1) {
       if (typeof w.services.Item.clearTransferMarketCache === 'function') w.services.Item.clearTransferMarketCache();
-      const res = await observe(w.services.Item.searchTransferMarket(criteria, 1));
+      const res = await observe(w.services.Item.searchTransferMarket(criteria, page));
       if (!res.success) return { ok: false, status: res.status, listings: [] };
       return { ok: true, listings: ((res.data && res.data.items) || []).map(fut.listing) };
     },
@@ -1631,6 +1713,17 @@
     async activeSquad() {
       const res = await observe(w.services.Squad.requestSquadById(w.services.Squad.getActiveSquadId()));
       return res.success ? res.data && res.data.squad : null;
+    },
+    /** Player cards an SBC set gives as its reward (empty for pack/coin rewards). */
+    sbcRewardPlayers(set) {
+      let raw = [];
+      try { raw = [].concat(set.awards || [], typeof set.getAwards === 'function' ? (set.getAwards() || []) : []); } catch { /* ignore */ }
+      const seen = new Set();
+      return raw.map((a) => a && (a.item || a)).filter((it) => {
+        if (!it || !it.definitionId || seen.has(it.definitionId)) return false;
+        seen.add(it.definitionId);
+        return typeof it.isPlayer === 'function' ? it.isPlayer() : (it.type === 'player' || !!it.rating);
+      });
     },
     async sbcSets() {
       const res = await observe(w.services.SBC.requestSets());
@@ -2226,6 +2319,13 @@
           const targets = pickTargets(res.listings, { ...cfg, ...range, maxBuy }, cfg.mode === 'alert' ? Infinity : spendable);
           for (const t of targets) {
             if (!this.running) break;
+            if (cfg.mode !== 'alert') {
+              // Several buys from one search: re-check the limits before each one.
+              if (this.stats.buys - startBuys >= cfg.maxBuys) break;
+              if (listMode && cfg.buyOnce && player && player.kind !== 'filter' && !cfg.players.some((p) => p.id === player.id)) break;
+              const left = listMode ? listSpendable(cfg, fut.coins()) : fut.coins() - cfg.minCoins;
+              if (t.buyNowPrice > left) continue;
+            }
             if (cfg.mode === 'alert') {
               if (alerted.has(t.tradeId)) continue;
               alerted.add(t.tradeId);
@@ -2425,13 +2525,14 @@
         this.countUsage('searches');
         if (!res.ok) { const k = classifyStatus(res.status); if (k === 'captcha' || k === 'throttled') { this.halt(k, `blocked while repricing (${res.status})`); return repriced; } continue; }
         const lowest = res.listings.filter((l) => l.defId === it.definitionId && l.buyNowPrice).map((l) => l.buyNowPrice).sort((a, b) => a - b)[0];
-        entry.relists = (entry.relists || 0) + 1;
-        const cut = cfg.cutLossAfter > 0 && entry.relists > cfg.cutLossAfter;
+        const tries = (entry.relists || 0) + 1;
+        const cut = cfg.cutLossAfter > 0 && tries > cfg.cutLossAfter;
         const floor = breakEvenSell(entry.price, cut ? 0 : cfg.minProfit || 0);
         const price = Math.max(floor, lowest ? prevPrice(lowest) : (entry.sell || floor));
         const r = await fut.relistItem(it, price, cfg.listDuration);
         if (r.ok) {
           repriced++;
+          entry.relists = tries;
           entry.sell = price;
           ui.log(`Relisted ${entry.name} at ${fmt(price)}${lowest ? ` (cheapest ${fmt(lowest)})` : ''}${cut ? ' — break-even' : ''}`, 'muted');
         }
@@ -3353,17 +3454,77 @@
         const { club, ownedBase } = await this.ownedCards(slots);
 
         const budget = engine.cfg.upgradeBudget || Math.max(0, fut.coins() - engine.cfg.minCoins);
+        const sbcPlayers = engine.cfg.upgradeSbc ? await this.sbcPlayers(ownedBase) : [];
         for (const res of this.results) {
           let candidates = club.slice();
           if (engine.cfg.upgradeMarket && budget >= 1000) {
             candidates = candidates.concat((await this.market(res, budget)).filter((o) => !ownedBase.has(baseId(o.id))));
           }
-          res.options = rankUpgrades(slots, res.slotIndex, candidates, { budget, by }).filter((o) => o.source === 'club' || o.price <= budget).slice(0, 4);
+          // SBC players: cost them only if they'd be an upgrade here (costing loads the SBC).
+          const sbcHere = rankUpgrades(slots, res.slotIndex, sbcPlayers.map((o) => ({ ...o, price: 0 })), { budget, by }).slice(0, 2);
+          for (const o of sbcHere) await this.costSbc(o);
+          candidates = candidates.concat(sbcHere.map((o) => sbcPlayers.find((x) => x.id === o.id)).filter((o) => o && o.cost));
+          res.options = rankUpgrades(slots, res.slotIndex, candidates.map((o) => (o.source === 'sbc' ? { ...o, price: o.cost.cost } : o)), { budget, by })
+            .filter((o) => o.source === 'club' || o.price <= budget).slice(0, 4);
           res.done = true;
           ui.renderUpgrades();
         }
         ui.log(`Team: rating ${this.summary.rating}, chemistry ${this.summary.chem}/33 — suggestions for your ${this.results.length} weakest spots`, 'ok');
       });
+    },
+
+    /** Players you can get from SBCs right now (ones you don't own). Cached for 30 min. */
+    async sbcPlayers(ownedBase) {
+      if (!this.sbcCache || Date.now() - this.sbcCache.at > 30 * 60e3) {
+        engine.setStatus('pricing', 'Checking player SBCs…');
+        const r = await fut.sbcSets();
+        if (!r.ok) { ui.log(`Couldn’t load SBCs (${r.status}) — skipping SBC players`, 'warn'); return []; }
+        const list = [];
+        for (const set of r.sets) {
+          if (typeof set.isComplete === 'function' && set.isComplete()) continue;
+          for (const it of fut.sbcRewardPlayers(set)) list.push({ ...fut.toPlayer(it), source: 'sbc', set, setName: set.name });
+        }
+        if (!list.length && r.sets[0]) debugLog.push(`no player SBCs found; first set keys: ${Object.keys(r.sets[0]).join(',')}`);
+        this.sbcCache = { at: Date.now(), list };
+        ui.log(`Player SBCs: ${list.length ? list.map((p) => `${p.name} ${p.rating}`).join(', ') : 'none right now'}`, 'muted');
+      }
+      return this.sbcCache.list.filter((p) => p.player && !ownedBase.has(baseId(p.id)));
+    },
+
+    /** Rough coin cost of an SBC player: each challenge filled with the cheapest cards per rating. */
+    async costSbc(o) {
+      const p = this.sbcCache.list.find((x) => x.id === o.id);
+      if (!p || p.cost) return;
+      engine.setStatus('pricing', `Costing ${p.setName}…`);
+      const r = await fut.challenges(p.set);
+      jobs.check(r, 'loading SBC');
+      const ks = r.list.filter((ch) => !(typeof ch.isCompleted === 'function' && ch.isCompleted()))
+        .map((ch) => parseRequirements(fut.requirements(ch), fut.requiredPlayers(ch)).constraints);
+      const ladder = await this.ladder();
+      p.cost = { ...sbcCostEstimate(ks, ladder), challenges: ks.length };
+      ui.log(`🧩 ${p.setName}: ${ks.length} challenge${ks.length === 1 ? '' : 's'} · ≈ ${fmt(p.cost.cost)} coins from the market${p.cost.unknown ? ` (${p.cost.unknown} not estimated)` : ''} — less with your own fodder`, 'muted');
+      await jobs.pause(engine.cfg.delayMin, engine.cfg.delayMax);
+    },
+
+    /** Cheapest market price per rating (gold), for SBC cost estimates. Cached for 30 min. */
+    async ladder() {
+      if (this.ladderCache && Date.now() - this.ladderCache.at < 30 * 60e3) return this.ladderCache.m;
+      const seen = [];
+      const bands = [[0, 1000], [900, 2500], [2000, 6000], [5000, 15000], [12000, 45000]];
+      for (const [i, [lo, hi]] of bands.entries()) {
+        engine.setStatus('pricing', `Checking fodder prices… ${i + 1}/${bands.length}`);
+        const c = fut.newCriteria();
+        c.level = 'gold';
+        if (lo >= 200) c.minBuy = lo;
+        c.maxBuy = hi;
+        const r = await fut.search(c);
+        engine.countUsage('searches');
+        jobs.check(r, 'fodder prices');
+        for (const l of r.listings) if (l.buyNowPrice) seen.push({ rating: l.rating, price: l.buyNowPrice });
+        await jobs.pause(engine.cfg.delayMin, engine.cfg.delayMax);
+      }
+      this.ladderCache = { at: Date.now(), m: priceLadder(seen) };
+      return this.ladderCache.m;
     },
 
     /**
@@ -3606,52 +3767,92 @@
       return cfg.tradeBudget || Math.max(0, fut.coins() - cfg.minCoins);
     },
 
-    /** Scan the live market, score cards, price-check the best and keep profitable ones. */
+    /**
+     * Find cards worth flipping. Sources: cards you've flipped for profit before
+     * (your history), then a market sweep in narrow price bands per league (so
+     * copies of the same card show up together). The best candidates are
+     * price-checked and ranked by profit × liquidity × demand.
+     */
     async scan(autoAdd) {
       let added = false;
       await jobs.run('Finding hot cards', async () => {
         const cfg = engine.cfg;
         const budget = this.budget();
         if (budget < 1000) { ui.log('Not enough coins to trade', 'warn'); return; }
+        const cands = new Map(); // id -> candidate
+        const put = (c, src) => {
+          const cur = cands.get(c.id);
+          if (cur) { cur.src.add(src); Object.assign(cur, { proven: cur.proven || c.proven }); return; }
+          cands.set(c.id, { score: 0, count: 0, bids: 0, ...c, src: new Set([src]) });
+        };
+        // 1) proven flips
+        const proven = provenFlips(engine.history, Date.now()).slice(0, 4);
+        proven.forEach((c) => put({ id: c.id, name: c.name, rating: c.rating, proven: c }, 'proven'));
+        // 2) market sweep: league × narrow price band, page 1 (+ page 2 when full)
         const leagues = String(cfg.hotLeagues || '').split(',').map((x) => parseInt(x, 10)).filter(Boolean);
-        const bands = [0.4, 0.12, 0.03].map((f) => roundPrice(budget * f));
-        const segments = (leagues.length ? leagues : [0]).flatMap((league, i) => [{ league, min: bands[i % bands.length] }, { league, min: bands[(i + 1) % bands.length] }]).slice(0, 10);
+        const bands = priceBands(budget, 5);
+        const ls = leagues.length ? leagues : [0];
+        const maxSearches = Math.max(4, Math.min(30, cfg.hotSearches || 14));
+        // every band and every league, each combination once
+        const plan = [];
+        for (let i = 0; i < Math.min(maxSearches, bands.length * ls.length); i++) {
+          plan.push({ band: bands[i % bands.length], league: ls[(i + Math.floor(i / bands.length)) % ls.length] });
+        }
         const all = [];
-        for (const [n, seg] of segments.entries()) {
-          engine.setStatus('pricing', `Scanning the market… ${n + 1}/${segments.length}`);
+        let searches = 0;
+        for (const sg of plan) {
+          if (jobs.cancelled) break;
+          engine.setStatus('pricing', `Scanning the market… ${searches + 1}/${plan.length}`);
           const c = fut.newCriteria();
-          if (seg.league) c.league = seg.league;
+          if (sg.league) c.league = sg.league;
           c.level = 'gold';
           if (cfg.hotRareOnly) c.rarities = [1];
-          c.maxBuy = roundPrice(budget);
-          if (seg.min >= 200) c.minBuy = seg.min;
+          c.minBuy = sg.band[0];
+          c.maxBuy = sg.band[1];
           const r = await fut.search(c);
+          searches++;
           engine.countUsage('searches');
           jobs.check(r, 'market scan');
           all.push(...r.listings);
           await jobs.pause(cfg.delayMin, cfg.delayMax);
         }
-        const ranked = rankHot(aggregateListings(all), { budget, minListings: 3 });
-        ui.log(`Scanned ${all.length} listings · ${ranked.length} cards with activity`, 'muted');
+        const agg = aggregateListings(all);
+        const ranked = rankHot(agg, { budget, minListings: 2 });
+        ranked.forEach((c) => put(c, 'market'));
+        // When nothing repeats, the most-bid-on singles are still worth a look.
+        if (!ranked.length) agg.filter((c) => c.bids > 0 && c.minBin <= budget).sort((a, b) => b.bids - a.bids).slice(0, 4).forEach((c) => put({ ...c, score: c.bids }, 'bids'));
+        const repeats = agg.filter((c) => c.count >= 2).length;
+        ui.log(`Scanned ${all.length} listings in ${searches} searches · ${agg.length} different cards, ${repeats} listed more than once · ${proven.length} proven flip${proven.length === 1 ? '' : 's'} from your history`, 'muted');
+        if (!cands.size) {
+          ui.log('No candidates — the market looked empty in your price range. Check the leagues to scan or raise the budget.', 'warn');
+          return;
+        }
+        // 3) price-check the best candidates
+        const queue = [...cands.values()].sort((a, b) => (!!b.proven - !!a.proven) || b.score - a.score).slice(0, Math.min(6, Math.max(4, (cfg.hotPick || 3) + 2)));
         const out = [];
-        for (const card of ranked.slice(0, Math.max(3, (cfg.hotPick || 3) + 2))) {
+        const why = [];
+        for (const card of queue) {
           if (jobs.cancelled) break;
           engine.setStatus('pricing', `Pricing ${card.name}…`);
           const r = await findMarketPrice(engine.priceSearch(card), { defId: card.id });
           jobs.check(r, 'price check');
-          if (r.count) {
-            const plan = flipPlan(r.avg, tradeOpts(r.avg, cfg));
-            out.push({ ...card, avg: r.avg, lowest: r.lowest, listed: r.count, plan });
-          }
+          if (!r.count) { why.push(`${card.name}: none listed now`); continue; }
+          const p = flipPlan(r.avg, tradeOpts(r.avg, cfg));
+          const c = { ...card, src: [...card.src], avg: r.avg, lowest: r.lowest, listed: r.count, plan: p };
+          if (r.count < 3) { why.push(`${card.name}: only ${r.count} listed — too thin to flip`); await jobs.pause(cfg.delayMin, cfg.delayMax); continue; }
+          else if (!p) why.push(`${card.name}: avg ${fmt(r.avg)} — no profit at your min profit`);
+          else if (r.avg > budget) { why.push(`${card.name}: avg ${fmt(r.avg)} over your budget`); c.plan = null; }
+          c.value = flipValue(c);
+          out.push(c);
           await jobs.pause(cfg.delayMin, cfg.delayMax);
         }
-        // Best first: has a profitable plan, then hotness × profit.
-        out.sort((a, b) => (!!b.plan - !!a.plan) || (b.score * (b.plan ? b.plan.profit : 0)) - (a.score * (a.plan ? a.plan.profit : 0)));
+        out.sort((a, b) => b.value - a.value);
         this.list = out;
         this.scannedAt = Date.now();
         ui.renderHot();
         const good = out.filter((x) => x.plan);
-        ui.log(good.length ? `🔥 Hot: ${good.slice(0, 3).map((x) => `${x.name} ${x.rating} (+${fmt(x.plan.profit)})`).join(', ')}` : 'No hot card has a profitable flip right now — try a bigger budget or lower min profit', good.length ? 'ok' : 'warn');
+        if (why.length) ui.log(`Skipped: ${why.join(' · ')}`, 'muted');
+        ui.log(good.length ? `🔥 Hot: ${good.slice(0, 3).map((x) => `${x.name} ${x.rating || ''} (+${fmt(x.plan.profit)})`).join(', ')}` : 'No card has a profitable flip right now — try a bigger budget, other leagues or a lower min profit', good.length ? 'ok' : 'warn');
         if (autoAdd && good.length) { this.addTop(); added = true; }
       });
       return added;
@@ -3727,11 +3928,13 @@
       ['hotPick', 'How many hot cards to trade', 'number'],
       ['hotRareOnly', 'Rare golds only', 'toggle'],
       ['hotLeagues', 'Leagues to scan (IDs)', 'text', '13,53,19,31,16'],
+      ['hotSearches', 'Searches per scan', 'number'],
     ],
     squad: [
       ['lineupBy', 'Best XI by', 'seg', OPT([['meta', 'Meta (stats)'], ['rating', 'Rating']])],
       ['upgradeBudget', 'Budget (0 = my coins)', 'number'],
       ['upgradeMarket', 'Also search the market', 'toggle'],
+      ['upgradeSbc', 'Include SBC players', 'toggle'],
     ],
     packs: [
       ['packSort', 'Sort items after each pack', 'toggle'],
@@ -4623,7 +4826,7 @@
       const mine = new Set(engine.cfg.players.map((p) => p.id));
       const ago = Math.round((Date.now() - hot.scannedAt) / 60e3);
       box.innerHTML = `<div class="list">${hot.list.map((c, i) => `<div class="li">
-          <span class="t"><b>${esc(c.name)} ${c.rating || ''}${c.bids ? ` <span class="tag ok">${c.bids} bid${c.bids === 1 ? '' : 's'}</span>` : ''}</b>
+          <span class="t"><b>${esc(c.name)} ${c.rating || ''}${c.proven ? ` <span class="tag ok">flipped ${c.proven.wins}×</span>` : ''}${c.bids ? ` <span class="tag ok">${c.bids} bid${c.bids === 1 ? '' : 's'}</span>` : ''}</b>
           <small>${c.listed} listed · avg ${fmt(c.avg)}${c.plan ? ` · buy ≤ ${fmt(c.plan.maxBuy)} → sell ${fmt(c.plan.sell)} <span class="up">+${fmt(c.plan.profit)}</span>` : ' · <span class="down">no profit at your settings</span>'}</small></span>
           ${c.plan ? (mine.has(c.id) ? '<span class="tag ok">added</span>' : `<button class="mini" data-a="hot-add" data-i="${i}">Add</button>`) : ''}</div>`).join('')}</div>
         ${hot.list.some((c) => c.plan) ? `<button class="btn go-btn" data-a="hot-top">Trade the top ${Math.min(engine.cfg.hotPick || 3, hot.list.filter((c) => c.plan).length)}</button>` : ''}
@@ -4729,10 +4932,10 @@
       this.q('[data-r=upg]').innerHTML = upgrades.results.map((r, si) => `
         <div class="card"><h4>${esc(r.position)} — now ${r.current ? `${esc(r.current.name)} ${r.current.rating}` : 'empty'}</h4>
         ${r.options.length ? `<div class="list">${r.options.map((o, oi) => `<div class="li">
-          <span class="t"><b>${esc(o.name)} ${o.rating}</b><small>${o.source === 'club' ? 'You own him' : `${fmt(o.price)} coins`} ·
+          <span class="t"><b>${esc(o.name)} ${o.rating}</b><small>${o.source === 'club' ? 'You own him' : o.source === 'sbc' ? `SBC “${esc(o.setName)}” · ≈ ${fmt(o.price)} coins` : `${fmt(o.price)} coins`} ·
             team <span class="${o.ratingGain > 0 ? 'up' : ''}">${o.ratingGain > 0 ? '+' : ''}${o.ratingGain}</span> ·
             chem <span class="${o.chemGain > 0 ? 'up' : o.chemGain < 0 ? 'down' : ''}">${o.chemGain > 0 ? '+' : ''}${o.chemGain}</span></small></span>
-          ${o.source === 'club' ? '<span class="tag ok">owned</span>' : `<button class="mini go2" data-a="snipe-opt" data-s="${si}" data-o="${oi}">Snipe</button>`}</div>`).join('')}</div>`
+          ${o.source === 'club' ? '<span class="tag ok">owned</span>' : o.source === 'sbc' ? '<span class="tag">SBC</span>' : `<button class="mini go2" data-a="snipe-opt" data-s="${si}" data-o="${oi}">Snipe</button>`}</div>`).join('')}</div>`
           : `<p class="empty">${r.done ? 'No better option found within budget' : 'Looking…'}</p>`}</div>`).join('');
     },
 

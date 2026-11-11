@@ -84,7 +84,12 @@ function installMock() {
     { id: 3, name: 'Elite 87', description: 'Needs buys', isComplete: () => false },
     { id: 4, name: 'Break Away', description: 'Bronze', isComplete: () => false },
     { id: 5, name: 'Hat-trick', description: '3 players', isComplete: () => false },
-    { id: 6, name: 'Brian Brobbey', description: 'Points', isComplete: () => false, scoreRequirement: 30000, totalSubmittedScore: 0 }];
+    { id: 6, name: 'Brian Brobbey', description: 'Points', isComplete: () => false, scoreRequirement: 30000, totalSubmittedScore: 0 },
+    // a player SBC: rewards a striker who'd be an upgrade
+    { id: 7, name: 'Striker Hero', description: 'Player', isComplete: () => false,
+      awards: [{ item: mk(9400, 88, { pos: 25, league: 13, nation: 10, name: 'SBC Striker 88', attrs: [92, 88, 80, 88, 40, 80], sm: 4, wf: 4 }) }] }];
+  const heroChallenge = { id: 83, name: 'Hero Squad', squad: sbcSquad, isCompleted: () => false,
+    eligibilityRequirements: [{ scope: 0, count: -1, kvPairs: { _collection: { 19: [84] } } }] };
   // FC 27 points SBC: "OVR Min 45" (Evolutions-style rule) and a 30,000 💎 goal
   const pointsChallenge = { id: 82, name: 'Brian Brobbey', squad: sbcSquad, isCompleted: () => false, scoreRequirement: 30000, submittedScore: 1200,
     hasNotStarted: () => false, isOneClickChallenge: () => true,
@@ -180,7 +185,7 @@ function installMock() {
       create(name, formation, items) { T.created = { name, formation, n: items.filter(Boolean).length, ratings: items.map((i) => i && i.rating) }; return obs({ success: true }); } },
     SBC: {
       requestSets: () => obs({ success: true, data: { sets } }),
-      requestChallengesForSet: (set) => obs({ success: true, data: { challenges: set.id === 1 ? (done < 2 ? [challenge()] : []) : set.id === 3 ? [eliteChallenge] : set.id === 4 ? [bronzeChallenge] : set.id === 5 ? [hatChallenge] : set.id === 6 ? [pointsChallenge] : [chemChallenge] } }),
+      requestChallengesForSet: (set) => obs({ success: true, data: { challenges: set.id === 1 ? (done < 2 ? [challenge()] : []) : set.id === 3 ? [eliteChallenge] : set.id === 4 ? [bronzeChallenge] : set.id === 5 ? [hatChallenge] : set.id === 6 ? [pointsChallenge] : set.id === 7 ? [heroChallenge] : [chemChallenge] } }),
       loadChallenge: (ch) => { if (ch && ch.squad && 'loaded' in ch.squad) ch.squad.loaded = true; return obs({ success: true }); },
       saveChallenge: () => obs({ success: true }),
       initiateOneClickChallenge: () => obs({ success: true }),
