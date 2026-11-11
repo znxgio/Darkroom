@@ -8,6 +8,7 @@ function installMock() {
   window.UTSearchCriteriaDTO = function () { this.offset = 0; this.count = 21; };
   let nextId = 1;
   const owned = new Set(); // definitionIds you own (for duplicates)
+  const allItems = new Map(); // every item ever created, by id (bought cards included)
   const mk = (defId, rating, o = {}) => {
     const it = {
       id: nextId++, definitionId: defId, rating, rareflag: o.rare ? 1 : (o.special ? 3 : 0), untradeable: o.untradeable !== false,
@@ -17,6 +18,7 @@ function installMock() {
       isPlayer() { return o.player !== false; }, isLimitedUse() { return false; },
       isDuplicate() { return o.dup !== undefined ? o.dup : owned.has(defId) && this.pile !== PILE.CLUB; },
     };
+    allItems.set(it.id, it);
     return it;
   };
   // --- club: fodder 75..86 untradeable, a few tradeables
@@ -53,8 +55,14 @@ function installMock() {
     () => [mk(5002, 84, { dup: true, untradeable: false }), mk(5003, 68, { dup: true, untradeable: true })],
     () => [mk(9102, 79, { name: 'New Gold' })],
   ];
-  const pack = (i, name) => ({ id: 30 + (i > 0 ? 1 : 0), packName: name, isMyPack: true, open() { T.opened++; T.unassigned.push(...packContents[i]()); return obs({ success: true }); } });
-  const myPacks = [pack(0, 'Gold Pack'), pack(1, 'Gold Pack'), pack(2, 'Rare Players Pack')];
+  const pack = (i, name, id) => {
+    const pk = { id: id || 30 + (i > 0 ? 1 : 0), packName: name, isMyPack: true,
+      open() { T.opened++; T.packList = T.packList.filter((x) => x !== pk); T.unassigned.push(...(i === 'reward' ? [mk(9200 + T.opened, 83, { name: 'Reward Player 83' })] : packContents[i]())); return obs({ success: true }); } };
+    return pk;
+  };
+  T.packList = [pack(0, 'Gold Pack'), pack(1, 'Gold Pack'), pack(2, 'Rare Players Pack')];
+  T.addRewardPack = () => T.packList.push(pack('reward', 'SBC Reward Pack', 77));
+  T.addUnassigned = () => { T.unassigned.push(mk(9300, 82, { name: 'Unassigned New 82' }), mk(5003, 83, { name: 'Unassigned Dup 83', dup: true })); };
   // --- SBC
   const sbcSquad = {
     players: [],
@@ -78,7 +86,7 @@ function installMock() {
     { id: 5, name: 'Hat-trick', description: '3 players', isComplete: () => false },
     { id: 6, name: 'Brian Brobbey', description: 'Points', isComplete: () => false, scoreRequirement: 30000, totalSubmittedScore: 0 }];
   // FC 27 points SBC: "OVR Min 45" (Evolutions-style rule) and a 30,000 💎 goal
-  const pointsChallenge = { id: 82, name: 'Brian Brobbey', squad: sbcSquad, isCompleted: () => false, scoreRequirement: 30000, submittedScore: 4000,
+  const pointsChallenge = { id: 82, name: 'Brian Brobbey', squad: sbcSquad, isCompleted: () => false, scoreRequirement: 30000, submittedScore: 1200,
     hasNotStarted: () => false, isOneClickChallenge: () => true,
     eligibilityRequirements: [{ scope: 0, count: -1, kvPairs: { _collection: { 40: [45], 41: [1] } } }] };
   // a 3-player SBC: player count only known after loading, unused slots flagged (not a method) as bricks
@@ -167,7 +175,7 @@ function installMock() {
       // the real Web App returns club results in `response`, not `data`
       search(c) { const page = club.slice(c.offset, c.offset + c.count); return obs({ success: true, response: { items: page, retrievedAll: c.offset + c.count >= club.length } }); },
     },
-    Store: { getPacks: () => obs({ success: true, response: { packs: myPacks.slice(T.opened) } }) },
+    Store: { getPacks: () => obs({ success: true, response: { packs: T.packList.slice() } }) },
     Squad: { getActiveSquadId: () => 1, requestSquadById: () => obs({ success: true, data: { squad } }),
       create(name, formation, items) { T.created = { name, formation, n: items.filter(Boolean).length, ratings: items.map((i) => i && i.rating) }; return obs({ success: true }); } },
     SBC: {
@@ -177,7 +185,7 @@ function installMock() {
       saveChallenge: () => obs({ success: true }),
       initiateOneClickChallenge: () => obs({ success: true }),
       submitOneClickChallenge(ch, set, ids) {
-        const byId = new Map(club.concat(storage).map((it) => [it.id, it]));
+        const byId = allItems;
         if (ids.some((id) => squadItems.some((s) => s.id === id))) return obs({ success: false, status: 409 });
         const pts = ids.reduce((a, id) => a + ((byId.get(id) || {}).sbsScore || 0), 0);
         T.pointsBatches = (T.pointsBatches || []).concat([ids.length]);
@@ -187,12 +195,22 @@ function installMock() {
         return obs({ success: true, data: { submittedScore, challengeCompleted: submittedScore >= ch.scoreRequirement } });
       },
       submitChallenge(ch) {
+        if (T.rewardOnSubmit) { T.rewardOnSubmit = false; T.addRewardPack(); }
         T.submitted.push(ch.squad.players.map((p) => ({ id: p.id, def: p.definitionId, r: p.rating, rare: p.rareflag, pile: p.pile, untradeable: p.untradeable })));
         done++;
         return obs({ success: true });
       },
     },
     Chemistry: { isFeatureEnabled: () => true },
+    Academy: {
+      requestAcademyHub: () => obs({ success: true, data: { slots: [
+        { id: 501, name: 'Pacey Strikers', prices: { _collection: { COINS: { amount: 5000 } } }, meetsRequirements: (it) => it.rating <= 85 && (it.preferredPosition === 25 || it.preferredPosition === 'ST') },
+        { id: 502, name: 'Icon Only', prices: { _collection: {} }, meetsRequirements: () => false },
+      ] } }),
+      getCategories: () => [],
+      requestSlotsByCategory: () => obs({ success: true, data: { slots: [] } }),
+      getSlotPreview: (slotId, itemId) => obs({ success: true, data: { updatedSlot: { levels: [{ boostedPlayer: { rating: 80 } }, { boostedPlayer: { rating: 87 } }] } } }),
+    },
   };
   window.repositories = { Item: { numItemsInCache: () => T.unassigned.length, isPileFull: () => false, setDirty() {} } };
 }

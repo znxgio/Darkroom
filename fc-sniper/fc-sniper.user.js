@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FC Sniper
 // @namespace    https://github.com/znxgio/darkroom
-// @version      1.9.0
+// @version      2.0.0
 // @description  Sniper, pack opener, SBC solver and team upgrade advisor for the EA SPORTS FC Ultimate Team Web App, with built-in safety limits.
 // @match        https://www.ea.com/*ultimate-team/web-app*
 // @match        https://www.ea.com/ea-sports-fc/ultimate-team/web-app*
@@ -1274,6 +1274,8 @@
     hotAuto: false, // pick hot cards automatically when trading starts
     tradeBudget: 0, // max coins per card for trading (0 = your coins minus Keep coins)
     upkeepMinutes: 5, // check the transfer list this often while trading
+    smartRelist: true, // reprice expired cards to today's market (not below what you paid + Min profit)
+    cutLossAfter: 3, // after this many failed relists, allow break-even (0 = never)
     // selling
     sellMode: 'off', // off | profit | market | fixed
     sellPrice: 0,
@@ -1304,7 +1306,10 @@
     sbcProtectSquad: true, // never use players from your active squad
     sbcRepeat: 1, // times to repeat a repeatable SBC
     sbcBuyMissing: true, // buy cheap fill-ins from the market when your club can't complete an SBC
+    sbcUseUnassigned: true, // move Unassigned players to club / SBC storage first so SBCs can use them
     sbcBuyLimit: 20000, // max coins of fill-ins per SBC
+    pointsBuyLimit: 0, // 💎 points SBCs: max coins to spend buying cards after your spare ones (0 = never buy)
+    sbcOpenRewards: true, // open SBC reward packs right after submitting
     // upgrades
     upgradeBudget: 0, // 0 = your coins minus Keep coins
     upgradeMarket: true, // also search the market (uses searches)
@@ -1337,13 +1342,13 @@
 
   const w = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '1.9.0';
+  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '2.0.0';
   const errText = (e) => (e && e.message ? e.message : String(e));
   const fmt = (n) => Number(n || 0).toLocaleString();
 
   // ---- Storage ----------------------------------------------------------------
 
-  const KEYS = { cfg: 'fc-sniper:config', safety: 'fc-sniper:safety', history: 'fc-sniper:history', ui: 'fc-sniper:ui' };
+  const KEYS = { cfg: 'fc-sniper:config', safety: 'fc-sniper:safety', history: 'fc-sniper:history', ui: 'fc-sniper:ui', log: 'fc-sniper:log' };
   const store = {
     get(key, fallback) {
       try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : fallback; } catch { return fallback; }
@@ -1453,6 +1458,49 @@
       const res = await observe(w.services.Item.list(item, prevPrice(sellPrice), sellPrice, duration));
       return { ok: !!res.success, status: res.status };
     },
+    // -- evolutions (EA calls them "Academy") --
+    academyCriteria(categoryId) {
+      const c = w.UTAcademySlotSearchCriteriaDTO ? new w.UTAcademySlotSearchCriteriaDTO() : {};
+      if (w.AcademySlotState) c._slotStatus = w.AcademySlotState.NOT_STARTED;
+      if (categoryId !== undefined) c.categoryId = categoryId;
+      return c;
+    },
+    /** All evolutions you haven't started: the hub, plus each category. */
+    async evolutions() {
+      const A = w.services.Academy;
+      if (!A) return { ok: false, status: 'no Academy service', slots: [] };
+      const out = new Map();
+      const hub = await observe(A.requestAcademyHub(this.academyCriteria()));
+      if (!hub.success) return { ok: false, status: hub.status, slots: [] };
+      ((hub.data && hub.data.slots) || []).forEach((sl) => out.set(sl.id, sl));
+      let cats = [];
+      try { cats = (A.getCategories() || []).map((c) => c.id); } catch { /* none */ }
+      for (const id of cats.slice(0, 12)) {
+        await sleep(jitter(900, 1600));
+        const r = await observe(A.requestSlotsByCategory(this.academyCriteria(id)));
+        if (r.success) ((r.data && r.data.slots) || []).forEach((sl) => out.set(sl.id, sl));
+      }
+      return { ok: true, slots: [...out.values()] };
+    },
+    evoName(sl) {
+      const raw = sl.name || sl.title || sl.slotName || '';
+      try { const t = raw && w.services.Localization.localize(raw); if (t && t !== raw) return t; } catch { /* ignore */ }
+      return raw || `Evolution ${sl.id}`;
+    },
+    evoCost(sl) {
+      const c = sl.prices && (sl.prices._collection || sl.prices);
+      const coins = c && c.COINS && (c.COINS.amount ?? c.COINS);
+      const points = c && c.POINTS && (c.POINTS.amount ?? c.POINTS);
+      return coins ? `${fmt(coins)} coins` : points ? `${fmt(points)} FC Points` : 'Free';
+    },
+    /** Final card after an evolution (one request). */
+    async evoPreview(sl, item) {
+      const res = await observe(w.services.Academy.getSlotPreview(sl.id, item.id));
+      const lv = res.success && res.data && res.data.updatedSlot && res.data.updatedSlot.levels;
+      const p = lv && lv.length && lv[lv.length - 1].boostedPlayer;
+      return p ? { rating: p.rating, positions: p.preferredPosition } : null;
+    },
+
     /** Rarities by name, read from the Web App's own search screen (fallback: rare/common). */
     rarityOptions() {
       try {
@@ -1763,6 +1811,11 @@
         }
       } catch { /* not available */ }
       return false;
+    },
+    /** List an item that's already on the transfer list (expired) at a new price. */
+    async relistItem(item, sellPrice, duration) {
+      const res = await observe(w.services.Item.list(item, prevPrice(sellPrice), sellPrice, duration));
+      return { ok: !!res.success, status: res.status };
     },
     async relistExpired() {
       const S = w.services.Item;
@@ -2323,8 +2376,7 @@
         await sleep(jitter(800, 1500));
       }
       if (expired && (this.cfg.mode === 'trade' || this.cfg.autoRelist)) {
-        if (await fut.relistExpired()) { out.relisted = expired; ui.log(`Relisted ${expired} expired item${expired === 1 ? '' : 's'}`, 'muted'); }
-        await sleep(jitter(800, 1500));
+        out.relisted = await this.relistSmart(items);
       }
       // Auctions we bid on.
       const due = [...this.bids.entries()].filter(([, b]) => Date.now() >= b.endsAt);
@@ -2354,6 +2406,42 @@
       ui.renderTrade(); ui.renderHistory();
       if (this.running) this.setStatus('waiting', 'Next search');
       return out;
+    },
+
+    /**
+     * Relist expired cards at today's price: one step under the cheapest listing,
+     * but never below what you paid + Min profit after tax. After "Cut losses
+     * after" failed relists, it may drop to break-even. Cards the bot didn't buy
+     * are relisted at their old price.
+     */
+    async relistSmart(items) {
+      const cfg = this.cfg;
+      const expired = items.filter((it) => fut.auctionState(it).state === 'expired');
+      let repriced = 0;
+      for (const it of expired.slice(0, cfg.smartRelist ? 5 : 0)) {
+        const entry = this.history.find((e) => e.itemId === it.id && !e.soldFor);
+        if (!entry) continue;
+        const res = await fut.search(fut.criteria({}, { id: it.definitionId }, 0));
+        this.countUsage('searches');
+        if (!res.ok) { const k = classifyStatus(res.status); if (k === 'captcha' || k === 'throttled') { this.halt(k, `blocked while repricing (${res.status})`); return repriced; } continue; }
+        const lowest = res.listings.filter((l) => l.defId === it.definitionId && l.buyNowPrice).map((l) => l.buyNowPrice).sort((a, b) => a - b)[0];
+        entry.relists = (entry.relists || 0) + 1;
+        const cut = cfg.cutLossAfter > 0 && entry.relists > cfg.cutLossAfter;
+        const floor = breakEvenSell(entry.price, cut ? 0 : cfg.minProfit || 0);
+        const price = Math.max(floor, lowest ? prevPrice(lowest) : (entry.sell || floor));
+        const r = await fut.relistItem(it, price, cfg.listDuration);
+        if (r.ok) {
+          repriced++;
+          entry.sell = price;
+          ui.log(`Relisted ${entry.name} at ${fmt(price)}${lowest ? ` (cheapest ${fmt(lowest)})` : ''}${cut ? ' — break-even' : ''}`, 'muted');
+        }
+        await sleep(jitter(1200, 2200));
+      }
+      store.set(KEYS.history, this.history);
+      // everything else (cards the bot didn't buy): relist at the old price
+      const rest = expired.length - repriced;
+      if (rest > 0 && await fut.relistExpired()) ui.log(`Relisted ${rest} other expired item${rest === 1 ? '' : 's'} at their old price`, 'muted');
+      return expired.length;
     },
 
     async upkeepNow() {
@@ -2502,7 +2590,12 @@
     },
 
     async open(packList) {
-      await jobs.run('Opening packs', async () => {
+      await jobs.run('Opening packs', async () => { await this.openList(packList); });
+    },
+
+    /** Open packs and sort each one (runs inside an existing task). */
+    async openList(packList) {
+      {
         const summary = { opened: 0, players: [], club: 0, storage: 0, transfer: 0, quicksell: 0, keep: 0 };
         try {
           if (fut.unassignedCount() > 0) {
@@ -2531,7 +2624,15 @@
         } finally {
           if (summary.opened || summary.club || summary.storage || summary.transfer || summary.quicksell) this.report(summary);
         }
-      });
+      }
+    },
+
+    /** Pack ids you hold → how many of each (to spot new reward packs). */
+    async counts() {
+      const r = await fut.myPacks();
+      const m = new Map();
+      if (r.ok) r.packs.forEach((p) => m.set(p.id, (m.get(p.id) || 0) + 1));
+      return { ok: r.ok, packs: r.ok ? r.packs : [], m };
     },
 
     report(s) {
@@ -2587,8 +2688,32 @@
      * squad (starters, subs and reserves), loans, evolution players, players
      * above your max rating, specials (unless allowed) or tradeables (unless allowed).
      */
+    /**
+     * Put Unassigned players where SBCs can use them: new cards to your club,
+     * duplicates to SBC storage. Anything that can't move stays (e.g. a full pile).
+     */
+    async tidyUnassigned() {
+      const items = await fut.unassigned();
+      if (!items || !items.length) return 0;
+      const players = items.filter((it) => (typeof it.isPlayer === 'function' ? it.isPlayer() : true));
+      const fresh = players.filter((it) => !(typeof it.isDuplicate === 'function' && it.isDuplicate()));
+      const dups = players.filter((it) => typeof it.isDuplicate === 'function' && it.isDuplicate());
+      let moved = 0;
+      if (fresh.length && await fut.move(fresh, w.ItemPile.CLUB)) moved += fresh.length;
+      if (dups.length && !fut.pileFull(w.ItemPile.STORAGE)) {
+        await sleep(jitter(700, 1200));
+        if (await fut.move(dups, w.ItemPile.STORAGE)) moved += dups.length;
+      }
+      if (moved) ui.log(`Unassigned: ${moved} player${moved === 1 ? '' : 's'} moved where SBCs can use them (${fresh.length} to club, ${dups.length} to SBC storage)`, 'muted');
+      if (moved < players.length) ui.log(`${players.length - moved} unassigned player${players.length - moved === 1 ? '' : 's'} couldn’t be moved (pile full?)`, 'warn');
+      return moved;
+    },
+
     async pool(force) {
       if (!this.raw || force) {
+        if (engine.cfg.sbcUseUnassigned) {
+          try { if (await this.tidyUnassigned()) await sleep(jitter(800, 1400)); } catch (e) { ui.log(`Couldn’t tidy Unassigned: ${errText(e)}`, 'warn'); }
+        }
         engine.setStatus('pricing', 'Reading your club…');
         const r = await fut.clubPlayers((n) => engine.setStatus('pricing', `Reading your club… ${n}`));
         jobs.check(r, 'reading your club');
@@ -2689,7 +2814,8 @@
         // The market sample is small: extrapolate the rest at the best coins-per-point seen.
         const best = market.slice().sort((a, b) => a.price / a.points - b.price / b.points)[0];
         const extra = plan.short && best ? Math.ceil(plan.short / best.points) * best.price : 0;
-        this.points = { set, entry, goal, done, need, plan, best, extra };
+        this.points = { set, entry, goal, done, need, plan, best, extra, byRating: [...byRating.entries()],
+          bestBand: best ? [Math.max(0, roundPrice(best.price * 0.6)), roundPrice(best.price * 1.6, 'up')] : [800, 3000] };
         const perPt = best ? (best.price / best.points).toFixed(1) : null;
         ui.log(`💎 ${ch.name}: ${fmt(done)}/${fmt(goal)} · your spare cards give ${fmt(plan.clubPoints)} (${plan.fromClub.length} cards)`
           + (plan.buys.length || extra ? ` · rest ≈ ${fmt(plan.buyCoins + extra)} coins${perPt ? ` (best: ${best.rating}-rated at ${fmt(best.price)} = ${best.points} 💎, ${perPt}/💎)` : ''}` : ''), 'ok');
@@ -2700,7 +2826,7 @@
     /** Hand in the estimated spare cards, 20 at a time, until the points goal is reached. */
     async handInPoints() {
       const pt = this.points;
-      if (!pt || !pt.plan.fromClub.length) return;
+      if (!pt || (!pt.plan.fromClub.length && !(engine.cfg.pointsBuyLimit > 0))) return;
       await jobs.run('Handing in 💎 points', async () => {
         const { set, entry } = pt;
         const ch = entry.challenge;
@@ -2737,11 +2863,89 @@
           }
           await jobs.pause(engine.cfg.delayMin, engine.cfg.delayMax);
         }
+        // Still short: buy the best 💎-per-coin cards and hand them in, up to your coin limit.
+        if (score < goal && !jobs.cancelled && engine.cfg.pointsBuyLimit > 0) {
+          const r = await this.buyForPoints(pt, ch, set, score, goal);
+          score = r.score;
+          handed += r.handed;
+          if (score >= goal) {
+            ui.log(`✅ ${ch.name} complete — reward on its way`, 'ok');
+            ui.toast(`SBC done: ${ch.name}`, 'ok');
+            sounds.buy();
+          }
+        }
         if (score < goal) ui.log(`Stopped at ${fmt(score)} / ${fmt(goal)} 💎 (${handed} cards handed in)`, 'warn');
         ch.submittedScore = score;
         this.points = null;
         ui.renderSbc();
       });
+    },
+
+    /**
+     * Buy cards with the most 💎 per coin (fresh listings, bought straight after
+     * the search), move them to your club and hand them in, until the goal or
+     * the coin limit. Never buys a card you already own.
+     */
+    async buyForPoints(pt, ch, set, score, goal) {
+      const cfg = engine.cfg;
+      const byRating = new Map(pt.byRating || []);
+      const owned = new Set((this.raw || []).map((p) => baseId(p.defId ?? p.id)));
+      const minOvr = pt.entry.parsed.constraints.minOvr || 0;
+      let spent = 0;
+      let handed = 0;
+      let [lo, hi] = pt.bestBand || [800, 3000];
+      for (let round = 0; round < 40 && score < goal && spent < cfg.pointsBuyLimit && !jobs.cancelled; round++) {
+        engine.setStatus('pricing', `Buying for 💎… ${fmt(score)} / ${fmt(goal)} · spent ${fmt(spent)}`);
+        const c = fut.newCriteria();
+        c.level = 'gold';
+        if (lo >= 200) c.minBuy = lo;
+        c.maxBuy = Math.min(hi, roundPrice(cfg.pointsBuyLimit - spent));
+        const res = await fut.search(c);
+        engine.countUsage('searches');
+        jobs.check(res, 'market search');
+        const seen = new Set();
+        const cands = res.listings.map((l) => ({ l, p: fut.toPlayer(l.item) }))
+          .filter(({ l, p }) => p.player && l.buyNowPrice && p.rating >= minOvr && !owned.has(baseId(p.id)) && !seen.has(baseId(p.id)) && seen.add(baseId(p.id)))
+          .map(({ l, p }) => ({ l, p, pts: p.points || byRating.get(p.rating) || 0 }))
+          .filter((x) => x.pts > 0)
+          .sort((a, b) => a.l.buyNowPrice / a.pts - b.l.buyNowPrice / b.pts);
+        if (!cands.length) { [lo, hi] = [Math.max(0, roundPrice(lo * 0.7)), roundPrice(hi * 1.4, 'up')]; await jobs.pause(cfg.delayMin, cfg.delayMax); continue; }
+        const bought = [];
+        let acc = score;
+        for (const x of cands) {
+          if (bought.length >= 20 || acc >= goal || spent + x.l.buyNowPrice > cfg.pointsBuyLimit) break;
+          const r = await fut.buy(x.l);
+          if (!r.ok) {
+            const kind = classifyStatus(r.status);
+            if (kind === 'captcha' || kind === 'throttled') jobs.check(r, 'buying for points');
+            if (kind === 'coins') break;
+            continue;
+          }
+          engine.countUsage('buys');
+          spent += x.l.buyNowPrice;
+          acc += x.pts;
+          owned.add(baseId(x.p.id));
+          bought.push(x);
+          engine.history = addHistory(engine.history, { at: Date.now(), id: x.p.id, itemId: x.l.item.id, name: x.p.name, rating: x.p.rating, price: x.l.buyNowPrice, via: 'sbc' });
+          await sleep(jitter(700, 1300));
+        }
+        store.set(KEYS.history, engine.history);
+        if (!bought.length) break;
+        ui.log(`Bought ${bought.length} card${bought.length === 1 ? '' : 's'} for ${fmt(bought.reduce((a, x) => a + x.l.buyNowPrice, 0))} (${fmt(bought.reduce((a, x) => a + x.pts, 0))} 💎)`, 'ok');
+        await fut.move(bought.map((x) => x.l.item), w.ItemPile.CLUB);
+        await jobs.pause(1200, 2200);
+        const r = await fut.submitPoints(ch, set, bought.map((x) => x.l.item.id));
+        if (!r.ok && Number(r.status) === 409) { ui.log('EA reported a squad conflict on bought cards — stopped (they’re in your club)', 'err'); break; }
+        jobs.check(r, 'handing in cards');
+        handed += bought.length;
+        score = Number(r.data.submittedScore ?? acc);
+        ui.log(`💎 Handed in ${bought.length} bought cards — ${fmt(score)} / ${fmt(goal)} · spent ${fmt(spent)}`, 'ok');
+        if (r.data.challengeCompleted || score >= goal) break;
+        await jobs.pause(cfg.delayMin, cfg.delayMax);
+      }
+      if (spent >= cfg.pointsBuyLimit && score < goal) ui.log(`Reached your coin limit for 💎 SBCs (${fmt(cfg.pointsBuyLimit)})`, 'warn');
+      ui.renderHistory();
+      return { score, handed, spent };
     },
 
     /** 💎 points SBC: open it and record where EA keeps the points (nothing is handed in). */
@@ -3008,6 +3212,9 @@
       await jobs.run(fillOnly ? 'Filling SBC' : 'Submitting SBC', async () => {
         const times = fillOnly ? 1 : Math.max(1, engine.cfg.sbcRepeat || 1);
         let current = plan;
+        const before = !fillOnly && engine.cfg.sbcOpenRewards ? await packs.counts() : null;
+        let submitted = 0;
+        try {
         for (let n = 1; n <= times; n++) {
           const { set, entry, solution } = current;
           engine.setStatus('pricing', `${fillOnly ? 'Filling' : 'Submitting'} ${set.name}${times > 1 ? ` (${n}/${times})` : ''}`);
@@ -3030,6 +3237,7 @@
           const used = new Set(solution.players.map((p) => p.id));
           this.raw = (this.raw || []).filter((p) => !used.has(p.itemId));
           this.club = (await this.pool()).filter((p) => !used.has(p.id));
+          submitted++;
           ui.log(`✅ Submitted ${set.name}${entry.challenge.name && entry.challenge.name !== set.name ? ` — ${entry.challenge.name}` : ''}`, 'ok');
           ui.toast(`SBC done: ${set.name}`, 'ok');
           sounds.buy();
@@ -3051,8 +3259,29 @@
           if (!sol) { ui.log('Out of suitable players for another repeat', 'muted'); break; }
           current = { set, entry: nextEntry, solution: sol, buys: [], buyTotal: 0 };
         }
+        } finally {
+          if (before && before.ok && submitted) await this.openRewards(before);
+        }
         ui.renderSbc();
       });
+    },
+
+    /** Open the packs that appeared since `before` (SBC rewards) and sort them. */
+    async openRewards(before) {
+      try {
+        await jobs.pause(2000, 3500);
+        const now = await packs.counts();
+        if (!now.ok) return;
+        const left = new Map(before.m);
+        const fresh = now.packs.filter((p) => { const n = left.get(p.id) || 0; if (n > 0) { left.set(p.id, n - 1); return false; } return true; });
+        if (!fresh.length) { ui.log('No reward packs to open (the reward may be a player or already opened)', 'muted'); return; }
+        ui.log(`Opening ${fresh.length} SBC reward pack${fresh.length === 1 ? '' : 's'}…`, 'ok');
+        packs.list = now.packs;
+        await packs.openList(fresh);
+      } catch (e) {
+        if (!(e instanceof Stopped)) ui.log(`Couldn’t open reward packs: ${errText(e)}`, 'warn');
+        else throw e;
+      }
     },
   };
 
@@ -3325,6 +3554,47 @@
     },
   };
 
+  // ---- Evolutions helper ---------------------------------------------------------------
+
+  const evos = {
+    list: [], // [{ slot, name, cost, players: [{ name, rating, item, after }] }]
+
+    async find() {
+      await jobs.run('Finding evolutions', async () => {
+        engine.setStatus('pricing', 'Loading evolutions…');
+        const r = await fut.evolutions();
+        jobs.check(r, 'loading evolutions');
+        engine.setStatus('pricing', 'Reading your club…');
+        const club = await fut.clubPlayers((n) => engine.setStatus('pricing', `Reading your club… ${n}`), { storage: false });
+        jobs.check(club, 'reading your club');
+        const items = club.items.filter((it) => (typeof it.isPlayer === 'function' ? it.isPlayer() : true));
+        this.list = r.slots.map((slot) => {
+          const fits = items.filter((it) => { try { return slot.meetsRequirements(it); } catch { return false; } })
+            .map((it) => ({ ...fut.toPlayer(it), item: it })).sort((a, b) => b.rating - a.rating);
+          return { slot, name: fut.evoName(slot), cost: fut.evoCost(slot), players: fits };
+        }).sort((a, b) => b.players.length - a.players.length);
+        ui.renderEvos();
+        const usable = this.list.filter((e) => e.players.length).length;
+        ui.log(`Evolutions: ${this.list.length} available · ${usable} with players from your club`, 'ok');
+        if (this.list.length && !r.slots.some((sl) => typeof sl.meetsRequirements === 'function')) debugLog.push(`evo slot keys: ${Object.keys(r.slots[0] || {}).join(',')}`);
+      });
+    },
+
+    /** What the best few qualifying players become (one request each). */
+    async preview(i) {
+      const e = this.list[i];
+      if (!e) return;
+      await jobs.run('Previewing evolution', async () => {
+        for (const p of e.players.slice(0, 3)) {
+          engine.setStatus('pricing', `Previewing ${p.name}…`);
+          try { p.after = await fut.evoPreview(e.slot, p.item); } catch { p.after = null; }
+          ui.renderEvos();
+          await jobs.pause(1000, 1800);
+        }
+      });
+    },
+  };
+
   // ---- Hot cards (market scanner) ---------------------------------------------------
 
   const hot = {
@@ -3447,6 +3717,8 @@
       ['minProfitPct', 'Min profit % of sell price', 'number'],
       ['listDuration', 'List for', 'select', DURATIONS],
       ['upkeepMinutes', 'Check transfer list every (min)', 'number'],
+      ['smartRelist', 'Reprice expired cards to the market', 'toggle'],
+      ['cutLossAfter', 'Sell at break-even after N relists (0 = never)', 'number'],
       ['repriceMinutes', 'Refresh prices every (min)', 'number'],
       ['tradeBudget', 'Max coins per card (0 = my coins)', 'number'],
     ],
@@ -3471,8 +3743,11 @@
       ['sbcUseSpecials', 'Use special cards', 'toggle'],
       ['sbcMaxRating', 'Max player rating to use', 'number'],
       ['sbcRepeat', 'Repeat repeatable SBCs', 'number'],
+      ['sbcUseUnassigned', 'Use my Unassigned players', 'toggle'],
       ['sbcBuyMissing', 'Buy missing players (cheapest)', 'toggle'],
       ['sbcBuyLimit', 'Max coins to spend per SBC', 'number'],
+      ['pointsBuyLimit', 'Max coins to buy for 💎 SBCs (0 = never)', 'number'],
+      ['sbcOpenRewards', 'Open reward packs after SBCs', 'toggle'],
     ],
     filters: [
       ['autoPrice', 'Auto max buy from price', 'toggle'],
@@ -3791,6 +4066,8 @@
             <div class="card"><h4>Formation coach</h4><div data-r="forms"><p class="empty">Compares your lineup with popular competitive formations, built from players you own.</p></div>
               <button class="btn blue" data-a="forms">Compare formations</button>
               <p class="note">Formations are a built-in list of popular competitive setups, not live pro data. “Create squad” makes a new squad, so your current one isn’t touched.</p></div>
+            <div class="card"><h4>Evolutions</h4><div data-r="evos"><p class="empty">Shows the evolutions you can start and which of your players qualify.</p></div>
+              <button class="btn blue" data-a="evo-find">Find evolutions</button></div>
             <div class="card">${FIELDS.squad.map(fieldHtml).join('')}
               <p class="note">Owned players are suggested first. Market suggestions match your squad’s main league or nation so you keep chemistry, and cost a few searches.</p></div>
           </section>
@@ -3814,7 +4091,8 @@
           </section>
           <section class="pane" data-pane="log">
             <div class="card"><h4>Activity</h4><div class="log" data-r="log"></div>
-              <button class="btn" data-a="copy-log">Copy log (to send for help)</button></div>
+              <button class="btn" data-a="copy-log">Copy log (to send for help)</button>
+              <button class="btn red" data-a="clear-log">Clear log</button></div>
           </section>
           <section class="pane" data-pane="settings">
             <div class="card"><h4>Targets & filters</h4>${FIELDS.filters.map(fieldHtml).join('')}
@@ -3824,6 +4102,9 @@
             <div class="card"><h4>Safety limits</h4>${FIELDS.safety.map(fieldHtml).join('')}
               <p class="note">Minimums are enforced. A captcha locks the bot for 3 h, a market limit for 24 h.</p>
               <p class="note" data-r="lock"></p></div>
+            <div class="card"><h4>Backup</h4>
+              <p class="note" style="margin:0 0 6px">Saves your players, filters, history, settings and log as text. Paste it into Notes; restore it here (or on another device) if Safari data is cleared.</p>
+              <div class="two"><button class="btn blue" data-a="backup">Backup (copy)</button><button class="btn" data-a="restore">Restore (paste)</button></div></div>
             <div class="card"><h4>Look & notifications</h4>${FIELDS.notify.map(fieldHtml).join('')}
               <button class="btn" data-a="discord-test">Send test notification</button></div>
           </section>
@@ -3839,6 +4120,10 @@
       this.renderPlayers(); this.renderStats(); this.renderHistory(); this.renderStatus(); this.renderTrade();
       setInterval(() => this.tick(), 500);
 
+      // previous log, so it survives reloads
+      this.saved = store.get(KEYS.log, []);
+      this.saved.forEach(([at, cls, msg]) => this.log(msg, cls, at, true));
+      w.addEventListener('pagehide', () => { if (this.saved) store.set(KEYS.log, this.saved); });
       this.log(isMobile() ? 'Ready — tap ▶ to start' : 'Ready — Alt+S to start/stop', 'muted');
       const gate = engine.gate();
       if (!gate.ok) this.log(`Locked — ${gate.reason}`, 'err');
@@ -3878,6 +4163,9 @@
               engine.save(); engine.busy = false; this.setBusy(false); engine.setStatus('idle', 'Idle'); this.renderFilters();
             });
           }
+          case 'evo-find': return evos.find();
+          case 'evo-preview': return evos.preview(Number(btn.dataset.i));
+          case 'evo-open': this.evoOpen = this.evoOpen === Number(btn.dataset.i) ? -1 : Number(btn.dataset.i); return this.renderEvos();
           case 'analyse': return upgrades.analyse();
           case 'autofill': this.commit(); return upgrades.autofill();
           case 'spend-reset':
@@ -3904,6 +4192,11 @@
           case 'form-view': this.formOpen = this.formOpen === Number(btn.dataset.i) ? -1 : Number(btn.dataset.i); return this.renderFormations();
           case 'form-create': return upgrades.createSquad(Number(btn.dataset.i));
           case 'copy-log': return this.copyLog();
+          case 'clear-log':
+            if (!w.confirm('Clear the activity log?')) return;
+            this.saved = []; store.set(KEYS.log, []); this.q('[data-r=log]').innerHTML = ''; return;
+          case 'backup': return this.backup();
+          case 'restore': return this.restore();
           case 'snipe-opt': {
             const r = upgrades.results[Number(btn.dataset.s)];
             return r && upgrades.snipe(r.options[Number(btn.dataset.o)]);
@@ -4223,7 +4516,7 @@
       go.classList.toggle('on', on);
       go.innerHTML = on ? ICON.stop : ICON.play;
       go.disabled = false;
-      this.qa('[data-a=analyse], [data-a=packs-load], [data-a=pack-open], [data-a=pack-open-all], [data-a=sbc-load], [data-a=sbc-set], [data-a=sbc-solve], [data-a=sbc-submit], [data-a=sbc-fill], [data-a=sbc-points], [data-a=sbc-points-go], [data-a=price]')
+      this.qa('[data-a=analyse], [data-a=evo-find], [data-a=evo-preview], [data-a=packs-load], [data-a=pack-open], [data-a=pack-open-all], [data-a=sbc-load], [data-a=sbc-set], [data-a=sbc-solve], [data-a=sbc-submit], [data-a=sbc-fill], [data-a=sbc-points], [data-a=sbc-points-go], [data-a=price]')
         .forEach((b) => { b.disabled = !!name; });
       if (name) engine.setStatus('pricing', `${name}…`);
     },
@@ -4297,8 +4590,13 @@
           ${coins ? `The rest ≈ <b>${fmt(coins)} coins</b>${best ? ` — best value on the market right now: ${best.rating}-rated at ${fmt(best.price)} for ${fmt(best.points)} 💎 (${(best.price / best.points).toFixed(1)} coins per 💎)` : ''}.` : 'Your spare cards cover it — no coins needed.'}
           About ${Math.max(1, Math.ceil((pt.plan.cards + (pt.extra && best ? Math.ceil(pt.plan.short / best.points) : 0)) / 20))} hand-ins of 20.</p>
           <div class="list">${pt.plan.fromClub.slice().sort((a, b) => b.points - a.points).slice(0, 12).map((x) => `<div class="li"><span class="t"><b>${esc(x.name)} ${x.rating}</b></span><b>${fmt(x.points)} 💎</b></div>`).join('')}</div>
-          ${pt.plan.fromClub.length ? `<button class="btn" data-a="sbc-points-go" style="background:var(--green);color:var(--green-ink);border-color:var(--green)">Hand in ${pt.plan.fromClub.length} card${pt.plan.fromClub.length === 1 ? '' : 's'} (${fmt(pt.plan.clubPoints)} 💎)</button>` : ''}
-          ${pt.plan.short || coins ? `<p class="note">Your spare cards leave ${fmt(Math.max(0, pt.need - pt.plan.clubPoints))} 💎 to go — buying for points SBCs isn’t automatic yet.</p>` : ''}
+          ${(() => {
+            const left = Math.max(0, pt.need - pt.plan.clubPoints);
+            const lim = engine.cfg.pointsBuyLimit || 0;
+            const label = `Hand in ${pt.plan.fromClub.length} card${pt.plan.fromClub.length === 1 ? '' : 's'}${left && lim ? ` + buy up to ${fmt(lim)} coins` : ''}`;
+            return (pt.plan.fromClub.length || (left && lim)) ? `<button class="btn" data-a="sbc-points-go" style="background:var(--green);color:var(--green-ink);border-color:var(--green)">${label}</button>` : '';
+          })()}
+          ${pt.need > pt.plan.clubPoints ? `<p class="note">${fmt(pt.need - pt.plan.clubPoints)} 💎 left after your spare cards — ${engine.cfg.pointsBuyLimit > 0 ? `it buys the best 💎-per-coin cards up to ${fmt(engine.cfg.pointsBuyLimit)} coins (SBC tab setting)` : 'set “Max coins to buy for 💎 SBCs” to let it buy the rest'}.</p>` : ''}
           <p class="note">Hands in up to 20 at a time, biggest points first, with your protections re-checked before every batch.</p>
           <button class="btn red" data-a="sbc-points-close">Close</button>`;
         return;
@@ -4351,6 +4649,19 @@
         : '<p class="empty">Add players on the Snipe tab, check their prices, then start trading.</p>';
     },
 
+    renderEvos() {
+      const box = this.q('[data-r=evos]');
+      if (!box) return;
+      box.innerHTML = evos.list.length ? `<div class="list">${evos.list.map((e, i) => `
+        <div class="li"><span class="t"><b>${esc(e.name)}</b><small>${e.cost} · ${e.players.length ? `${e.players.length} of your players qualify` : 'none of your players qualify'}</small></span>
+          ${e.players.length ? `<button class="mini" data-a="evo-open" data-i="${i}">${this.evoOpen === i ? 'Hide' : 'Players'}</button>` : ''}</div>
+        ${this.evoOpen === i ? `<div class="sub">${e.players.slice(0, 8).map((p) => `<div class="li"><span class="t"><b>${esc(p.name)} ${p.rating}${p.after && p.after.rating ? ` → <span class="up">${p.after.rating}</span>` : ''}</b>
+            <small>${esc(p.positions.join(', '))}${p.untradeable ? ' · untradeable' : ''}</small></span></div>`).join('')}
+          <button class="btn" data-a="evo-preview" data-i="${i}">Preview the top 3 (final ratings)</button></div>` : ''}`).join('')}</div>
+        <p class="note">Start an evolution in the Web App (Club → Evolutions). The bot only finds the matches.</p>`
+        : '<p class="empty">No evolutions available right now.</p>';
+    },
+
     renderFormations() {
       const list = upgrades.formations;
       const names = (arr) => arr.map((p) => `${esc(p.name)} ${p.rating}`).join(', ');
@@ -4375,6 +4686,31 @@
           ${!f.current && full ? `<button class="mini go2" data-a="form-create" data-i="${i}">Create squad</button>` : ''}</div>${detail}`;
       }).join('')}</div>`
         : '<p class="empty">Compares your lineup with popular competitive formations, built from players you own.</p>';
+    },
+
+    async backup() {
+      const data = { app: 'fc-sniper', version: VERSION, at: new Date().toISOString(),
+        config: engine.cfg, history: engine.history, safety: store.get(KEYS.safety, {}), log: (this.saved || []).slice(-150) };
+      const text = JSON.stringify(data);
+      try { await navigator.clipboard.writeText(text); this.toast('Backup copied — paste it into Notes', 'ok'); this.log(`Backup copied (${Math.round(text.length / 1024)} KB)`, 'ok'); } catch {
+        w.prompt('Copy this backup and keep it somewhere safe:', text);
+      }
+    },
+
+    restore() {
+      if (engine.running || jobs.current) { this.log('Stop the bot before restoring', 'warn'); return; }
+      const text = w.prompt('Paste your FC Sniper backup:');
+      if (!text) return;
+      let data;
+      try { data = JSON.parse(text.trim()); } catch { this.log('That isn’t a valid backup', 'err'); return; }
+      if (!data || data.app !== 'fc-sniper' || !data.config) { this.log('That isn’t an FC Sniper backup', 'err'); return; }
+      engine.cfg = clampConfig(migrateConfig({ ...DEFAULT_CONFIG, ...data.config })).cfg;
+      engine.save();
+      if (Array.isArray(data.history)) { engine.history = data.history; store.set(KEYS.history, engine.history); }
+      if (Array.isArray(data.log)) { this.saved = data.log; store.set(KEYS.log, data.log); }
+      this.syncForm(); this.renderPlayers(); this.renderHistory(); this.renderTrade(); this.renderStatus();
+      this.root.classList.toggle('orange', engine.cfg.theme === 'orange');
+      this.log(`Backup from ${data.at ? new Date(data.at).toLocaleString() : 'unknown date'} restored (${engine.cfg.players.length} players, ${(engine.cfg.filters || []).length} filters, ${engine.history.length} history entries)`, 'ok');
     },
 
     async copyLog() {
@@ -4479,14 +4815,22 @@
       pc.textContent = on ? 'Checking prices…' : 'Check prices';
     },
 
-    log(msg, cls = '') {
+    log(msg, cls = '', at = Date.now(), restoring = false) {
       const box = this.root && this.q('[data-r=log]');
       if (!box) return;
       const line = document.createElement('div');
       line.className = cls;
-      line.innerHTML = `<time>${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })}</time>`;
+      const d = new Date(at);
+      const today = new Date().toDateString() === d.toDateString();
+      line.innerHTML = `<time>${today ? '' : `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })} `}${d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })}</time>`;
       line.append(document.createTextNode(msg));
       box.prepend(line);
+      if (!restoring) {
+        // keep the log across reloads (last 300 lines)
+        this.saved = (this.saved || store.get(KEYS.log, [])).concat([[at, cls, msg]]).slice(-300);
+        clearTimeout(this.logTimer);
+        this.logTimer = setTimeout(() => store.set(KEYS.log, this.saved), 500);
+      }
       while (box.childNodes.length > 300) box.lastChild.remove();
       const last = this.q('[data-r=last]');
       if (last) { last.textContent = msg; last.className = `last ${cls}`; }

@@ -63,7 +63,7 @@ function installTradeMock() {
         return obs({ success: true });
       },
       move(items) { return obs({ success: true }); },
-      list(item, start, bn) { T.listed.push(bn); return obs({ success: true }); },
+      list(item, start, bn) { T.listed.push(bn); if (item._auction && item._auction.isExpired && item._auction.isExpired()) item._auction._tradeState = 'active'; return obs({ success: true }); },
       requestTransferItems: () => obs({ success: true, data: { items: transfer.slice() } }),
       clearSoldItems() { T.cleared++; transfer.splice(0, transfer.length, ...transfer.filter((x) => !x._auction.isSold())); return obs({ success: true }); },
       relistExpiredAuctions() { T.relisted++; transfer.forEach((x) => { if (x._auction.isExpired()) x._auction._tradeState = 'active'; }); return obs({ success: true }); },
@@ -73,7 +73,8 @@ function installTradeMock() {
   };
   window.repositories = { Item: { getPileSize: () => 100, numItemsInCache: () => transfer.length, isPileFull: () => false } };
   // an earlier buy of item 501 at 40,000, listed at 50,000
-  localStorage.setItem('fc-sniper:history', JSON.stringify([{ at: Date.now() - 3600e3, id: 231747, itemId: 501, name: 'Mbappé', rating: 91, price: 40000, sell: 50000 }]));
+  localStorage.setItem('fc-sniper:history', JSON.stringify([{ at: Date.now() - 3600e3, id: 231747, itemId: 501, name: 'Mbappé', rating: 91, price: 40000, sell: 50000 },
+    { at: Date.now() - 7200e3, id: 231747, itemId: 502, name: 'Mbappé', rating: 91, price: 40000, sell: 52000 }]));
   localStorage.setItem('fc-sniper:config', JSON.stringify({
     players: [{ id: 231747, name: 'Mbappé', rating: 91 }],
     bidSnipe: true, bidWindow: 30, minProfit: 1000, undercut: 3, maxBuys: 2, delayMin: 3000, delayMax: 4500,
@@ -145,10 +146,12 @@ function installHotMock() {
 
   check('mode switched to Trade', await p.evaluate(() => JSON.parse(localStorage.getItem('fc-sniper:config')).mode === 'trade'));
   check('first upkeep recorded the earlier sale', lines.some((l) => /💰 1 sold · profit 7,500 after tax/.test(l)), lines.find((l) => /sold/.test(l)));
-  check('sold items cleared, expired relisted', t.cleared === 1 && t.relisted >= 1, `cleared ${t.cleared}, relisted ${t.relisted}`);
+  check('sold items cleared, expired relisted', t.cleared === 1 && t.relisted >= 0, `cleared ${t.cleared}, relisted ${t.relisted}`);
   check('price checked before trading', lines.some((l) => /avg/.test(l)));
   check('bought the 45k snipe under the profitable max', t.bought.includes(45000), `bought ${t.bought}`);
-  check('relisted under market average', t.listed.length >= 1 && t.listed.every((x) => x === t.listed[0]) && t.listed[0] < 52000, `listed ${t.listed}`);
+  const smart = lines.find((l) => /Relisted Mbappé at/.test(l));
+  check('smart relist: expired card repriced one step under the cheapest, above break-even', t.listed[0] === 49750 && /at 49,750 \(cheapest 50,000\)/.test(smart || ''), `${smart} · listed ${t.listed}`);
+  check('relisted under market average', t.listed.length >= 2 && t.listed[1] < 52000 && t.listed.slice(1).every((x) => x === t.listed[1]), `listed ${t.listed}`);
   const buy = t.searches.find((x) => x.maxBuy && x.minBid !== undefined);
   check('snipe search max buy keeps min profit', buy && 0.95 * t.listed[0] - buy.maxBuy >= 1000, JSON.stringify(buy));
   check('auction searches use max bid', t.searches.some((x) => x.maxBid && !x.maxBuy), JSON.stringify(t.searches.filter((x) => x.maxBid)[0]));

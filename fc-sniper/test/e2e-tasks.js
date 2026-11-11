@@ -61,6 +61,7 @@ const idle = (p, ms = 150000) => p.waitForFunction(() => !document.querySelector
   await p.click('#fcs [data-tab=sbc]');
   await p.fill('#fcs [data-k=sbcRepeat]', '2');
   await p.press('#fcs [data-k=sbcRepeat]', 'Tab');
+  await p.evaluate(() => { T.addUnassigned(); T.rewardOnSubmit = true; });
   await p.click('#fcs [data-a=sbc-load]');
   await p.waitForSelector('#fcs [data-a=sbc-set]');
   await p.click('#fcs [data-a=sbc-set][data-i="1"]');
@@ -84,6 +85,9 @@ const idle = (p, ms = 150000) => p.waitForFunction(() => !document.querySelector
   const sub = await p.evaluate(() => T.submitted);
   const rating = (rs) => { const sum = rs.reduce((a, x) => a + x, 0); const avg = sum / 11; const ex = rs.reduce((a, x) => a + Math.max(0, x - avg), 0); return Math.floor(Math.round(sum + ex) / 11); };
   check('submitted twice (repeat)', sub.length === 2, `${sub.length} submissions`);
+  const sbcLog = await log(p);
+  check('Unassigned tidied for SBCs (new → club, duplicate → storage)', sbcLog.some((l) => /Unassigned: 2 players moved where SBCs can use them \(1 to club, 1 to SBC storage\)/.test(l)), sbcLog.filter((l) => /Unassigned/.test(l)).join(' | '));
+  check('SBC reward pack opened and sorted', sbcLog.some((l) => /Opening 1 SBC reward pack/.test(l)) && sbcLog.some((l) => /Opened SBC Reward Pack/.test(l)), sbcLog.filter((l) => /reward|Reward/.test(l)).join(' | '));
   check('each submission rates ≥ 84', sub.every((s) => s.length === 11 && rating(s.map((x) => x.r)) >= 84), sub.map((s) => rating(s.map((x) => x.r))).join(','));
   check('≥ 2 rares each', sub.every((s) => s.filter((x) => x.rare >= 1).length >= 2));
   check('no player used twice', new Set(sub.flat().map((x) => x.id)).size === sub.flat().length);
@@ -174,11 +178,16 @@ const idle = (p, ms = 150000) => p.waitForFunction(() => !document.querySelector
   await p.click('#fcs [data-a=sbc-points][data-i="5"]');
   await idle(p, 200000);
   const est = await p.textContent('#fcs [data-r=plan]');
-  check('points estimate: needed, from your cards, coins for the rest', /26,000\s*💎\s*needed/.test(est) && /From your cards/.test(est) && (/Your spare cards cover it/.test(est) || (/The rest ≈ [\d,]+ coins/.test(est) && /coins per 💎/.test(est))), est.replace(/\s+/g, ' ').slice(0, 600));
+  check('points estimate: needed, from your cards, coins for the rest', /28,800\s*💎\s*needed/.test(est) && /From your cards/.test(est) && (/Your spare cards cover it/.test(est) || (/The rest ≈ [\d,]+ coins/.test(est) && /coins per 💎/.test(est))), est.replace(/\s+/g, ' ').slice(0, 600));
   check('points rows have no empty "needs"', !/needs\s*(Estimate|$)/.test(ptsRow));
   check('points estimate never hands anything in', (await p.evaluate(() => T.submitted.length)) === subPts);
   await p.screenshot({ path: `${S}/t-points.png` });
-  // hand in: batches of ≤ 20, until the goal; never squad/special cards
+  // let it buy the rest (coin limit), then hand in: batches of ≤ 20 until the goal; never squad/special cards
+  await p.fill('#fcs [data-k=pointsBuyLimit]', '20000');
+  await p.press('#fcs [data-k=pointsBuyLimit]', 'Tab');
+  await p.click('#fcs [data-a=sbc-points]');
+  await idle(p, 200000);
+  check('estimate offers to buy the rest', /buy up to 20,000 coins/.test(await p.textContent('#fcs [data-r=plan]')));
   await p.click('#fcs [data-a=sbc-points-go]');
   await idle(p, 300000);
   const P = await p.evaluate(() => ({ batches: T.pointsBatches || [], ids: T.pointsIds || [] }));
@@ -186,6 +195,8 @@ const idle = (p, ms = 150000) => p.waitForFunction(() => !document.querySelector
   check('points hand-in in batches of ≤ 20', P.batches.length >= 2 && P.batches.every((n) => n <= 20), JSON.stringify(P.batches));
   const prog = plog.filter((l) => /💎 Handed in/.test(l)).map((l) => Number(l.match(/— ([\d,]+) \//)[1].replace(/,/g, '')));
   check('points SBC completes, progress only goes up', plog.some((l) => /Brian Brobbey complete/.test(l)) && prog.every((v, i) => !i || v > prog[i - 1]) && prog[prog.length - 1] >= 30000, plog.filter((l) => /💎|complete/.test(l)).slice(-3).join(' | '));
+  const pb = plog.filter((l) => /Bought \d+ cards? for [\d,]+ \([\d,]+ 💎\)|Handed in \d+ bought cards/.test(l));
+  check('points: buys the best 💎-per-coin cards and hands them in', pb.length >= 2, pb.join(' | '));
   check('points hand-in never uses squad cards', !(await p.evaluate((ids) => ids.some((id) => services.Squad && false), P.ids)) && !plog.some((l) => /squads/.test(l)));
 
   check('active squad protected (starters)', !sub.flat().some((x) => x.def >= 100 && x.def <= 110));
@@ -221,6 +232,17 @@ const idle = (p, ms = 150000) => p.waitForFunction(() => !document.querySelector
   check('auto-fill never adds a card you own', !filled.some((x) => /Bench|Pacey|Starter|Fodder|Stored|Listed Striker/.test(x.name)), JSON.stringify(filled.map((x) => x.name)));
   check('auto-fill points to an owned better player instead of buying', afLog.some((l) => /ST: you already own (Bench ST 19|Pacey Striker 84)/.test(l)), afLog.join(' | '));
   check('auto-fill checks club, storage, transfer list and unassigned', afLog.some((l) => /Owned: \d+ players \(club \d+, SBC storage \d+, transfer list \d+, unassigned \d+\)/.test(l)), afLog.join(' | '));
+
+  // ---- Evolutions
+  await p.click('#fcs [data-tab=squad]');
+  await p.click('#fcs [data-a=evo-find]');
+  await idle(p, 120000);
+  const evoText = await p.textContent('#fcs [data-r=evos]');
+  check('evolutions listed with cost and qualifying players', /Pacey Strikers/.test(evoText) && /5,000 coins/.test(evoText) && /\d+ of your players qualify/.test(evoText) && /none of your players qualify/.test(evoText), evoText.replace(/\s+/g, ' ').slice(0, 200));
+  await p.click('#fcs [data-a=evo-open][data-i="0"]');
+  await p.click('#fcs [data-a=evo-preview][data-i="0"]');
+  await idle(p, 60000);
+  check('evolution preview shows final rating', /→ 87/.test(await p.textContent('#fcs [data-r=evos]')));
 
   // ---- Formation coach
   await p.click('#fcs [data-tab=squad]');

@@ -39,7 +39,12 @@ function installMock() {
   const p = await (await b.newContext({ viewport: { width: 1280, height: 900 } })).newPage();
   const errors = [];
   p.on('pageerror', (e) => errors.push(e.message));
-  p.on('dialog', (d) => d.accept());
+  let restoreText = null; let promptBackup = null;
+  p.on('dialog', (d) => {
+    if (d.type() === 'prompt' && d.defaultValue()) { promptBackup = d.defaultValue(); return d.accept(); }
+    if (d.type() === 'prompt' && restoreText) return d.accept(restoreText);
+    return d.accept();
+  });
   await p.route('http://fake.test/**', (r) => r.fulfill({ contentType: 'text/html', body: '<html><head><meta charset=utf-8></head><body style="background:#1d2b3a"></body></html>' }));
   await p.goto('http://fake.test/');
   await p.evaluate(installMock);
@@ -89,6 +94,30 @@ function installMock() {
   check('orange theme applies', await p.evaluate(() => document.getElementById('fcs').classList.contains('orange')));
   await p.click('#fcs [data-tab=snipe]');
   await p.screenshot({ path: `${S}/filters-orange.png` });
+  // Backup → change settings → restore → reload keeps the log
+  await p.click('#fcs [data-tab=settings]');
+  await p.click('#fcs [data-a=backup]');
+  await p.waitForTimeout(500);
+  let backup = promptBackup;
+  if (!backup) backup = await p.evaluate(() => navigator.clipboard.readText().catch(() => null));
+  let bj = null; try { bj = JSON.parse(backup); } catch { /* checked below */ }
+  check('backup holds config, history and log', bj && bj.app === 'fc-sniper' && bj.config.filters.length === 2 && bj.config.theme === 'orange' && Array.isArray(bj.log) && bj.log.length > 3, backup && backup.slice(0, 80));
+  await p.selectOption('#fcs [data-k=theme]', 'green');
+  await p.evaluate(() => { const c = JSON.parse(localStorage.getItem('fc-sniper:config')); c.filters = []; localStorage.setItem('fc-sniper:config', JSON.stringify(c)); });
+  restoreText = backup;
+  await p.click('#fcs [data-a=restore]');
+  await p.waitForTimeout(300);
+  const rc = await p.evaluate(() => JSON.parse(localStorage.getItem('fc-sniper:config')));
+  check('restore brings back filters and theme', rc.filters.length === 2 && rc.theme === 'orange' && (await log()).some((l) => /Backup from .* restored/.test(l)), `${rc.filters.length} filters, ${rc.theme}`);
+  const before = (await log()).length;
+  await p.reload();
+  await p.evaluate(installMock);
+  await p.evaluate(() => { /* keep the restored config, not the mock's */ });
+  await p.addScriptTag({ content: SCRIPT });
+  await p.waitForSelector('#fcs');
+  const after = await log();
+  check('log survives a reload', after.some((l) => /Backup from .* restored/.test(l)) && after.length >= before, `${before} → ${after.length} lines`);
+  await p.click('#fcs [data-a=log-clear]').catch(() => {});
   check('no page errors', !errors.length, errors.join('; '));
   console.log('log:\n  ' + (await log()).join('\n  '));
   await b.close();
