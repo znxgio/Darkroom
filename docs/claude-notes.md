@@ -60,6 +60,8 @@ Newest learnings go at the end of each section. Dates are when the note was writ
   `services.EventToken` holds token balances; `EVENT_TOKEN_1` = "Gallery Token", `EVENT_TOKEN_2` = "Champions Token".
 - The Web App has 38 services (list in the gallery-probe log). Unknown APIs: probe read-only (list methods + short source, call only request/get).
 - "Logged out (403)" can appear after heavy activity; logging in again fixes it.
+- Bidding: EA takes the coins off your balance as soon as you bid (user confirmed 2026-11-11), and gives them back if you're outbid.
+- Auction bidding (`bidSnipe`) is OFF by default; the user had only ever seen Buy Now. Keep it off until the 2.4.0 bid spend guard ships.
 
 ## 5. Bugs we hit and why (lessons)
 - Club read 0 players: reply was in `response`, not `data`.
