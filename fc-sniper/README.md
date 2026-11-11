@@ -26,6 +26,9 @@ the Companion app. Updates install automatically.
 | | |
 |---|---|
 | **Priority list** | Add players by name or ID, in order. All are hunted at once (higher on the list wins ties), each is bought once and ticked off, and the bot stops when the list is done or your **spend limit** is reached. Optional: keep coins for players higher on the list. |
+| **Search filters** | Multi-filter search: save filters by quality, rarity (names read from the Web App), league, nation, club, position and **rating range** ("snipe by rating"), switch them on and off, and they're hunted together with your priority list. **Price** finds the going rate for a whole filter and sets the max buy under it. |
+| **Profit calculator** | Trade tab: buy and sell price → what you get after EA's 5% tax, profit and break-even. |
+| **Accent colour** | Green or orange (Settings → Look & notifications). |
 | **Fill from team needs** | Reads your squad, finds affordable upgrades (by meta stats and chemistry) for your weakest spots, and adds the best one per spot to the list with a max buy under its cheapest listing. |
 | **Price check** | Finds each player's market price from the 5 cheapest Buy Now listings of the base card. |
 | **Auto max buy** | Snipes a set % under the average (default 10%), never more than your coins minus *Keep coins*. Tap a price to set your own. |

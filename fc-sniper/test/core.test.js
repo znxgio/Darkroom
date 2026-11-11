@@ -782,3 +782,18 @@ test('planPoints: spare cards first by value per point, then cheapest coins per 
   assert.equal(c.planPoints(0, club, market).cards, 0);
   assert.equal(c.planPoints(30000, Array.from({ length: 45 }, (_, i) => ({ id: i, points: 280, cost: 1000 })), []).handIns, 3);
 });
+
+// ---- multi-filter search -------------------------------------------------------------
+
+test('pickTargets respects a rating range', () => {
+  const L = [{ tradeId: 1, buyNowPrice: 900, rating: 83 }, { tradeId: 2, buyNowPrice: 800, rating: 85 }, { tradeId: 3, buyNowPrice: 700, rating: 87 }];
+  assert.deepEqual(c.pickTargets(L, { maxBuy: 1000, minRating: 84, maxRating: 86 }, 5000).map((l) => l.tradeId), [2]);
+});
+
+test('filterSummary and sniperTargets', () => {
+  assert.equal(c.filterSummary({ level: 'gold', rarity: '1', league: 13, minRating: 84, maxRating: 86, position: 'ST' }, { rarity: 'Rare' }), 'Gold · Rare · Premier League · 84–86 · ST');
+  assert.equal(c.filterSummary({}), 'Any player');
+  assert.equal(c.filterSummary({ minRating: 85 }), '85+');
+  const cfg = { players: [{ id: 1 }], filters: [{ id: 'f1', on: true }, { id: 'f2', on: false }] };
+  assert.deepEqual(c.sniperTargets(cfg).map((t) => t.id), [1, 'f1']);
+});

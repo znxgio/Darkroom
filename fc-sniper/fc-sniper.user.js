@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FC Sniper
 // @namespace    https://github.com/znxgio/darkroom
-// @version      1.8.0
+// @version      1.9.0
 // @description  Sniper, pack opener, SBC solver and team upgrade advisor for the EA SPORTS FC Ultimate Team Web App, with built-in safety limits.
 // @match        https://www.ea.com/*ultimate-team/web-app*
 // @match        https://www.ea.com/ea-sports-fc/ultimate-team/web-app*
@@ -119,6 +119,7 @@
     return listings
       .filter((l) => l.buyNowPrice > 0 && l.buyNowPrice <= cfg.maxBuy)
       .filter((l) => !cfg.minRating || (l.rating || 0) >= cfg.minRating)
+      .filter((l) => !cfg.maxRating || (l.rating || 0) <= cfg.maxRating)
       .filter((l) => l.buyNowPrice <= coins)
       .sort((a, b) => a.buyNowPrice - b.buyNowPrice)
       .slice(0, Math.max(1, cfg.maxBuysPerSearch || 1));
@@ -395,6 +396,27 @@
     }
     scored.sort((a, b) => b[0] - a[0] || b[1].rating - a[1].rating || a[1].name.localeCompare(b[1].name));
     return scored.slice(0, limit).map(([, p]) => p);
+  }
+
+  /** Common leagues by EA id (names shown when the Web App can't name them). */
+  const LEAGUES = { 13: 'Premier League', 53: 'LALIGA', 19: 'Bundesliga', 31: 'Serie A', 16: 'Ligue 1', 10: 'Eredivisie', 308: 'Liga Portugal', 14: 'Championship', 68: 'Süper Lig', 4: '1A Pro League', 39: 'MLS', 350: 'Saudi Pro League', 2118: 'Icons' };
+
+  /** One-line description of a search filter, e.g. "Gold · Rare · Premier League · 84–86 · ST". */
+  function filterSummary(f, names = {}) {
+    const parts = [];
+    if (f.level && f.level !== 'any') parts.push(f.level[0].toUpperCase() + f.level.slice(1));
+    if (f.rarity !== '' && f.rarity !== undefined && f.rarity !== null) parts.push(names.rarity || `rarity ${f.rarity}`);
+    if (f.league) parts.push(names.league || LEAGUES[f.league] || `league ${f.league}`);
+    if (f.nation) parts.push(names.nation || `nation ${f.nation}`);
+    if (f.club) parts.push(names.club || `club ${f.club}`);
+    if (f.minRating || f.maxRating) parts.push(f.minRating && f.maxRating ? (f.minRating === f.maxRating ? `${f.minRating}` : `${f.minRating}–${f.maxRating}`) : f.minRating ? `${f.minRating}+` : `≤ ${f.maxRating}`);
+    if (f.position) parts.push(f.position);
+    return parts.join(' · ') || 'Any player';
+  }
+
+  /** What the sniper hunts each round: your priority list, then every active search filter. */
+  function sniperTargets(cfg) {
+    return [...(cfg.players || []), ...(cfg.filters || []).filter((f) => f.on)];
   }
 
   /** Players are searched in rotation, one per search request. */
@@ -1233,6 +1255,8 @@
     maxBuy: 1000, // used when a player has no price
     maxBuysPerSearch: 1,
     minCoins: 0, // never spend below this balance
+    filters: [], // saved search filters: [{ id, kind: 'filter', name, on, level, rarity, position, league, nation, club, minRating, maxRating, manualMax, maxBuy, avg }]
+    theme: 'green', // accent colour: green | orange
     spendLimit: 0, // priority list: total coins to spend (0 = all but Keep coins)
     listSpent: 0, // spent on the list so far (reset from the Snipe tab)
     buyOnce: true, // take a player off the list once bought
@@ -1291,7 +1315,7 @@
     EA_TAX, MIN_PRICE, MAX_PRICE, DEFAULT_CONFIG,
     priceStep, roundPrice, nextPrice, prevPrice, afterTax, profit, breakEvenSell,
     cacheBustBid, jitter, pickTargets, planSellPrice, classifyStatus,
-    normalizeName, parsePlayerDb, searchPlayers, playerForIteration, migrateConfig,
+    normalizeName, parsePlayerDb, searchPlayers, playerForIteration, migrateConfig, filterSummary, sniperTargets, LEAGUES,
     findMarketPrice, planMaxBuy, effectiveMaxBuy, flipPlan, tradeOpts, bidAmount, settleSales,
     listSpendable, reserveOk, afterListBuy,
     aggregateListings, hotScore, rankHot,
@@ -1313,7 +1337,7 @@
 
   const w = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '1.8.0';
+  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '1.9.0';
   const errText = (e) => (e && e.message ? e.message : String(e));
   const fmt = (n) => Number(n || 0).toLocaleString();
 
@@ -1378,14 +1402,17 @@
     criteria(cfg, player, maxBuy, iteration, maxBid) {
       const c = new w.UTSearchCriteriaDTO();
       c.type = 'player';
-      // maskedDefId matches every version of the player, like the Web App's own name search.
-      if (player) c.maskedDefId = player.id;
-      if (cfg.level && cfg.level !== 'any') c.level = cfg.level;
-      if (cfg.rarity) c.rarities = [parseInt(cfg.rarity, 10)];
-      if (cfg.position) c._position = cfg.position;
-      if (cfg.nation) c.nation = parseInt(cfg.nation, 10);
-      if (cfg.league) c.league = parseInt(cfg.league, 10);
-      if (cfg.club) c.club = parseInt(cfg.club, 10);
+      // A search filter carries its own settings; a player is searched by id
+      // (maskedDefId matches every version of the player, like the Web App's name search).
+      const isFilter = player && player.kind === 'filter';
+      const src = isFilter ? player : cfg;
+      if (player && !isFilter) c.maskedDefId = player.id;
+      if (src.level && src.level !== 'any') c.level = src.level;
+      if (src.rarity !== '' && src.rarity !== undefined && src.rarity !== null && !Number.isNaN(parseInt(src.rarity, 10))) c.rarities = [parseInt(src.rarity, 10)];
+      if (src.position) { c._position = src.position; if (isFilter) c.position = src.position; }
+      if (src.nation) c.nation = parseInt(src.nation, 10);
+      if (src.league) c.league = parseInt(src.league, 10);
+      if (src.club) c.club = parseInt(src.club, 10);
       if (maxBuy) c.maxBuy = roundPrice(maxBuy);
       if (maxBid) c.maxBid = roundPrice(maxBid);
       // Changing a filter that doesn't matter makes EA send fresh results.
@@ -1426,6 +1453,23 @@
       const res = await observe(w.services.Item.list(item, prevPrice(sellPrice), sellPrice, duration));
       return { ok: !!res.success, status: res.status };
     },
+    /** Rarities by name, read from the Web App's own search screen (fallback: rare/common). */
+    rarityOptions() {
+      try {
+        const dp = w.factories && w.factories.DataProvider;
+        if (dp && typeof dp.getItemRarityDP === 'function') {
+          const list = dp.getItemRarityDP({ itemSubTypes: [w.ItemSubType && w.ItemSubType.PLAYER], itemTypes: [w.ItemType && w.ItemType.PLAYER], quality: w.SearchLevel && w.SearchLevel.ANY, tradableOnly: false }) || [];
+          const out = list.map((e) => ({ v: String(e.value ?? e.id), l: String(e.label ?? e.value) })).filter((o) => o.v !== '' && o.v !== 'undefined' && o.v !== '-1');
+          if (out.length) return out;
+        }
+      } catch { /* fall back */ }
+      return [{ v: '1', l: 'Rare' }, { v: '0', l: 'Common' }];
+    },
+    leagueName(id) {
+      try { const n = w.UTLocalizationUtil.leagueIdToName(Number(id), w.services.Localization); if (n && !/^\d+$/.test(n)) return n; } catch { /* ignore */ }
+      return LEAGUES[id] || `League ${id}`;
+    },
+
     // -- items, club, squad, packs, SBC --
 
     pileFull(pile) {
@@ -1917,13 +1961,27 @@
       };
     },
 
+    /** Search function for pricing a whole filter (e.g. "84–86 Premier League golds"). */
+    filterSearch(f) {
+      let first = true;
+      return async (maxBuy) => {
+        if (!first) await sleep(jitter(this.cfg.delayMin, this.cfg.delayMax));
+        first = false;
+        const res = await fut.search(fut.criteria({}, f, maxBuy));
+        this.countUsage('searches');
+        if (res.ok) res.listings = res.listings.filter((l) => (!f.minRating || l.rating >= f.minRating) && (!f.maxRating || l.rating <= f.maxRating));
+        return res;
+      };
+    },
+
     /** Price-check players and set their max buy. Returns false if EA pushed back. */
     async priceCheck(players) {
       for (const player of players) {
         const gate = this.gate();
         if (!gate.ok) { ui.log(`Price check skipped — ${gate.reason}`, 'err'); return false; }
         this.setStatus('pricing', `Checking ${player.name}…`);
-        const r = await findMarketPrice(this.priceSearch(player), { defId: player.id });
+        const isFilter = player.kind === 'filter';
+        const r = await findMarketPrice(isFilter ? this.filterSearch(player) : this.priceSearch(player), { defId: isFilter ? undefined : player.id });
         if (!r.ok) {
           const kind = classifyStatus(r.status);
           if (kind === 'captcha' || kind === 'throttled') { this.lock(kind, `EA pushback during price check (${r.status})`); sounds.alarm(); return false; }
@@ -1953,11 +2011,11 @@
     async checkPricesNow() {
       if (this.running || this.busy) return;
       if (!fut.ready()) { ui.log('Web App not ready — log in first', 'err'); return; }
-      if (!this.cfg.players.length) { ui.log('Add a player first', 'warn'); return; }
+      if (!sniperTargets(this.cfg).length) { ui.log('Add a player or turn on a filter first', 'warn'); return; }
       this.busy = true; ui.setBusy(true);
       this.safety = store.get(KEYS.safety, {});
       try {
-        await this.priceCheck(this.cfg.players);
+        await this.priceCheck(sniperTargets(this.cfg));
       } catch (e) {
         ui.log(`Price check error: ${errText(e)}`, 'err');
       } finally {
@@ -1983,8 +2041,8 @@
       if (changed.length) ui.log(`Raised to safe minimums: ${changed.join(', ')}`, 'warn');
       this.cfg = cfg; this.save(); ui.syncForm();
       const hasFilter = cfg.level !== 'any' || cfg.rarity || cfg.position || cfg.nation || cfg.league || cfg.club || cfg.minRating > 0;
-      if (!cfg.players.length && !hasFilter) {
-        ui.log('Add a player (or set a filter) first — otherwise it would buy any card under your max', 'warn');
+      if (!sniperTargets(cfg).length && !hasFilter) {
+        ui.log('Add a player or turn on a search filter first — otherwise it would buy any card under your max', 'warn');
         ui.toast('Add a player first — ▶ starts the sniper', 'alert');
         return;
       }
@@ -1999,8 +2057,8 @@
 
       try {
         if (cfg.autoRelist) await this.tidy();
-        if (this.running && cfg.autoPrice && cfg.players.length) {
-          const stale = cfg.players.filter((p) => !p.manualMax && (!p.checkedAt || Date.now() - p.checkedAt > 15 * 60e3));
+        if (this.running && cfg.autoPrice && sniperTargets(cfg).length) {
+          const stale = sniperTargets(cfg).filter((p) => !p.manualMax && (!p.checkedAt || Date.now() - p.checkedAt > 15 * 60e3));
           if (stale.length) {
             const ok = await this.priceCheck(stale);
             this.save(); ui.renderPlayers();
@@ -2010,8 +2068,8 @@
           }
         }
         if (!this.running) return;
-        const who = cfg.players.length
-          ? cfg.players.map((p) => {
+        const who = sniperTargets(cfg).length
+          ? sniperTargets(cfg).map((p) => {
             const { maxBuy, plan } = this.planFor(p);
             return plan ? `${p.name} (buy ≤ ${fmt(maxBuy)} → sell ${fmt(plan.sell)})` : `${p.name} ≤ ${fmt(maxBuy)}`;
           }).join(', ')
@@ -2041,7 +2099,7 @@
       let errors = 0;
       let i = 0;
       let fullWarned = false;
-      this.listStarted = cfg.players.length > 0;
+      this.listStarted = sniperTargets(cfg).length > 0;
       this.reserveWarned = new Set();
       this.nextUpkeep = cfg.mode === 'trade' ? Date.now() : Date.now() + cfg.upkeepMinutes * 60e3;
 
@@ -2057,7 +2115,7 @@
         const spendable = listMode ? listSpendable(cfg, fut.coins()) : fut.coins() - cfg.minCoins;
         if (listMode && cfg.spendLimit > 0 && spendable < MIN_PRICE) { await this.finishBids(); return this.stop(`spend limit reached (${fmt(cfg.listSpent)} of ${fmt(cfg.spendLimit)})`); }
         if (cfg.mode !== 'alert' && spendable < MIN_PRICE) return this.stop('not enough coins');
-        if (listMode && this.listStarted && !cfg.players.length) { await this.finishBids(); return this.stop('priority list complete 🎉'); }
+        if (listMode && this.listStarted && !sniperTargets(cfg).length) { await this.finishBids(); return this.stop('priority list complete 🎉'); }
 
         // Transfer list upkeep (Trade mode, or when bids are waiting to be collected).
         if ((cfg.mode === 'trade' || this.bids.size) && Date.now() >= this.nextUpkeep) {
@@ -2066,8 +2124,8 @@
           if (!this.running) return;
         }
 
-        const player = playerForIteration(cfg.players, i);
-        // Prices drift — refresh a player's average during long sessions.
+        const player = playerForIteration(sniperTargets(cfg), i);
+        // Prices drift — refresh a player's (or filter's) average during long sessions.
         if (player && cfg.autoPrice && !player.manualMax && Date.now() - (player.checkedAt || 0) > cfg.repriceMinutes * 60e3) {
           const ok = await this.priceCheck([player]);
           this.save(); ui.renderPlayers(); ui.renderTrade();
@@ -2084,7 +2142,7 @@
             ui.log(`${player.name}: no profitable buy price yet (needs a price check, or Min profit is too high) — skipping`, 'warn');
           }
           i++;
-          if (cfg.players.every((p) => skipped.has(p.id))) return this.stop('no player can be traded for profit — check prices / Min profit');
+          if (sniperTargets(cfg).every((p) => skipped.has(p.id))) return this.stop('no player or filter can be traded for profit — check prices / Min profit');
           continue;
         }
         const tradeFull = cfg.mode === 'trade' && fut.transferSpace() <= 0;
@@ -2111,7 +2169,8 @@
           if (!tradeFull) await this.bidOn(res.listings, player, maxBuy, plan, spendable);
         } else {
           errors = 0;
-          const targets = pickTargets(res.listings, { ...cfg, maxBuy }, cfg.mode === 'alert' ? Infinity : spendable);
+          const range = player && player.kind === 'filter' ? { minRating: player.minRating || 0, maxRating: player.maxRating || 0 } : {};
+          const targets = pickTargets(res.listings, { ...cfg, ...range, maxBuy }, cfg.mode === 'alert' ? Infinity : spendable);
           for (const t of targets) {
             if (!this.running) break;
             if (cfg.mode === 'alert') {
@@ -2206,7 +2265,7 @@
       if (cfg.mode === 'buy' && player) {
         Object.assign(cfg, afterListBuy(cfg, player.id, info.price));
         this.save();
-        if (cfg.buyOnce) ui.log(`${player.name} ticked off your list${cfg.players.length ? ` — ${cfg.players.length} left` : ''}`, 'ok');
+        if (cfg.buyOnce && player.kind !== 'filter') ui.log(`${player.name} ticked off your list${cfg.players.length ? ` — ${cfg.players.length} left` : ''}`, 'ok');
         ui.renderPlayers();
       }
       ui.renderStats(); ui.renderHistory(); ui.renderTrade();
@@ -3445,6 +3504,7 @@
       ['maxActiveBids', 'Open bids at once', 'number'],
     ],
     notify: [
+      ['theme', 'Accent colour', 'select', OPT([['green', 'Green'], ['orange', 'Orange']])],
       ['sound', 'Sound & vibration', 'toggle'],
       ['discordWebhook', 'Discord webhook', 'text', 'https://discord.com/api/webhooks/…'],
     ],
@@ -3510,7 +3570,17 @@
   #fcs .fold{width:30px;height:32px;display:grid;place-items:center;color:var(--muted);border-radius:8px;transition:transform .2s}
   #fcs.min .fold{transform:rotate(180deg)}
 
+  #fcs.orange{--green:#ff7a1a;--green-ink:#1f0b00;--blue:#ffb066}
+  #fcs.orange .logo{background:linear-gradient(135deg,#ff8a2a,#c74507);color:#1f0b00}
   #fcs .hd,#fcs .tabs{flex:none}
+  #fcs .frow{display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--line)}
+  #fcs .frow:last-child{border-bottom:0}
+  #fcs .frow .t{flex:1;min-width:0}#fcs .frow .t b{display:block;font-weight:600}#fcs .frow .t small{display:block;color:var(--dim);font-size:11.5px}
+  #fcs .frow.off .t{opacity:.5}
+  #fcs .sw{width:36px;height:22px;border-radius:999px;background:var(--card2);border:1px solid var(--line);position:relative;flex:none}
+  #fcs .sw::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:var(--muted);transition:.2s}
+  #fcs .sw.on{background:var(--green);border-color:var(--green)}#fcs .sw.on::after{left:16px;background:#fff}
+  #fcs .fed{background:var(--card2);border:1px solid var(--line);border-radius:10px;padding:8px 10px;margin:8px 0}
   #fcs .tabs{display:grid;grid-template-columns:repeat(4,1fr);gap:4px;padding:2px 10px 10px;border-bottom:1px solid var(--line)}
   #fcs .tabs button{padding:7px 2px;color:var(--muted);font-weight:600;font-size:12px;border-radius:8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   #fcs .tabs button.on{color:var(--text);background:var(--card2);box-shadow:inset 0 -2px 0 var(--green)}
@@ -3682,6 +3752,11 @@
               ${FIELDS.list.map(fieldHtml).join('')}
               <p class="note">All players are hunted at once; higher on the list wins ties. Tap a price to set your own max buy, ↑↓ to reorder. “Fill from team needs” adds snipes for your squad’s weakest spots.</p>
             </div>
+            <div class="card"><h4>Search filters</h4>
+              <div data-r="filters"></div>
+              <div data-r="fedit" hidden></div>
+              <button class="btn blue" data-a="filter-new">+ Add a search filter</button>
+              <p class="note">Snipe by quality, rarity, league, nation, club, position and rating range. Every filter that’s switched on is hunted together with your priority list. “Price” finds the going rate for the whole filter and sets the max buy under it.</p></div>
             <div class="card">${FIELDS.snipe.map(fieldHtml).join('')}
               <p class="note"><b>Buy</b> snipes cards under your max. <b>Trade</b> buys under value and relists for profit (see Trade). <b>Alert</b> only notifies you.</p></div>
             <div class="card"><h4>This session</h4>
@@ -3702,6 +3777,10 @@
               <button class="btn" data-a="upkeep">Check transfer list now</button>
               <p class="note">For each player on the Snipe tab it lists a little under the market average so cards sell, and only buys low enough to keep your min profit after EA’s 5% tax. Every few minutes it records sales, clears sold items, relists expired ones, and pauses buying when your transfer list is full. Same safety limits as sniping.</p></div>
             <div class="card"><h4>Trade settings</h4>${FIELDS.trade.map(fieldHtml).join('')}</div>
+            <div class="card"><h4>Profit calculator</h4>
+              <label class="row"><span>Buy for</span><input type="number" inputmode="numeric" data-r="pc-buy" placeholder="e.g. 45000"></label>
+              <label class="row"><span>Sell for</span><input type="number" inputmode="numeric" data-r="pc-sell" placeholder="e.g. 50000"></label>
+              <p class="note" data-r="pc-out">EA keeps 5% of every sale.</p></div>
             <div class="card"><h4>Hot card settings</h4>${FIELDS.hot.map(fieldHtml).join('')}
               <p class="note">League IDs: 13 Premier League, 53 LaLiga, 19 Bundesliga, 31 Serie A, 16 Ligue 1.</p></div>
           </section>
@@ -3745,7 +3824,7 @@
             <div class="card"><h4>Safety limits</h4>${FIELDS.safety.map(fieldHtml).join('')}
               <p class="note">Minimums are enforced. A captcha locks the bot for 3 h, a market limit for 24 h.</p>
               <p class="note" data-r="lock"></p></div>
-            <div class="card"><h4>Notifications</h4>${FIELDS.notify.map(fieldHtml).join('')}
+            <div class="card"><h4>Look & notifications</h4>${FIELDS.notify.map(fieldHtml).join('')}
               <button class="btn" data-a="discord-test">Send test notification</button></div>
           </section>
         </div>`;
@@ -3753,6 +3832,7 @@
       this.root = root;
 
       if (isMobile()) root.classList.add('mob', 'min');
+      root.classList.toggle('orange', engine.cfg.theme === 'orange');
       this.bind();
       this.mountPicker();
       this.showTab(this.tab);
@@ -3780,6 +3860,24 @@
           case 'toggle': return engine.toggle();
           case 'fold': return root.classList.toggle('min');
           case 'price': return engine.checkPricesNow();
+          case 'filter-new': if (!engine.running) this.editFilter(-1); return;
+          case 'filter-cancel': return this.editFilter(null);
+          case 'filter-save': return this.saveFilter();
+          case 'filter-del': {
+            const i = Number(btn.dataset.i);
+            if (engine.running || !w.confirm(`Delete “${engine.cfg.filters[i].name}”?`)) return;
+            engine.cfg.filters = engine.cfg.filters.filter((_, k) => k !== i);
+            engine.save(); this.editFilter(null); return this.renderFilters();
+          }
+          case 'filter-price': {
+            const f = engine.cfg.filters[Number(btn.dataset.i)];
+            this.editFilter(null);
+            if (!f || engine.running || engine.busy || jobs.current) return;
+            engine.busy = true; this.setBusy(true);
+            return engine.priceCheck([f]).catch((e) => this.log(`Price check error: ${errText(e)}`, 'err')).finally(() => {
+              engine.save(); engine.busy = false; this.setBusy(false); engine.setStatus('idle', 'Idle'); this.renderFilters();
+            });
+          }
           case 'analyse': return upgrades.analyse();
           case 'autofill': this.commit(); return upgrades.autofill();
           case 'spend-reset':
@@ -3846,6 +3944,18 @@
         }
       });
       root.addEventListener('change', (e) => { if (e.target.dataset.k) this.commit(); });
+      root.addEventListener('input', (e) => {
+        if (!e.target.closest('[data-r=pc-buy], [data-r=pc-sell]')) return;
+        const b = Number(this.q('[data-r=pc-buy]').value) || 0;
+        const sl = Number(this.q('[data-r=pc-sell]').value) || 0;
+        const out = this.q('[data-r=pc-out]');
+        if (!b && !sl) { out.textContent = 'EA keeps 5% of every sale.'; return; }
+        const parts = [];
+        if (sl) parts.push(`You get ${fmt(afterTax(sl))} after tax`);
+        if (b && sl) { const pr = profit(b, sl); parts.push(`<b class="${pr >= 0 ? 'up' : 'down'}">${pr >= 0 ? '+' : ''}${fmt(pr)} profit</b> (${((pr / b) * 100).toFixed(1)}%)`); }
+        if (b) parts.push(`break-even: sell for ${fmt(breakEvenSell(b, 1))}`);
+        out.innerHTML = parts.join(' · ');
+      });
       document.addEventListener('keydown', (e) => {
         if (e.altKey && e.key.toLowerCase() === 's') { e.preventDefault(); engine.toggle(); }
       });
@@ -3897,6 +4007,7 @@
       });
       engine.cfg = cfg;
       engine.save();
+      this.root.classList.toggle('orange', cfg.theme === 'orange');
       this.renderStatus();
     },
 
@@ -3972,6 +4083,22 @@
           engine.save(); this.renderPlayers();
           return;
         }
+        const fon = e.target.closest('[data-fon]');
+        if (fon && !engine.running) {
+          const f = engine.cfg.filters[Number(fon.dataset.fon)];
+          f.on = !f.on; engine.save(); this.renderFilters(); return;
+        }
+        const fedit = e.target.closest('[data-fedit]');
+        if (fedit && !engine.running) return this.editFilter(Number(fedit.dataset.fedit));
+        const fmax = e.target.closest('[data-fmax]');
+        if (fmax && !engine.running) {
+          const f = engine.cfg.filters[Number(fmax.dataset.fmax)];
+          const v = w.prompt(`Max buy for “${f.name}”.${f.avg ? ` Going rate is ${fmt(f.avg)}.` : ''}\nLeave empty to use the price check.`, f.manualMax || '');
+          if (v === null) return;
+          const n = parseInt(String(v).replace(/[^\d]/g, ''), 10);
+          f.manualMax = n >= MIN_PRICE ? roundPrice(n) : 0;
+          engine.save(); this.renderFilters(); return;
+        }
         const up = e.target.closest('[data-up]');
         const down = e.target.closest('[data-down]');
         if ((up || down) && !engine.running) {
@@ -4002,7 +4129,75 @@
       this.log(p.manualMax ? `${p.name}: max buy set to ${fmt(p.manualMax)}` : `${p.name}: back to automatic price`, 'muted');
     },
 
+    renderFilters() {
+      const box = this.q('[data-r=filters]');
+      if (!box) return;
+      const rar = new Map(fut.ready() ? fut.rarityOptions().map((o) => [o.v, o.l]) : []);
+      const list = engine.cfg.filters || [];
+      box.innerHTML = list.length ? list.map((f, i) => {
+        const max = f.manualMax || f.maxBuy || engine.cfg.maxBuy;
+        const names = { rarity: rar.get(String(f.rarity)), league: f.league ? fut.leagueName(f.league) : '' };
+        return `<div class="frow${f.on ? '' : ' off'}"><button class="sw${f.on ? ' on' : ''}" data-fon="${i}" aria-label="On/off"></button>
+          <span class="t"><b>${esc(f.name || 'Filter')}</b>${(() => { const sm = filterSummary(f, names); const sub = [sm !== f.name ? esc(sm) : '', f.avg ? `avg ${fmt(f.avg)}` : ''].filter(Boolean).join(' · '); return sub ? `<small>${sub}</small>` : ''; })()}</span>
+          <button class="mx${f.manualMax ? ' manual' : ''}" data-fmax="${i}">≤ ${fmt(max)}</button>
+          <button class="mini" data-fedit="${i}">Edit</button></div>`;
+      }).join('') : '<p class="empty">No search filters yet</p>';
+    },
+
+    /** Inline editor for a search filter (new or existing). */
+    editFilter(i) {
+      const box = this.q('[data-r=fedit]');
+      if (i === null) { box.hidden = true; box.innerHTML = ''; return; }
+      const f = i >= 0 ? engine.cfg.filters[i] : { name: '', level: 'gold', rarity: '1', position: '', league: '', nation: '', club: '', minRating: 0, maxRating: 0, manualMax: 0, on: true };
+      const rar = fut.ready() ? fut.rarityOptions() : [{ v: '1', l: 'Rare' }, { v: '0', l: 'Common' }];
+      const opt = (list, v) => list.map((o) => `<option value="${esc(o.v)}" ${String(v ?? '') === String(o.v) ? 'selected' : ''}>${esc(o.l)}</option>`).join('');
+      const leagues = [{ v: '', l: 'Any league' }, ...Object.keys(LEAGUES).map((id) => ({ v: id, l: fut.ready() ? fut.leagueName(id) : LEAGUES[id] }))];
+      if (f.league && !LEAGUES[f.league]) leagues.push({ v: String(f.league), l: `League ${f.league}` });
+      box.hidden = false;
+      box.innerHTML = `<div class="fed" data-fi="${i}">
+        <label class="row"><span>Name</span><input data-ff="name" value="${esc(f.name)}" placeholder="e.g. 84–86 PL golds"></label>
+        <label class="row"><span>Quality</span><select data-ff="level">${opt(OPT([['any', 'Any'], ['gold', 'Gold'], ['silver', 'Silver'], ['bronze', 'Bronze']]), f.level)}</select></label>
+        <label class="row"><span>Rarity</span><select data-ff="rarity">${opt([{ v: '', l: 'Any rarity' }, ...rar], f.rarity)}</select></label>
+        <label class="row"><span>League</span><select data-ff="league">${opt(leagues, f.league)}</select></label>
+        <label class="row"><span>Position</span><select data-ff="position">${opt(POSITIONS, f.position)}</select></label>
+        <label class="row"><span>Rating from</span><input type="number" inputmode="numeric" data-ff="minRating" value="${f.minRating || ''}" placeholder="e.g. 84"></label>
+        <label class="row"><span>Rating to</span><input type="number" inputmode="numeric" data-ff="maxRating" value="${f.maxRating || ''}" placeholder="e.g. 86"></label>
+        <label class="row"><span>Nation ID</span><input type="number" inputmode="numeric" data-ff="nation" value="${f.nation || ''}"></label>
+        <label class="row"><span>Club ID</span><input type="number" inputmode="numeric" data-ff="club" value="${f.club || ''}"></label>
+        <label class="row"><span>Max buy (0 = from Price)</span><input type="number" inputmode="numeric" data-ff="manualMax" value="${f.manualMax || ''}"></label>
+        <div class="two"><button class="btn go-btn" data-a="filter-save">Save</button><button class="btn" data-a="filter-cancel">Cancel</button></div>
+        ${i >= 0 ? `<div class="two"><button class="btn blue" data-a="filter-price" data-i="${i}">Price this filter</button><button class="btn red" data-a="filter-del" data-i="${i}">Delete</button></div>` : ''}
+      </div>`;
+    },
+
+    saveFilter() {
+      const box = this.q('[data-r=fedit] .fed');
+      if (!box) return;
+      const i = Number(box.dataset.fi);
+      const val = (k) => box.querySelector(`[data-ff=${k}]`).value.trim();
+      const num = (k) => Number(val(k)) || 0;
+      const prev = i >= 0 ? engine.cfg.filters[i] : {};
+      const f = {
+        ...prev, kind: 'filter', id: prev.id || `f${Date.now().toString(36)}`, on: prev.on ?? true,
+        level: val('level'), rarity: val('rarity'), league: num('league') || '', position: val('position'),
+        nation: num('nation') || '', club: num('club') || '', minRating: num('minRating'), maxRating: num('maxRating'),
+        manualMax: num('manualMax') >= MIN_PRICE ? roundPrice(num('manualMax')) : 0,
+      };
+      // changed filters need a fresh price
+      if (['level', 'rarity', 'league', 'position', 'nation', 'club', 'minRating', 'maxRating'].some((k) => String(prev[k] ?? '') !== String(f[k] ?? ''))) { delete f.avg; delete f.maxBuy; delete f.checkedAt; }
+      const rar = new Map(fut.ready() ? fut.rarityOptions().map((o) => [o.v, o.l]) : []);
+      f.name = val('name') || filterSummary(f, { rarity: rar.get(String(f.rarity)), league: f.league ? fut.leagueName(f.league) : '' });
+      const list = (engine.cfg.filters || []).slice();
+      if (i >= 0) list[i] = f; else list.push(f);
+      engine.cfg.filters = list;
+      engine.save();
+      this.editFilter(null);
+      this.renderFilters();
+      this.log(`Search filter saved: ${f.name}`, 'muted');
+    },
+
     renderPlayers() {
+      this.renderFilters();
       const cfg = engine.cfg;
       const sp = this.q('[data-r=spend]');
       if (sp) {
@@ -4271,7 +4466,7 @@
       go.setAttribute('aria-label', on ? 'Stop' : 'Start');
       this.tick();
       this.qa('[data-k] , [data-k] button, [data-r=pq], [data-a=price]').forEach((el) => { el.disabled = on; });
-      this.qa('[data-a=trade-start], [data-a=hot-scan], [data-a=hot-top], [data-a=hot-add], [data-a=autofill], [data-up], [data-down]').forEach((el) => { el.disabled = on; });
+      this.qa('[data-a=trade-start], [data-a=hot-scan], [data-a=hot-top], [data-a=hot-add], [data-a=autofill], [data-up], [data-down], [data-fon], [data-fedit], [data-fmax], [data-a=filter-new]').forEach((el) => { el.disabled = on; });
       const ts = this.q('[data-a=trade-start]');
       if (ts) ts.textContent = on ? (engine.cfg.mode === 'trade' ? 'Trading… (■ to stop)' : 'Sniping… (■ to stop)') : 'Start trading';
       this.renderStatus();
