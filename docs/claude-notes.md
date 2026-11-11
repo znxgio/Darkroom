@@ -23,6 +23,11 @@ Newest learnings go at the end of each section. Dates are when the note was writ
 - The Default cloud environment has a setup script (added 2026-11-11) that writes the model-routing team into `~/.claude`:
   `agents/big-brother.md` (Fable), `agents/big-brother-max.md` (Opus, effort max), `agents/intern.md` (Sonnet), `CLAUDE.md`, `settings.json`.
   The switch line `BIG_BROTHER: fable` → `opus-max` when Fable stops being included; change it in the setup script too.
+- 2026-11-11 team v2 (user picked 1, 2, 4, 5 of Opus's suggestions): added `agents/runner.md` (Sonnet, Bash, runs given
+  test/build commands and returns a <200-word summary, never edits) so long e2e output doesn't fill Opus's context;
+  five-part advisor brief (Goal, Tried, Evidence, Files, Question) with ~500-word answers; advisors diagnose, Opus fixes
+  (big separate fixes may go to a helper in its own worktree); intern only for 3+ mechanical edits, and it now re-reads
+  its lines and lists where changed names are used. Setup script is 97 of the 100 allowed lines — keep edits compact.
 - Agent files only load at session start. In the session that creates them, emulate with `Agent` + `model`/`effort` parameters.
 - Old iOS app versions couldn't show environment-change approval prompts; updating the app fixed it.
 - Playwright + Chromium are preinstalled; `require('playwright')` works.
