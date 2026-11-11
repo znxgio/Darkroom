@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FC Sniper
 // @namespace    https://github.com/znxgio/darkroom
-// @version      2.1.0
+// @version      2.1.1
 // @description  Sniper, pack opener, SBC solver and team upgrade advisor for the EA SPORTS FC Ultimate Team Web App, with built-in safety limits.
 // @match        https://www.ea.com/*ultimate-team/web-app*
 // @match        https://www.ea.com/ea-sports-fc/ultimate-team/web-app*
@@ -1424,7 +1424,7 @@
 
   const w = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '2.1.0';
+  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '2.1.1';
   const errText = (e) => (e && e.message ? e.message : String(e));
   const fmt = (n) => Number(n || 0).toLocaleString();
 
@@ -1820,6 +1820,71 @@
         return `${label}: ${out.join(', ').slice(0, 600) || 'nothing matching'}`;
       };
       return [dump('challenge', ch), dump('set', set), dump('item', item)].join(' || ');
+    },
+
+    /**
+     * Read-only look for the FC 27 Gallery inside the Web App: services,
+     * globals, repositories and menu text that mention it, their methods
+     * (with a short source preview) and, at most twice, a read-only request
+     * so we can see the data's shape. Changes nothing. Returns lines for Copy log.
+     */
+    async galleryProbe() {
+      const rx = /galler|collection|album|sticker|(?<!up)grade|gtag|token ?store/i;
+      const lines = [];
+      const short = (v, n = 300) => { try { return (typeof v === 'string' ? v : JSON.stringify(v, (k, x) => (typeof x === 'function' ? 'fn' : x))).replace(/\s+/g, ' ').slice(0, n); } catch { return String(v).slice(0, n); } };
+      const methods = (obj) => {
+        const out = []; const seen = new Set();
+        for (let o = obj, d = 0; o && o !== Object.prototype && d < 4; o = Object.getPrototypeOf(o), d++) {
+          for (const k of Object.getOwnPropertyNames(o)) {
+            if (seen.has(k) || k === 'constructor') continue;
+            seen.add(k);
+            try { const desc = Object.getOwnPropertyDescriptor(o, k); if (desc && typeof desc.value === 'function') out.push({ k, n: desc.value.length, src: String(desc.value) }); } catch { /* ignore */ }
+          }
+        }
+        return out;
+      };
+      const S = w.services || {};
+      const svcNames = Object.keys(S);
+      lines.push(`services (${svcNames.length}): ${svcNames.join(',')}`.slice(0, 900));
+      const hits = svcNames.filter((k) => rx.test(k));
+      // services whose methods mention the gallery
+      for (const k of svcNames) {
+        if (hits.includes(k)) continue;
+        try { if (methods(S[k]).some((m) => rx.test(m.k))) hits.push(k); } catch { /* ignore */ }
+      }
+      lines.push(`gallery-like services: ${hits.join(',') || 'none'}`);
+      const requests = [];
+      for (const k of hits.slice(0, 6)) {
+        const ms = methods(S[k]);
+        lines.push(`services.${k} methods: ${ms.map((m) => `${m.k}(${m.n})`).join(', ')}`.slice(0, 1200));
+        for (const m of ms.filter((x) => rx.test(x.k) || /request|get|fetch|submit|grade|claim|add|slot/i.test(x.k)).slice(0, 12)) {
+          lines.push(`  ${k}.${m.k}: ${short(m.src, 220)}`);
+        }
+        const r = ms.find((m) => m.n === 0 && /^request/i.test(m.k) && rx.test(m.k));
+        if (r) requests.push([k, r.k]);
+      }
+      const globals = Object.getOwnPropertyNames(w).filter((g) => rx.test(g));
+      lines.push(`globals: ${globals.join(',') || 'none'}`.slice(0, 1200));
+      for (const g of globals.filter((x) => w[x] && typeof w[x] === 'object' && !Array.isArray(w[x])).slice(0, 8)) {
+        lines.push(`  ${g} = ${short(w[g], 250)}`);
+      }
+      try {
+        const repo = w.repositories || {};
+        const rk = Object.keys(repo).filter((k) => rx.test(k) || methods(repo[k]).some((m) => rx.test(m.k)));
+        lines.push(`repositories: ${Object.keys(repo).join(',')} · gallery-like: ${rk.join(',') || 'none'}`.slice(0, 700));
+      } catch { /* ignore */ }
+      const navText = [...document.querySelectorAll('button, a, .ut-tab-bar-item, h1, h2')].map((e) => (e.textContent || '').trim()).filter((t) => t && t.length < 40 && /galler|collection/i.test(t));
+      lines.push(`menu text: ${[...new Set(navText)].join(' | ') || 'none'}`);
+      // a read-only look at the data (like opening the Gallery page), at most twice
+      for (const [k, m] of requests.slice(0, 2)) {
+        try {
+          const res = await observe(S[k][m](), 15000);
+          const d = res.data;
+          lines.push(`${k}.${m}() → success ${!!res.success} status ${res.status ?? ''} keys ${d && typeof d === 'object' ? Object.keys(d).join(',') : typeof d} · ${short(d, 600)}`);
+        } catch (e) { lines.push(`${k}.${m}() threw ${errText(e)}`); }
+        await sleep(jitter(1500, 2500));
+      }
+      return { lines, found: hits.length > 0 || globals.length > 0 };
     },
 
     /** EA's raw requirement data, for Copy log: numbers, names, values, scope, count and any text fields. */
@@ -4295,6 +4360,7 @@
           <section class="pane" data-pane="log">
             <div class="card"><h4>Activity</h4><div class="log" data-r="log"></div>
               <button class="btn" data-a="copy-log">Copy log (to send for help)</button>
+              <button class="btn" data-a="gallery-probe">Gallery check (read-only)</button>
               <button class="btn red" data-a="clear-log">Clear log</button></div>
           </section>
           <section class="pane" data-pane="settings">
@@ -4395,6 +4461,7 @@
           case 'form-view': this.formOpen = this.formOpen === Number(btn.dataset.i) ? -1 : Number(btn.dataset.i); return this.renderFormations();
           case 'form-create': return upgrades.createSquad(Number(btn.dataset.i));
           case 'copy-log': return this.copyLog();
+          case 'gallery-probe': return this.galleryProbe();
           case 'clear-log':
             if (!w.confirm('Clear the activity log?')) return;
             this.saved = []; store.set(KEYS.log, []); this.q('[data-r=log]').innerHTML = ''; return;
@@ -4916,9 +4983,19 @@
       this.log(`Backup from ${data.at ? new Date(data.at).toLocaleString() : 'unknown date'} restored (${engine.cfg.players.length} players, ${(engine.cfg.filters || []).length} filters, ${engine.history.length} history entries)`, 'ok');
     },
 
+    async galleryProbe() {
+      await jobs.run('Checking for the Gallery', async () => {
+        if (!fut.ready()) { this.log('Web App not ready — log in first', 'err'); return; }
+        engine.setStatus('pricing', 'Looking for the Gallery…');
+        const r = await fut.galleryProbe();
+        r.lines.forEach((l) => debugLog.push(`gallery probe: ${l}`));
+        this.log(r.found ? '🖼️ Found Gallery parts in the Web App — details saved. Tap Copy log and send it' : '🖼️ No Gallery found in the Web App — details saved. Tap Copy log and send it anyway', r.found ? 'ok' : 'warn');
+      });
+    },
+
     async copyLog() {
       const lines = this.qa('[data-r=log] div').map((d) => d.textContent).reverse();
-      const text = [`FC Sniper ${VERSION} · ${navigator.userAgent}`, ...lines, '--- details ---', ...debugLog.slice(-30)].join('\n');
+      const text = [`FC Sniper ${VERSION} · ${navigator.userAgent}`, ...lines, '--- details ---', ...debugLog.slice(-60)].join('\n');
       try { await navigator.clipboard.writeText(text); this.toast('Log copied — paste it in the chat', 'ok'); } catch {
         w.prompt('Copy this log:', text);
       }

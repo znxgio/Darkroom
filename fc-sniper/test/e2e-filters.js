@@ -118,6 +118,27 @@ function installMock() {
   const after = await log();
   check('log survives a reload', after.some((l) => /Backup from .* restored/.test(l)) && after.length >= before, `${before} → ${after.length} lines`);
   await p.click('#fcs [data-a=log-clear]').catch(() => {});
+  // Gallery probe: read-only, finds a gallery service and logs its shape
+  await p.evaluate(() => {
+    const obs = (res) => ({ observe(ctx, cb) { setTimeout(() => cb({ unobserve() {} }, res), 5); } });
+    window.F.galleryCalls = 0;
+    services.Gallery = { requestGallerySets() { F.galleryCalls++; return obs({ success: true, response: { sets: [{ id: 1, name: 'Arsenal', slots: 20 }] } }); }, gradeSet(a, b) { F.galleryGraded = true; } };
+    window.UTGallerySetEntity = function () {};
+  });
+  await p.click('#fcs [data-tab=log]');
+  await p.click('#fcs [data-a=gallery-probe]');
+  await p.waitForFunction(() => [...document.querySelectorAll('#fcs [data-r=log] div')].some((d) => /Gallery/.test(d.textContent) && /details saved/.test(d.textContent)), null, { timeout: 30000 });
+  let copied = null;
+  const prev = restoreText; restoreText = null;
+  p.removeAllListeners('dialog');
+  p.on('dialog', (d) => { copied = d.defaultValue(); d.accept(); });
+  await p.click('#fcs [data-a=copy-log]');
+  await p.waitForTimeout(500);
+  if (!copied) copied = await p.evaluate(() => navigator.clipboard.readText().catch(() => ''));
+  const G = await p.evaluate(() => ({ calls: F.galleryCalls, graded: !!F.galleryGraded }));
+  check('gallery probe finds the service, its methods, globals and data shape', /gallery-like services: Gallery/.test(copied) && /requestGallerySets\(0\)/.test(copied) && /UTGallerySetEntity/.test(copied) && /keys sets/.test(copied), (copied || '').split('\n').filter((l) => /gallery probe/.test(l)).slice(0, 3).join(' | ').slice(0, 300));
+  check('gallery probe is read-only (one read request, no grading)', G.calls === 1 && !G.graded, JSON.stringify(G));
+  void prev;
   check('no page errors', !errors.length, errors.join('; '));
   console.log('log:\n  ' + (await log()).join('\n  '));
   await b.close();
