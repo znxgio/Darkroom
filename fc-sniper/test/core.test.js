@@ -1039,3 +1039,40 @@ test('migrateConfig 2.4.2: new trade defaults only replace old defaults', () => 
   const b = c.migrateConfig({ minProfitPct: 7, listDuration: 21600, maxBuys: 3 });
   assert.deepEqual([b.minProfitPct, b.listDuration, b.maxBuys], [7, 21600, 3], 'your own values stay');
 });
+
+test('robustPrice: median of the cheapest, ignores a lone dumped listing', () => {
+  assert.equal(c.robustPrice([10000, 10200, 10300, 10500, 12000]), 10250); // median 10,300 → nearest valid price
+  assert.equal(c.robustPrice([5000, 10200, 10300, 10500, 10600, 15000]), 10500, 'a 50% dump is ignored');
+  assert.equal(c.robustPrice([10000, 30000, 30000, 30000, 30000]), 30000, 'one cheap outlier does not drag it');
+  assert.equal(c.robustPrice([9000, 9500]), 9300); // 9,250 rounds to a valid 9,300
+  assert.equal(c.robustPrice([]), 0);
+});
+
+test('searchBudget: how today\'s searches split between price checks and hunting', () => {
+  const cfg = { searchesPerDay: 600, delayMin: 4000, delayMax: 8000, pauseEvery: 30, pauseMin: 45000, pauseMax: 120000, autoPrice: true, repriceMinutes: 30 };
+  const b = c.searchBudget(cfg, 100, 5);
+  assert.equal(b.left, 500);
+  assert.ok(b.perHour > 300 && b.perHour < 500, String(b.perHour));
+  assert.equal(b.pricingPerHour, 50);
+  assert.equal(b.huntPerHour, b.perHour - 50);
+  assert.equal(c.searchBudget({ ...cfg, autoPrice: false }, 0, 5).pricingPerHour, 0);
+});
+
+test('price history: hourly samples, 7-day window, trend only with enough data', () => {
+  const h = 3600e3;
+  let st = {};
+  st = c.addPriceSample(st, '5', { name: 'X' }, 10000, 8, 0);
+  st = c.addPriceSample(st, '5', { name: 'X' }, 10100, 8, 0.5 * h); // same hour → replaced
+  assert.equal(st['5'].s.length, 1);
+  for (let k = 1; k <= 5; k++) st = c.addPriceSample(st, '5', {}, 10000 + k * 500, 8, k * 8 * h);
+  const t = c.priceTrend(st['5'].s, 40 * h);
+  assert.equal(t.thin, false);
+  assert.ok(t.pct > 5, String(t.pct));
+  assert.match(c.trendText(t), /^↑ \+\d+% over/);
+  assert.equal(c.priceTrend(st['5'].s.slice(0, 3), 0).thin, true, 'under 4 samples: no trend');
+  const old = c.addPriceSample(st, '5', {}, 9000, 1, 9 * 24 * h);
+  assert.ok(old['5'].s.every((x) => 9 * 24 * h - x[0] < 7 * 864e5), 'older than 7 days dropped');
+  const big = {}; for (let k = 0; k < 400; k++) big[k] = { n: 'P', s: Array.from({ length: 20 }, (_, j) => [j, 1000, 5]) };
+  assert.ok(JSON.stringify(c.prunePrices(big, 50000)).length <= 50000);
+  assert.match(c.lookupUrl('Kylian Mbappé'), /^https:\/\/www\.google\.com\/search\?q=Kylian%20Mbapp%C3%A9%20FC%2027%20site%3Afut\.gg$/);
+});

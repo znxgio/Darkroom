@@ -126,6 +126,8 @@ Newest learnings go at the end of each section. Dates are when the note was writ
     sessions), maxBuys 12, add a per-card cap (`tradeBudgetPct` 25) enforced on trade buys. Changed defaults are migrated
     only where the user still had the old default (flag `trade242`). Skipped the rebuttal round when the referee's numbers
     already settled it — saves ~2 agent runs.
+- Running all 6 browser suites in parallel PLUS another suite can crash e2e-tasks ("Target page closed" ~9 min in) from load —
+  rerun it alone before suspecting the code. e2e-tasks now takes ~10–12 min (3 s job pacing).
 - Runner subagent: ~8 min for all 6 suites in parallel, returns 10 lines — big context saving vs reading suite output.
 
 - 2026-11-12 data-source research: FUTBIN and FUTWIZ return 403 to automated requests (bot protection — never try to get

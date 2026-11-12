@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FC Sniper
 // @namespace    https://github.com/znxgio/darkroom
-// @version      2.4.3
+// @version      2.4.4
 // @description  Sniper, pack opener, SBC solver and team upgrade advisor for the EA SPORTS FC Ultimate Team Web App, with built-in safety limits.
 // @match        https://www.ea.com/*ultimate-team/web-app*
 // @match        https://www.ea.com/ea-sports-fc/ultimate-team/web-app*
@@ -790,6 +790,8 @@
       if (out.maxBuys === 10) out.maxBuys = 12;
       out.trade242 = true;
     }
+    // 2.4.4: price checks every 30 min (sooner when the market drops) — only if you had the old default
+    if (!out.reprice244) { if (out.repriceMinutes === 15) out.repriceMinutes = 30; out.reprice244 = true; }
     // 2.4.0: the user asked for auction bidding to be switched on (once; they can turn it off again)
     if (!out.bidOn240) { out.bidSnipe = true; out.bidOn240 = true; }
     return out;
@@ -837,9 +839,99 @@
         .forEach((l) => seen.set(l.tradeId, l.buyNowPrice));
       prices = [...seen.values()].sort((a, b) => a - b);
     }
-    const cheapest = prices.slice(0, sample);
-    const mean = cheapest.reduce((a, b) => a + b, 0) / cheapest.length;
-    return { ok: true, count: prices.length, lowest: prices[0], avg: roundPrice(mean, 'nearest'), steps };
+    return { ok: true, count: prices.length, lowest: prices[0], avg: robustPrice(prices, sample), steps };
+  }
+
+  // ---- Price history (cards the bot actually sees) ---------------------------------
+
+  /**
+   * Adds one price sample for a card. Samples within the same hour replace
+   * each other; samples older than 7 days drop off. Pure: returns a new store.
+   * store: { [id]: { n: name, r: rating, s: [[t, lowest, listed]] } }
+   */
+  function addPriceSample(store, id, meta, lowest, listed, now) {
+    if (!id || !(lowest > 0)) return store || {};
+    const out = { ...(store || {}) };
+    const c = out[id] ? { ...out[id], s: out[id].s.slice() } : { n: meta.name, r: meta.rating, s: [] };
+    if (meta.name) c.n = meta.name;
+    const last = c.s[c.s.length - 1];
+    if (last && now - last[0] < 3600e3) c.s[c.s.length - 1] = [now, lowest, listed || 0];
+    else c.s.push([now, lowest, listed || 0]);
+    c.s = c.s.filter((x) => now - x[0] < 7 * 864e5).slice(-60);
+    out[id] = c;
+    return out;
+  }
+
+  /** Keeps the price store under ~`maxBytes` (drops cards not seen for the longest). */
+  function prunePrices(store, maxBytes = 400000) {
+    let ids = Object.keys(store || {});
+    let size = JSON.stringify(store || {}).length;
+    if (size <= maxBytes) return store;
+    ids.sort((a, b) => (store[a].s.at(-1)?.[0] || 0) - (store[b].s.at(-1)?.[0] || 0));
+    const out = { ...store };
+    while (size > maxBytes && ids.length) { const k = ids.shift(); size -= JSON.stringify(out[k]).length + k.length + 4; delete out[k]; }
+    return out;
+  }
+
+  /**
+   * Price trend from a card's samples: only with ≥ 4 samples over ≥ 24 h,
+   * otherwise "not enough data". Returns { n, thin, pct, spanH, spark }.
+   */
+  function priceTrend(samples, now) {
+    const s = (samples || []).filter((x) => x && x[1] > 0);
+    const n = s.length;
+    if (!n) return { n: 0, thin: true };
+    const spanH = (s[n - 1][0] - s[0][0]) / 36e5;
+    const vals = s.map((x) => x[1]);
+    const lo = Math.min(...vals); const hi = Math.max(...vals);
+    const bars = '▁▂▃▄▅▆▇█';
+    const spark = vals.slice(-12).map((v) => bars[hi > lo ? Math.round((v - lo) / (hi - lo) * 7) : 3]).join('');
+    if (n < 4 || spanH < 24) return { n, thin: true, spanH, spark };
+    const first = vals.slice(0, Math.ceil(n / 3)).reduce((a, b) => a + b, 0) / Math.ceil(n / 3);
+    const lastN = vals.slice(-Math.ceil(n / 3)).reduce((a, b) => a + b, 0) / Math.ceil(n / 3);
+    return { n, thin: false, spanH, spark, pct: Math.round((lastN - first) / first * 100) };
+  }
+
+  /** "↑ 6% · 3 d · ▂▃▅▇" or "new — not enough data yet". */
+  function trendText(t) {
+    if (!t || !t.n) return '';
+    if (t.thin) return `seen ${t.n}× — not enough data for a trend yet`;
+    const arrow = t.pct >= 3 ? '↑' : t.pct <= -3 ? '↓' : '→';
+    return `${arrow} ${t.pct > 0 ? '+' : ''}${t.pct}% over ${t.spanH >= 48 ? `${Math.round(t.spanH / 24)} d` : `${Math.round(t.spanH)} h`} · ${t.spark} · seen ${t.n}×`;
+  }
+
+  /** A web search for the card on FUT.GG (opened by the user in Safari; the bot never reads the site). */
+  function lookupUrl(name) {
+    return `https://www.google.com/search?q=${encodeURIComponent(`${name} FC 27 site:fut.gg`)}`;
+  }
+
+  /**
+   * Where today's searches go: price checks cost ~5 searches per target every
+   * `repriceMinutes`; the rest hunt. Returns { left, perHour, pricingPerHour, huntPerHour, pricingShare }.
+   */
+  function searchBudget(cfg, usedToday, targets) {
+    const left = Math.max(0, (cfg.searchesPerDay || 0) - (usedToday || 0));
+    const avgDelay = ((cfg.delayMin || 3000) + (cfg.delayMax || 4500)) / 2 / 1000 + 0.5;
+    const restPer = (cfg.pauseEvery > 0 ? ((cfg.pauseMin || 0) + (cfg.pauseMax || 0)) / 2 / 1000 / cfg.pauseEvery : 0);
+    const perHour = Math.round(3600 / (avgDelay + restPer));
+    const pricingPerHour = cfg.autoPrice ? Math.round((targets || 0) * 5 * 60 / Math.max(5, cfg.repriceMinutes || 30)) : 0;
+    const huntPerHour = Math.max(0, perHour - pricingPerHour);
+    return { left, perHour, pricingPerHour, huntPerHour, pricingShare: perHour ? pricingPerHour / perHour : 0 };
+  }
+
+  /**
+   * The market price from the cheapest listings: the median of the `sample`
+   * cheapest (one dumped or overpriced listing can't drag it), ignoring a
+   * lone lowest listing more than 30% under the next one (a mistake, not the market).
+   */
+  function robustPrice(prices, sample = 5) {
+    let p = (prices || []).filter((x) => x > 0).sort((a, b) => a - b);
+    if (p.length >= 3 && p[0] < p[1] * 0.7) p = p.slice(1);
+    const cheapest = p.slice(0, sample);
+    if (!cheapest.length) return 0;
+    const m = Math.floor(cheapest.length / 2);
+    const med = cheapest.length % 2 ? cheapest[m] : (cheapest[m - 1] + cheapest[m]) / 2;
+    return roundPrice(med, 'nearest');
   }
 
   /**
@@ -1040,6 +1132,22 @@
     f4222: { label: '4-2-2-2', slots: ['GK', 'RB', 'CB', 'CB', 'LB', 'CDM', 'CDM', 'CAM', 'CAM', 'ST', 'ST'] },
     f5212: { label: '5-2-1-2', slots: ['GK', 'RWB', 'CB', 'CB', 'CB', 'LWB', 'CM', 'CM', 'CAM', 'ST', 'ST'] },
     f3421: { label: '3-4-2-1', slots: ['GK', 'CB', 'CB', 'CB', 'RM', 'CM', 'CM', 'LM', 'CF', 'CF', 'ST'] },
+    // New in FC 27; EA's slot order isn't confirmed for it, so the coach compares it but doesn't create the squad.
+    f4213: { label: '4-2-1-3', slots: ['GK', 'RB', 'CB', 'CB', 'LB', 'CDM', 'CDM', 'CAM', 'RW', 'ST', 'LW'], noCreate: true },
+  };
+
+  /**
+   * Meta notes: what public FC 27 guides call meta, with source and date.
+   * Curated by hand and shipped with script updates — the bot never reads these sites itself.
+   * Sources disagree; the coach shows both and never claims a winner.
+   */
+  const META_NOTES = {
+    asOf: '2026-10-21',
+    formations: {
+      f41212a: { tag: 'Called “the most meta”', tactic: 'Short Passing build-up · defensive line ~60', source: 'Liquid FC (ex-Team Gullit), 21 Oct 2026' },
+      f4213: { tag: 'Called the meta at launch', tactic: 'Counter build-up · defensive line 55 (CDMs 45)', source: 'Dexerto launch guide' },
+    },
+    note: 'Guides disagree on #1 (others name 4-2-3-1 Wide or 4-4-2). Tactics are starting points — set them in game.',
   };
 
   /**
@@ -1620,7 +1728,7 @@
     listSpent: 0, // spent on the list so far (reset from the Snipe tab)
     buyOnce: true, // take a player off the list once bought
     reserveForHigher: false, // don't buy lower players if it leaves too little for higher ones
-    repriceMinutes: 15, // refresh a player's market price this often while running
+    repriceMinutes: 30, // refresh a player's market price this often while running (sooner when the market drops)
     bidSnipe: false, // also bid on auctions about to end under your max
     bidWindow: 30, // seconds left on an auction before bidding
     maxActiveBids: 5,
@@ -1690,13 +1798,13 @@
     priceStep, roundPrice, nextPrice, prevPrice, afterTax, profit, breakEvenSell,
     cacheBustBid, jitter, pickTargets, planSellPrice, classifyStatus,
     normalizeName, parsePlayerDb, searchPlayers, playerForIteration, migrateConfig, filterSummary, sniperTargets, LEAGUES,
-    findMarketPrice, planMaxBuy, effectiveMaxBuy, withinReach, huntTargets,
+    findMarketPrice, robustPrice, searchBudget, addPriceSample, prunePrices, priceTrend, trendText, lookupUrl, planMaxBuy, effectiveMaxBuy, withinReach, huntTargets,
     smartLevels, gammaSample, betaSample, armPrior, decayArm, upgradeArm, armRate, chooseDiscount, chooseTarget, missWeight, recordArm, deepestArmFor, priceShifted, bestArm, flipPlan, tradeOpts, tradeCap, bidAmount, freeCoins, bidBlock, warCeiling, warSteps, binVsWar, settleSales,
     listSpendable, reserveOk, afterListBuy,
     aggregateListings, hotScore, rankHot, priceBands, provenFlips, flipValue, priceLadder, sbcCostEstimate,
     addHistory, summarizeHistory, isDiscordWebhook, discordPayload,
     squadRating, squadChemistry, topValues, rankUpgrades,
-    POS_NAMES, normPos, baseId, FORMATIONS, squadRatingExact, lineupScore, bestLineup, metaScore, readStats,
+    POS_NAMES, normPos, baseId, FORMATIONS, META_NOTES, squadRatingExact, lineupScore, bestLineup, metaScore, readStats,
     fodderValue, playerCost, qualityOf, COIN_WEIGHT, parseRequirements, solveSbc, sortItem, sbcCheck, solveSbcSearch, matchesReq, marketLevel, planPoints,
     SAFETY, clampConfig, dayKey, usageFor, lockoutFor, formatDuration, canStart,
   };
@@ -1712,13 +1820,13 @@
 
   const w = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '2.4.3';
+  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '2.4.4';
   const errText = (e) => (e && e.message ? e.message : String(e));
   const fmt = (n) => Number(n || 0).toLocaleString();
 
   // ---- Storage ----------------------------------------------------------------
 
-  const KEYS = { cfg: 'fc-sniper:config', safety: 'fc-sniper:safety', history: 'fc-sniper:history', ui: 'fc-sniper:ui', log: 'fc-sniper:log', learn: 'fc-sniper:learn', bids: 'fc-sniper:bids' };
+  const KEYS = { cfg: 'fc-sniper:config', safety: 'fc-sniper:safety', history: 'fc-sniper:history', ui: 'fc-sniper:ui', log: 'fc-sniper:log', learn: 'fc-sniper:learn', debug: 'fc-sniper:debug', prices: 'fc-sniper:prices', bids: 'fc-sniper:bids' };
   const store = {
     get(key, fallback) {
       try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : fallback; } catch { return fallback; }
@@ -2404,6 +2512,20 @@
    * Smart sniping memory (saved on this phone): per target, how each discount
    * did — searches, buys, lost races, near misses — and good signs by hour.
    */
+  /** Price history of cards the bot has priced or scanned (no extra searches). */
+  const prices = {
+    data: store.get(KEYS.prices, {}),
+    add(id, meta, lowest, listed) {
+      this.data = prunePrices(addPriceSample(this.data, String(id), meta, lowest, listed, Date.now()));
+      try { localStorage.setItem(KEYS.prices, JSON.stringify(this.data)); } catch {
+        this.data = prunePrices(this.data, 150000); // storage full: keep less
+        store.set(KEYS.prices, this.data);
+        ui.log('Price history trimmed — phone storage is nearly full', 'warn');
+      }
+    },
+    trend(id) { const c = this.data[String(id)]; return c ? priceTrend(c.s, Date.now()) : { n: 0, thin: true }; },
+  };
+
   const learn = {
     data: store.get(KEYS.learn, { targets: {}, hours: {}, speed: { n: 0, ms: 0, lost: 0 } }),
     save() { store.set(KEYS.learn, this.data); },
@@ -2567,6 +2689,7 @@
           ui.log(`${player.name}: none listed right now — skipped until the next price check finds a price`, 'warn');
           continue;
         }
+        if (!isFilter) prices.add(player.id, { name: player.name, rating: player.rating }, r.lowest, r.count);
         const plan = planMaxBuy(r.avg, this.cfg.discount, fut.coins() - this.cfg.minCoins);
         const reach = this.cfg.mode === 'trade' || isFilter || withinReach(plan.maxBuy, r.lowest);
         Object.assign(player, { avg: r.avg, lowest: r.lowest, maxBuy: plan.maxBuy, outOfReach: !reach });
@@ -2610,6 +2733,7 @@
 
     async start() {
       if (this.running || this.busy || jobs.current) return;
+      if (Date.now() - (jobs.freedAt || 0) < 35000) { ui.log('A stuck task was just freed — wait a few seconds before starting', 'warn'); return; }
       ui.commit(); // pick up a field that was typed but not yet saved
       if (!fut.ready()) { ui.log('Web App not ready — log in and open Transfers first', 'err'); return; }
       const { cfg, changed } = clampConfig(this.cfg);
@@ -2794,6 +2918,12 @@
           const range = player && player.kind === 'filter' ? { minRating: player.minRating || 0, maxRating: player.maxRating || 0 } : {};
           const targets = pickTargets(res.listings, { ...cfg, ...range, maxBuy }, cfg.mode === 'alert' ? Infinity : Math.min(spendable, freeCoins(cfg, fut.coins(), [...this.bids.values()])));
           const outcome = { hit: 0, miss: 0, near: 0 };
+          // Many copies under your max in one search = the market dropped: re-check the price next turn.
+          if (player && player.kind !== 'filter' && cfg.autoPrice && !player.manualMax
+            && res.listings.filter((l) => l.buyNowPrice > 0 && l.buyNowPrice <= maxBuy && baseId(l.defId) === baseId(player.id)).length >= 3) {
+            player.checkedAt = 0;
+            ui.log(`📉 ${player.name}: several listed under your max — the price is dropping, re-checking it next`, 'muted');
+          }
           const mine = res.listings.filter((l) => l.buyNowPrice > 0 && (!player || player.kind === 'filter' || l.defId === player.id || baseId(l.defId) === baseId(player.id)));
           if (probe) {
             outcome.probe = true;
@@ -3178,7 +3308,9 @@
   // a captcha or market limit stops the task and sets the same safety lock.
 
   class Stopped extends Error {}
-  const debugLog = []; // technical details for "Copy log"
+  const LOG_KEEP = 1500; // log lines kept across reloads (newest win)
+  const debugLog = []; // technical details for "Copy log" (kept across reloads too)
+  try { debugLog.push(...(JSON.parse(localStorage.getItem('fc-sniper:debug') || '[]') || []).slice(-200)); } catch { /* none */ }
 
 
   const jobs = {
@@ -3187,6 +3319,7 @@
 
     async run(name, fn) {
       if (engine.running || engine.busy || this.current) { ui.log('Busy — wait for the current task to finish', 'warn'); return; }
+      if (Date.now() - (this.freedAt || 0) < 35000) { ui.log('A stuck task was just freed — wait a few seconds before starting another', 'warn'); return; }
       if (!fut.ready()) { ui.log('Web App not ready — log in first', 'err'); return; }
       engine.safety = store.get(KEYS.safety, {});
       const gate = engine.gate();
@@ -3227,7 +3360,8 @@
       this.calls = (this.calls || 0) + 1;
       if (cfg.pauseEvery > 0 && this.calls % cfg.pauseEvery === 0) {
         const ms = jitter(cfg.pauseMin, cfg.pauseMax);
-        ui.log(`Resting ${Math.round(ms / 1000)}s`, 'muted');
+        ui.log(`Safety rest ${Math.round(ms / 1000)}s — ${this.current} continues after (tap ■ to stop it)`, 'muted');
+        engine.setStatus('resting', `Safety rest — ${this.current} continues after`, Date.now() + ms);
         await this.pause(ms, ms);
       }
       this.lastKind = kind;
@@ -3241,8 +3375,17 @@
 
     cancel() {
       if (!this.current) return;
+      // Second tap after ~10 s: the task is stuck (e.g. EA never answered) — free the bot.
+      if (this.cancelled && Date.now() - (this.cancelAt || 0) > 10000) {
+        ui.log(`${this.current} didn't stop on its own — freed the bot. If it keeps happening, use “Reload the Web App” (Log tab).`, 'warn');
+        this.current = null; // `cancelled` stays true, so the old task stops at its next step if EA answers late
+        this.freedAt = Date.now();
+        ui.setJob(null); engine.setStatus('idle', 'Idle');
+        return;
+      }
+      if (!this.cancelled) this.cancelAt = Date.now();
       this.cancelled = true;
-      ui.log(`Stopping ${this.current}…`, 'warn');
+      ui.log(`Stopping ${this.current}… (if it doesn't stop, tap Stop again in 10 s)`, 'warn');
     },
 
     /** Pause between actions; throws if the task was cancelled. */
@@ -4097,6 +4240,7 @@
         const { club, ownedBase } = await this.ownedCards(slots);
 
         const budget = engine.cfg.upgradeBudget || Math.max(0, fut.coins() - engine.cfg.minCoins);
+        this.costed = 0;
         const sbcPlayers = engine.cfg.upgradeSbc ? await this.sbcPlayers(ownedBase) : [];
         for (const res of this.results) {
           let candidates = club.slice();
@@ -4104,9 +4248,9 @@
             candidates = candidates.concat((await this.market(res, budget)).filter((o) => !ownedBase.has(baseId(o.id))));
           }
           // SBC players: cost them only if they'd be an upgrade here (costing loads the SBC).
-          const sbcHere = rankUpgrades(slots, res.slotIndex, sbcPlayers.map((o) => ({ ...o, price: 0 })), { budget, by }).slice(0, 2);
-          for (const o of sbcHere) await this.costSbc(o);
-          candidates = candidates.concat(sbcHere.map((o) => sbcPlayers.find((x) => x.id === o.id)).filter((o) => o && o.cost));
+          const sbcHere = rankUpgrades(slots, res.slotIndex, sbcPlayers.map((o) => ({ ...o, price: 0 })), { budget, by }).slice(0, 1);
+          for (const o of sbcHere) if ((this.costed = (this.costed || 0) + 1) <= 3) await this.costSbc(o); // at most 3 SBCs costed per analysis
+          candidates = candidates.concat(sbcHere.map((o) => this.sbcCache.list.find((x) => x.id === o.id)).filter((o) => o && o.cost));
           res.options = rankUpgrades(slots, res.slotIndex, candidates.map((o) => (o.source === 'sbc' ? { ...o, price: o.cost.cost } : o)), { budget, by })
             .filter((o) => o.source === 'club' || o.price <= budget).slice(0, 4);
           res.done = true;
@@ -4321,7 +4465,13 @@
           const missing = f.slots.filter((_, i) => !best.lineup[i]);
           list.push({ id, label: f.label, rating: best.rating, chem: best.chem, meta: best.meta, score: best.score, lineup: best.lineup, slots: f.slots, filled: best.filled, missing, ...describe(best.lineup) });
         }
-        list.sort((x, y) => (y.filled === 11) - (x.filled === 11) || y.score - x.score);
+        const metaOf = (f) => (!f.current && META_NOTES.formations[f.id] ? 1 : 0);
+        list.sort((x, y) => (y.filled === 11) - (x.filled === 11) || metaOf(y) - metaOf(x) || y.score - x.score);
+        // weakest spots in each lineup (where an upgrade helps most)
+        for (const f of list) {
+          f.weak = f.lineup.map((p, k) => ({ p, pos: f.slots[k], v: p ? (by === 'meta' ? metaScore(p, f.slots[k]) : p.rating) : 0 }))
+            .filter((x) => x.p).sort((a, b) => a.v - b.v).slice(0, 2);
+        }
         this.formations = list;
         this.currentIds = curIds;
         ui.formOpen = list.findIndex((f) => !f.current && f.filled === 11);
@@ -4443,23 +4593,35 @@
         }
         const all = [];
         let searches = 0;
+        // If EA returns nothing, relax the filters step by step (rare-only, then league) and say so.
+        let relax = cfg.hotRareOnly ? 0 : 1;
+        let emptyRun = 0;
         for (const sg of plan) {
           if (jobs.cancelled) break;
           engine.setStatus('pricing', `Scanning the market… ${searches + 1}/${plan.length}`);
           const c = fut.newCriteria();
-          if (sg.league) c.league = sg.league;
+          if (sg.league && relax < 2) c.league = sg.league;
           c.level = 'gold';
-          if (cfg.hotRareOnly) c.rarities = [1];
+          if (relax < 1) c.rarities = [1];
           c.minBuy = sg.band[0];
           c.maxBuy = sg.band[1];
           const r = await fut.search(c);
           searches++;
           engine.countUsage('searches');
           jobs.check(r, 'market scan');
+          if (searches <= 2 || !r.listings.length) debugLog.push(`hot search ${searches}: ${JSON.stringify({ type: c.type, category: c.category, level: c.level, league: c.league, rarities: c.rarities, minBuy: c.minBuy, maxBuy: c.maxBuy })} → ${r.listings.length} listings`);
+          emptyRun = r.listings.length ? 0 : emptyRun + 1;
+          // only when a whole sweep (every price band) found nothing — high bands are often legitimately empty
+          if (emptyRun >= Math.max(2, bands.length) && relax < 2 && !all.length && !r.listings.length) {
+            relax++;
+            emptyRun = 0;
+            ui.log(relax === 1 ? 'Hot scan: no results with “rare only” — trying all gold cards' : 'Hot scan: still nothing — trying without the league filter', 'warn');
+          }
           all.push(...r.listings);
           await jobs.pause(cfg.delayMin, cfg.delayMax);
         }
         const agg = aggregateListings(all);
+        agg.filter((c) => c.count >= 2).forEach((c) => prices.add(c.id, { name: c.name, rating: c.rating }, c.minBin, c.count));
         const ranked = rankHot(agg, { budget, minListings: 2 });
         ranked.forEach((c) => put(c, 'market'));
         // When nothing repeats, the most-bid-on singles are still worth a look.
@@ -4485,7 +4647,11 @@
           if (r.count < 3) { why.push(`${card.name}: only ${r.count} listed — too thin to flip`); await jobs.pause(cfg.delayMin, cfg.delayMax); continue; }
           else if (!p) why.push(`${card.name}: avg ${fmt(r.avg)} — no profit at your min profit`);
           else if (r.avg > budget) { why.push(`${card.name}: avg ${fmt(r.avg)} over your budget`); c.plan = null; }
+          prices.add(card.id, { name: card.name, rating: card.rating }, r.lowest, r.count);
+          c.trend = prices.trend(card.id);
           c.value = flipValue(c);
+          // Trend as a tie-breaker, only with enough history: rising prices sell; falling ones can leave you holding cards.
+          if (c.trend && !c.trend.thin) c.value = Math.round(c.value * (c.trend.pct >= 3 ? 1.15 : c.trend.pct <= -5 ? 0.85 : 1));
           out.push(c);
           await jobs.pause(cfg.delayMin, cfg.delayMax);
         }
@@ -4580,7 +4746,7 @@
       ['hotAuto', 'Pick hot cards when I start trading', 'toggle'],
       ['hotPick', 'How many hot cards to trade', 'number'],
       ['hotRareOnly', 'Rare golds only', 'toggle'],
-      ['hotLeagues', 'Leagues to scan (IDs)', 'text', '13,53,19,31,16'],
+      ['hotLeagues', 'Leagues to scan (13 Premier League, 53 LaLiga, 19 Bundesliga, 31 Serie A, 16 Ligue 1)', 'text', '13,53,19,31,16'],
       ['hotSearches', 'Searches per scan', 'number'],
     ],
     squad: [
@@ -4612,9 +4778,9 @@
       ['level', 'Quality', 'select', OPT([['any', 'Any'], ['gold', 'Gold'], ['silver', 'Silver'], ['bronze', 'Bronze']])],
       ['rarity', 'Rarity ID', 'text', 'e.g. 1 = rare'],
       ['position', 'Position', 'select', POSITIONS],
-      ['nation', 'Nation ID', 'text'],
-      ['league', 'League ID', 'text'],
-      ['club', 'Club ID', 'text'],
+      ['nation', 'Nation ID', 'text', 'e.g. 14 England, 18 France, 21 Germany, 54 Brazil, 52 Argentina'],
+      ['league', 'League ID', 'text', '13 Premier League, 53 LaLiga, 19 Bundesliga, 31 Serie A, 16 Ligue 1'],
+      ['club', 'Club ID', 'text', 'number from the club’s EA id'],
       ['maxBuysPerSearch', 'Buys per search', 'number'],
     ],
     sell: [
@@ -4722,6 +4888,9 @@
   #fcs .body{flex:1;min-height:0}
   #fcs .last{margin:6px 0 0;font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   #fcs .last:empty{display:none}
+  #fcs .jobbar{display:flex;align-items:center;gap:8px;justify-content:space-between;margin:6px 0;padding:8px 10px;border-radius:10px;background:rgba(232,163,61,.15);border:1px solid rgba(232,163,61,.5);font-size:13px}
+  #fcs .jobbar[hidden]{display:none}
+  #fcs .jobbar .mini{min-height:32px;padding:0 14px}
   #fcs .last.ok{color:var(--green)}#fcs .last.warn{color:var(--amber)}#fcs .last.err{color:var(--red)}#fcs .last.alert{color:#ffe08a}
   #fcs .btn.go-btn{background:var(--green);border-color:var(--green);color:var(--green-ink)}
   #fcs .log{max-height:none}
@@ -4812,7 +4981,7 @@
   #fcs .kpi b{display:block;color:var(--text);font-size:16px}
   #fcs .up{font-weight:700;color:var(--green)}#fcs .down{font-weight:700;color:var(--red)}
   #fcs .plan{border-color:var(--green)}
-  #fcs.mob .mini{padding:9px 12px;font-size:14px}#fcs.mob .li{padding:10px 0}
+  #fcs.mob .mini{padding:9px 12px;font-size:14px;min-height:40px}#fcs.mob .rm,#fcs.mob .ord button{min-width:44px;min-height:44px}#fcs.mob .li{padding:10px 0}
 
   #fcs-toast{position:fixed;left:50%;top:16px;transform:translate(-50%,-30px);opacity:0;visibility:hidden;z-index:2147483001;padding:10px 16px;border-radius:12px;
     font:600 14px -apple-system,system-ui,sans-serif;color:#05210f;background:#3ddc84;box-shadow:0 12px 30px rgba(0,0,0,.4);transition:transform .25s,opacity .25s,visibility .25s;pointer-events:none;max-width:90vw}
@@ -4866,6 +5035,7 @@
           <button class="go" data-a="toggle" aria-label="Start">${ICON.play}</button>
           <button class="fold" data-a="fold" aria-label="Collapse">${ICON.chevron}</button>
         </div>
+        <div class="jobbar" data-r="jobbar" hidden><span data-r="jobname"></span><button class="mini" data-a="job-stop">Stop</button></div>
         <nav class="tabs">${TABS.map(([k, l]) => `<button data-tab="${k}">${l}</button>`).join('')}</nav>
         <div class="body">
           <section class="pane" data-pane="snipe">
@@ -4876,6 +5046,7 @@
                 <div class="bar" data-r="bar-s"><span><em>Searches today</em><em data-r="use-s"></em></span><div><i></i></div></div>
                 <div class="bar" data-r="bar-b"><span><em>Buys today</em><em data-r="use-b"></em></span><div><i></i></div></div>
               </div>
+              <p class="note" data-r="budget"></p>
             </div>
             <div class="card picker">
               <h4>Priority list</h4>
@@ -4883,6 +5054,7 @@
               <div class="pqw"><input data-r="pq" type="search" autocomplete="off" autocorrect="off" spellcheck="false" placeholder="Add a player — name or ID">
               <div class="sugg" data-r="sugg"></div></div>
               <div class="two"><button class="btn blue" data-a="price">Check prices</button><button class="btn blue" data-a="autofill">🧩 Fill from team needs</button></div>
+              <button class="btn" data-a="refresh-prices">↻ Fresh prices (forget old prices, re-check all)</button>
               <div class="spend" data-r="spend"></div>
               ${FIELDS.list.map(fieldHtml).join('')}
               <p class="note">All players are hunted at once; higher on the list wins ties. Tap a price to set your own max buy, ↑↓ to reorder. “Fill from team needs” adds snipes for your squad’s weakest spots.</p>
@@ -4891,6 +5063,7 @@
               <div data-r="filters"></div>
               <div data-r="fedit" hidden></div>
               <button class="btn blue" data-a="filter-new">+ Add a search filter</button>
+              <button class="btn" data-a="filter-starters">+ Starter filters (gold rare 84–86, big leagues)</button>
               <p class="note">Snipe by quality, rarity, league, nation, club, position and rating range. Every filter that’s switched on is hunted together with your priority list. “Price” finds the going rate for the whole filter and sets the max buy under it.</p></div>
             <div class="card"><h4>🧠 Smart sniping</h4>
               <div data-r="learn"></div>
@@ -4908,7 +5081,7 @@
           </section>
           <section class="pane" data-pane="trade">
             <div class="card"><h4>🔥 Hot right now</h4><div data-r="hot"><p class="empty">Scans the live market for cards people are buying and bidding on, then keeps the ones you can flip for profit.</p></div>
-              <button class="btn blue" data-a="hot-scan">Find hot cards</button>
+              <div class="two"><button class="btn blue" data-a="hot-scan">Find hot cards</button><button class="btn" data-a="refresh-hot">↻ Clear list</button></div>
               <p class="note">Based on what’s listed and being bid on in EA’s market right now (about 10 searches plus a price check per card). Trend sites like Futbin block bots, so this is live market data instead.</p></div>
             <div class="card"><h4>Resell bot</h4>
               <div class="kpi" data-r="tkpi"></div>
@@ -4926,11 +5099,11 @@
           </section>
           <section class="pane" data-pane="squad">
             <div class="card"><h4>Your team</h4><div data-r="team"><p class="empty">Reads your active squad and finds the best upgrades for your weakest spots.</p></div>
-              <button class="btn blue" data-a="analyse">Analyse my team</button></div>
+              <div class="two"><button class="btn blue" data-a="analyse">Analyse my team</button><button class="btn" data-a="refresh-squad">↻ Refresh</button></div></div>
             <div data-r="upg"></div>
-            <div class="card"><h4>Formation coach</h4><div data-r="forms"><p class="empty">Compares your lineup with popular competitive formations, built from players you own.</p></div>
+            <div class="card"><h4>Formation coach</h4><div data-r="forms"><p class="empty">Builds the best XI from your own club for each formation, with what public guides call meta marked 📰.</p></div>
               <button class="btn blue" data-a="forms">Compare formations</button>
-              <p class="note">Formations are a built-in list of popular competitive setups, not live pro data. “Create squad” makes a new squad, so your current one isn’t touched.</p></div>
+              <p class="note">Meta notes come from public FC 27 guides (dated, with sources) and update with the script — not live data. Lineups, ratings and chemistry are from your own club. “Create squad” makes a new squad, so your current one isn’t touched.</p></div>
             <div class="card"><h4>Evolutions</h4><div data-r="evos"><p class="empty">Shows the evolutions you can start and which of your players qualify.</p></div>
               <button class="btn blue" data-a="evo-find">Find evolutions</button></div>
             <div class="card">${FIELDS.squad.map(fieldHtml).join('')}
@@ -4945,7 +5118,7 @@
           <section class="pane" data-pane="sbc">
             <div class="card plan" data-r="plan" hidden></div>
             <div class="card"><h4>Squad Building Challenges</h4><div data-r="sbc"><p class="empty">Load SBCs to see which ones can be solved from your club.</p></div>
-              <button class="btn blue" data-a="sbc-load">Load SBCs</button></div>
+              <div class="two"><button class="btn blue" data-a="sbc-load">Load SBCs</button><button class="btn" data-a="refresh-sbc">↻ Refresh SBCs</button></div></div>
             <div class="card">${FIELDS.sbc.map(fieldHtml).join('')}
               <p class="note">Never uses your active squad (starters, subs, reserves), loans, evolutions, specials or tradeables unless you allow them, or anyone above your max rating — and checks every player again right before sending. Cheapest fodder first: SBC storage and duplicates, then untradeables. When your club can’t complete one, it adds the cheapest market fill-ins (never cards you own) and shows the cost before buying. Chemistry, league/nation/club and “from league X” requirements are solved with players in the right positions. 💎 points SBCs (a points bar instead of a squad): Estimate shows what your spare cards cover and what the rest would cost, then hands them in 20 at a time.</p></div>
           </section>
@@ -4956,7 +5129,10 @@
           </section>
           <section class="pane" data-pane="log">
             <div class="card"><h4>Activity</h4><div class="log" data-r="log"></div>
-              <button class="btn" data-a="copy-log">Copy log (to send for help)</button>
+              <button class="btn" data-a="copy-log">Copy log (new since last copy)</button>
+              <button class="btn" data-a="copy-log-full">Copy full log</button>
+              <button class="btn blue" data-a="ask-claude">Ask Claude (copies the log, opens claude.ai)</button>
+              <button class="btn" data-a="reload-app">Reload the Web App</button>
               <button class="btn" data-a="gallery-probe">Gallery check (read-only)</button>
               <button class="btn red" data-a="clear-log">Clear log</button></div>
           </section>
@@ -4970,7 +5146,8 @@
               <p class="note" data-r="lock"></p></div>
             <div class="card"><h4>Backup</h4>
               <p class="note" style="margin:0 0 6px">Saves your players, filters, history, settings and log as text. Paste it into Notes; restore it here (or on another device) if Safari data is cleared.</p>
-              <div class="two"><button class="btn blue" data-a="backup">Backup (copy)</button><button class="btn" data-a="restore">Restore (paste)</button></div></div>
+              <div class="two"><button class="btn blue" data-a="backup">Backup (copy)</button><button class="btn" data-a="restore">Restore (paste)</button></div>
+              <button class="btn red" data-a="reset-defaults">Reset settings to defaults (keeps players, filters, history)</button></div>
             <div class="card"><h4>Look & notifications</h4>${FIELDS.notify.map(fieldHtml).join('')}
               <button class="btn" data-a="discord-test">Send test notification</button></div>
           </section>
@@ -4989,7 +5166,7 @@
       // previous log, so it survives reloads
       this.saved = store.get(KEYS.log, []);
       this.saved.forEach(([at, cls, msg]) => this.log(msg, cls, at, true));
-      w.addEventListener('pagehide', () => { if (this.saved) store.set(KEYS.log, this.saved); });
+      w.addEventListener('pagehide', () => { if (this.saved) store.set(KEYS.log, this.saved); store.set(KEYS.debug, debugLog.slice(-200)); });
       this.log(isMobile() ? 'Ready — tap ▶ to start' : 'Ready — Alt+S to start/stop', 'muted');
       const gate = engine.gate();
       if (!gate.ok) this.log(`Locked — ${gate.reason}`, 'err');
@@ -5012,6 +5189,7 @@
           case 'fold': return root.classList.toggle('min');
           case 'price': return engine.checkPricesNow();
           case 'filter-new': if (!engine.running) this.editFilter(-1); return;
+          case 'filter-starters': if (!engine.running) this.addStarterFilters(); return;
           case 'filter-cancel': return this.editFilter(null);
           case 'filter-save': return this.saveFilter();
           case 'filter-del': {
@@ -5057,7 +5235,50 @@
           case 'forms': return upgrades.compareFormations();
           case 'form-view': this.formOpen = this.formOpen === Number(btn.dataset.i) ? -1 : Number(btn.dataset.i); return this.renderFormations();
           case 'form-create': return upgrades.createSquad(Number(btn.dataset.i));
-          case 'copy-log': return this.copyLog();
+          case 'copy-log': return this.copyLog(false);
+          case 'copy-log-full': return this.copyLog(true);
+          case 'job-stop': return jobs.cancel();
+          case 'refresh-sbc': {
+            if (jobs.current || engine.running) { this.log('Stop the running task first (Stop in the top bar)', 'warn'); return; }
+            Object.assign(sbc, { sets: [], open: new Map(), club: null, raw: null, guard: null, plan: null, points: null });
+            this.renderSbc();
+            this.log('↻ SBCs refreshed — loading them fresh', 'muted');
+            return sbc.loadSets();
+          }
+          case 'refresh-squad': {
+            if (jobs.current || engine.running) { this.log('Stop the running task first (Stop in the top bar)', 'warn'); return; }
+            Object.assign(upgrades, { squad: null, summary: null, results: [], formations: [], sbcCache: null, ladderCache: null, costed: 0 });
+            evos.list = [];
+            this.formOpen = -1;
+            this.renderUpgrades(); this.renderFormations(); if (this.renderEvos) this.renderEvos();
+            this.q('[data-r=team]').innerHTML = '';
+            this.log('↻ Squad tools refreshed — tap Analyse or Compare formations to start clean', 'muted');
+            return;
+          }
+          case 'refresh-prices': {
+            if (jobs.current || engine.running) { this.log('Stop the bot first (■)', 'warn'); return; }
+            engine.cfg.players.forEach((p) => { delete p.checkedAt; delete p.outOfReach; delete p.avg; delete p.lowest; delete p.maxBuy; });
+            (engine.cfg.filters || []).forEach((f) => { delete f.checkedAt; delete f.avg; delete f.maxBuy; });
+            engine.save(); this.renderPlayers(); this.renderFilters();
+            this.log('↻ Old prices forgotten — checking every player and filter again', 'muted');
+            return engine.checkPricesNow();
+          }
+          case 'refresh-hot': hot.list = []; hot.scannedAt = 0; { const box = this.q('[data-r=hot]'); if (box) box.innerHTML = ''; } this.log('↻ Hot-card list cleared', 'muted'); return;
+          case 'reset-defaults': {
+            if (engine.running || jobs.current) { this.log('Stop the bot before resetting settings', 'warn'); return; }
+            if (!w.confirm('Reset all settings to defaults? Your players, filters, history and the learning stay.')) return;
+            store.set('fc-sniper:config-before-reset', engine.cfg);
+            const keep = { players: engine.cfg.players, filters: engine.cfg.filters, listSpent: engine.cfg.listSpent };
+            engine.cfg = clampConfig(migrateConfig({ ...DEFAULT_CONFIG, ...keep })).cfg;
+            engine.save(); this.syncForm(); this.renderPlayers(); this.renderTrade(); this.renderStatus();
+            this.log('Settings reset to defaults (previous settings saved — Restore can bring a backup back)', 'ok');
+            return;
+          }
+          case 'ask-claude': return this.askClaude();
+          case 'reload-app':
+            if (engine.running || jobs.current) { this.log('Stop the bot or the running task before reloading', 'warn'); return; }
+            if (w.confirm('Reload the Web App? Your settings, lists and log are kept.')) { if (this.saved) store.set(KEYS.log, this.saved); w.location.reload(); }
+            return;
           case 'gallery-probe': return this.galleryProbe();
           case 'learn-reset': if (w.confirm('Forget everything smart sniping learned?')) { learn.reset(); this.renderLearn(); this.log('Smart sniping: memory cleared', 'muted'); } return;
           case 'clear-log':
@@ -5331,6 +5552,26 @@
       </div>`;
     },
 
+    /** Ready-made filters that suit a mid-size budget; added switched OFF so nothing changes until you pick one. */
+    addStarterFilters() {
+      const presets = [
+        { name: 'Gold rare 84–86 · Premier League', league: 13 },
+        { name: 'Gold rare 84–86 · LALIGA', league: 53 },
+        { name: 'Gold rare 84–86 · Bundesliga', league: 19 },
+        { name: 'Gold rare 84–86 · Serie A', league: 31 },
+      ];
+      const have = new Set((engine.cfg.filters || []).map((f) => f.name));
+      const add = presets.filter((p) => !have.has(p.name)).map((p, k) => ({
+        kind: 'filter', id: `fs${Date.now().toString(36)}${k}`, on: false, level: 'gold', rarity: '1', league: p.league,
+        position: '', nation: '', club: '', minRating: 84, maxRating: 86, manualMax: 0, name: p.name, starter: true,
+      }));
+      if (!add.length) { this.log('Starter filters are already in your list', 'muted'); return; }
+      engine.cfg.filters = [...(engine.cfg.filters || []), ...add];
+      engine.save();
+      this.renderFilters();
+      this.log(`Added ${add.length} starter filters (switched off). Turn one or two on — the bot prices each filter and snipes ${engine.cfg.discount}% under it.`, 'ok');
+    },
+
     saveFilter() {
       const box = this.q('[data-r=fedit] .fed');
       if (!box) return;
@@ -5368,7 +5609,8 @@
       }
       this.q('[data-r=chips]').innerHTML = cfg.players.map((p, i) => {
         const max = effectiveMaxBuy(p, cfg);
-        const sub = `${p.outOfReach && !p.manualMax ? '⏭️ out of reach · ' : ''}${p.hot ? '🔥 ' : ''}${p.autofill ? `🧩 ${esc(p.autofill)} · ` : ''}${p.manualMax ? (p.autofill && p.lowest ? `cheapest ${fmt(p.lowest)}` : 'your max') : p.avg ? `avg ${fmt(p.avg)}` : p.checkedAt ? 'none listed' : 'not priced yet'}`;
+        const tr = prices.trend(p.id);
+        const sub = `${tr.n && !tr.thin ? `${esc(trendText(tr).split(' · seen')[0])} · ` : ''}${p.outOfReach && !p.manualMax ? '⏭️ out of reach · ' : ''}${p.hot ? '🔥 ' : ''}${p.autofill ? `🧩 ${esc(p.autofill)} · ` : ''}${p.manualMax ? (p.autofill && p.lowest ? `cheapest ${fmt(p.lowest)}` : 'your max') : p.avg ? `avg ${fmt(p.avg)}` : p.checkedAt ? 'none listed' : 'not priced yet'}`;
         return `<div class="chip">
           <div class="top"><span class="num">${i + 1}</span><span class="ovr">${p.rating || ''}</span>
             <span class="nm">${esc(p.name)}<small>${sub}</small></span>
@@ -5387,6 +5629,9 @@
       this.qa('[data-a=analyse], [data-a=evo-find], [data-a=evo-preview], [data-a=packs-load], [data-a=pack-open], [data-a=pack-open-all], [data-a=sbc-load], [data-a=sbc-set], [data-a=sbc-solve], [data-a=sbc-submit], [data-a=sbc-fill], [data-a=sbc-points], [data-a=sbc-points-go], [data-a=price]')
         .forEach((b) => { b.disabled = !!name; });
       if (name) engine.setStatus('pricing', `${name}…`);
+      // a visible "task running — Stop" bar on every tab
+      const bar = this.q('[data-r=jobbar]');
+      if (bar) { bar.hidden = !name && !engine.running; this.q('[data-r=jobname]').textContent = name ? `⏳ ${name}…` : engine.running ? '▶ Bot running — stop (■) to change settings' : ''; }
     },
 
     renderPacks() {
@@ -5464,7 +5709,9 @@
             const label = `Hand in ${pt.plan.fromClub.length} card${pt.plan.fromClub.length === 1 ? '' : 's'}${left && lim ? ` + buy up to ${fmt(lim)} coins` : ''}`;
             return (pt.plan.fromClub.length || (left && lim)) ? `<button class="btn" data-a="sbc-points-go" style="background:var(--green);color:var(--green-ink);border-color:var(--green)">${label}</button>` : '';
           })()}
-          ${pt.need > pt.plan.clubPoints ? `<p class="note">${fmt(pt.need - pt.plan.clubPoints)} 💎 left after your spare cards — ${engine.cfg.pointsBuyLimit > 0 ? `it buys the best 💎-per-coin cards up to ${fmt(engine.cfg.pointsBuyLimit)} coins (SBC tab setting)` : 'set “Max coins to buy for 💎 SBCs” to let it buy the rest'}.</p>` : ''}
+          ${pt.need > pt.plan.clubPoints ? (engine.cfg.pointsBuyLimit > 0
+            ? `<p class="note">${fmt(pt.need - pt.plan.clubPoints)} 💎 left after your spare cards — it buys the best 💎-per-coin cards up to ${fmt(engine.cfg.pointsBuyLimit)} coins (SBC tab setting).</p>`
+            : `<p class="warn-box" style="border:1px solid var(--amber,#e8a33d);border-radius:10px;padding:8px 10px;margin:6px 0">⚠️ Your spare cards cover ${fmt(pt.plan.clubPoints)} of ${fmt(pt.need)} 💎. To buy the rest (≈ <b>${fmt(coins)}</b> coins${coins > Math.max(0, fut.coins() - engine.cfg.minCoins) ? ` — <b>more than your ${fmt(Math.max(0, fut.coins() - engine.cfg.minCoins))} spare coins</b>` : ''}), set <b>“Max coins to buy for 💎 SBCs”</b> in the SBC settings below.</p>`) : ''}
           <p class="note">Hands in up to 20 at a time, biggest points first, with your protections re-checked before every batch.</p>
           <button class="btn red" data-a="sbc-points-close">Close</button>`;
         return;
@@ -5492,7 +5739,8 @@
       const ago = Math.round((Date.now() - hot.scannedAt) / 60e3);
       box.innerHTML = `<div class="list">${hot.list.map((c, i) => `<div class="li">
           <span class="t"><b>${esc(c.name)} ${c.rating || ''}${c.proven ? ` <span class="tag ok">flipped ${c.proven.wins}×</span>` : ''}${c.bids ? ` <span class="tag ok">${c.bids} bid${c.bids === 1 ? '' : 's'}</span>` : ''}</b>
-          <small>${c.listed} listed · avg ${fmt(c.avg)}${c.plan ? ` · buy ≤ ${fmt(c.plan.maxBuy)} → sell ${fmt(c.plan.sell)} <span class="up">+${fmt(c.plan.profit)}</span>` : ' · <span class="down">no profit at your settings</span>'}</small></span>
+          <small>${c.trend && c.trend.n ? `${esc(trendText(c.trend))}<br>` : ''}${c.listed} listed · avg ${fmt(c.avg)}${c.plan ? ` · buy ≤ ${fmt(c.plan.maxBuy)} → sell ${fmt(c.plan.sell)} <span class="up">+${fmt(c.plan.profit)}</span>` : ' · <span class="down">no profit at your settings</span>'}</small></span>
+          <a class="mini" href="${lookupUrl(c.name)}" target="_blank" rel="noopener" title="Look up on FUT.GG">🔎</a>
           ${c.plan ? (mine.has(c.id) ? '<span class="tag ok">added</span>' : `<button class="mini" data-a="hot-add" data-i="${i}">Add</button>`) : ''}</div>`).join('')}</div>
         ${hot.list.some((c) => c.plan) ? `<button class="btn go-btn" data-a="hot-top">Trade the top ${Math.min(engine.cfg.hotPick || 3, hot.list.filter((c) => c.plan).length)}</button>` : ''}
         <p class="note">Scanned ${ago < 1 ? 'just now' : `${ago} min ago`}.</p>`;
@@ -5549,11 +5797,15 @@
           ${!f.current && f.ins.length ? `<p class="note" style="margin:4px 0"><span class="up">In:</span> ${names(f.ins)}<br><span class="down">Out:</span> ${names(f.outs) || '—'}</p>` : ''}
           ${f.lineup.map((p, k) => `<div class="li"><span class="t"><b>${esc(f.slots[k])} · ${p ? esc(p.name) : '—'}</b>
           <small>${p ? `${p.rating}${keyStats(p, f.slots[k])}${!f.current && !(upgrades.currentIds || new Set()).has(p.id) ? ' · <span class="up">new in XI</span>' : ''}` : 'nobody fits'}</small></span></div>`).join('')}</div>` : '';
-        return `<div class="li"><span class="t"><b>${best ? '⭐ ' : ''}${esc(f.label)}</b><small>${sub}</small></span>
+        const mn = !f.current && META_NOTES.formations[f.id];
+        const weak = full && f.weak && f.weak.length ? `<br>Weakest: ${f.weak.map((x) => `${esc(x.pos)} ${esc(x.p.name)} ${x.p.rating}`).join(' · ')} <button class="mini" data-a="analyse">Find upgrades</button>` : '';
+        const canCreate = !f.current && full && !(FORMATIONS[f.id] && FORMATIONS[f.id].noCreate);
+        return `<div class="li"><span class="t"><b>${best ? '⭐ ' : ''}${mn ? '📰 ' : ''}Best XI from your club · ${esc(f.label)}</b><small>${sub}${mn ? `<br>📰 ${esc(mn.tag)} — ${esc(mn.tactic)} <i>(${esc(mn.source)})</i>` : ''}${weak}</small></span>
           <button class="mini" data-a="form-view" data-i="${i}">${this.formOpen === i ? 'Hide' : 'View'}</button>
-          ${!f.current && full ? `<button class="mini go2" data-a="form-create" data-i="${i}">Create squad</button>` : ''}</div>${detail}`;
-      }).join('')}</div>`
-        : '<p class="empty">Compares your lineup with popular competitive formations, built from players you own.</p>';
+          ${canCreate ? `<button class="mini go2" data-a="form-create" data-i="${i}">Create squad</button>` : ''}</div>${detail}`;
+      }).join('')}</div>
+        <p class="note">📰 = called meta by a public guide (meta notes from ${META_NOTES.asOf}${(Date.now() - Date.parse(META_NOTES.asOf)) / 864e5 > 21 ? ' — <span class="down">over 3 weeks old, update the script for fresher notes</span>' : ''}). ${esc(META_NOTES.note)} Ratings and chemistry come from your own club.</p>`
+        : '<p class="empty">Builds the best XI from your own club for each formation, with what public guides call meta marked 📰.</p>';
     },
 
     async backup() {
@@ -5572,6 +5824,7 @@
       let data;
       try { data = JSON.parse(text.trim()); } catch { this.log('That isn’t a valid backup', 'err'); return; }
       if (!data || data.app !== 'fc-sniper' || !data.config) { this.log('That isn’t an FC Sniper backup', 'err'); return; }
+      store.set('fc-sniper:config-before-restore', engine.cfg); // so a wrong paste can be undone
       engine.cfg = clampConfig(migrateConfig({ ...DEFAULT_CONFIG, ...data.config })).cfg;
       engine.save();
       if (Array.isArray(data.history)) { engine.history = data.history; store.set(KEYS.history, engine.history); }
@@ -5591,9 +5844,31 @@
       });
     },
 
-    async copyLog() {
-      const lines = this.qa('[data-r=log] div').map((d) => d.textContent).reverse();
-      const text = [`FC Sniper ${VERSION} · ${navigator.userAgent}`, ...lines, '--- details ---', ...debugLog.slice(-60)].join('\n');
+    /**
+     * Copy log: everything since the last copy (so nothing is sent twice and nothing is lost),
+     * then a "📋 Log copied" marker line is added to the log itself. Full: the whole saved log.
+     */
+    /**
+     * Ask Claude: you type a question, the bot copies it with the new log lines,
+     * then opens claude.ai — paste and send. No password or API key is stored in the bot.
+     */
+    async askClaude() {
+      const q = w.prompt('What do you want to ask Claude? (the new log lines are added for context)');
+      if (q === null) return;
+      await this.copyLog(false, `My question: ${q || '(see the log)'}`);
+      w.open('https://claude.ai/new', '_blank', 'noopener');
+    },
+
+    async copyLog(full, question) {
+      const saved = this.saved || store.get(KEYS.log, []);
+      const fmtLine = ([at, , msg]) => `${new Date(at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })} ${msg}`;
+      let from = 0;
+      if (!full) for (let k = saved.length - 1; k >= 0; k--) if (/^📋 Log copied/.test(saved[k][2])) { from = k; break; }
+      const part = saved.slice(from);
+      const head = `FC Sniper ${VERSION} · ${navigator.userAgent}\n${full ? `Full log (${saved.length} lines)` : from ? `Since the last copy (${part.length} lines; earlier lines are in “Copy full log”)` : `Whole log (${part.length} lines)`}`;
+      this.log(`📋 Log copied (${VERSION}) — ${part.length} line${part.length === 1 ? '' : 's'} up to here were sent`, 'muted');
+      const text = [...(question ? [question, ''] : []), head, ...part.map(fmtLine), fmtLine([Date.now(), '', `📋 Log copied (${VERSION})`]), '--- details ---', ...debugLog.slice(full ? -200 : -80)].join('\n');
+      store.set(KEYS.debug, debugLog.slice(-200));
       try { await navigator.clipboard.writeText(text); this.toast('Log copied — paste it in the chat', 'ok'); } catch {
         w.prompt('Copy this log:', text);
       }
@@ -5610,6 +5885,7 @@
           <span class="t"><b>${esc(o.name)} ${o.rating}</b><small>${o.source === 'club' ? 'You own this card' : o.source === 'sbc' ? `SBC “${esc(o.setName)}” · ≈ ${fmt(o.price)} coins` : `${fmt(o.price)} coins`} ·
             team <span class="${o.ratingGain > 0 ? 'up' : ''}">${o.ratingGain > 0 ? '+' : ''}${o.ratingGain}</span> ·
             chem <span class="${o.chemGain > 0 ? 'up' : o.chemGain < 0 ? 'down' : ''}">${o.chemGain > 0 ? '+' : ''}${o.chemGain}</span></small></span>
+          <a class="mini" href="${lookupUrl(o.name)}" target="_blank" rel="noopener" title="Look up on FUT.GG">🔎</a>
           ${o.source === 'club' ? '<span class="tag ok">owned</span>' : o.source === 'sbc' ? '<span class="tag">SBC</span>' : `<button class="mini go2" data-a="snipe-opt" data-s="${si}" data-o="${oi}">Snipe</button>`}</div>`).join('')}</div>`
           : `<p class="empty">${r.done ? 'No better option found within budget' : 'Looking…'}</p>`}</div>`).join('');
     },
@@ -5636,8 +5912,20 @@
         <p class="note">✅ bought · ⚡ lost to a faster buyer · 🎯 just above your max${sp.n ? ` · your buy speed ${Math.round(sp.ms / sp.n)} ms avg (${sp.lost} of ${sp.n} lost)` : ''}${hours.length ? ` · best hours: ${hours.map((x) => `${x.h}:00`).join(', ')}` : ''}</p>`;
     },
 
+    renderBudget() {
+      const el = this.q('[data-r=budget]');
+      if (!el) return;
+      const cfg = engine.cfg;
+      const used = usageFor(engine.safety.usage, Date.now()).searches;
+      const n = huntTargets(cfg).length;
+      const b = searchBudget(cfg, used, n);
+      el.innerHTML = `${fmt(b.left)} searches left today · about ${fmt(b.perHour)}/hour: ${n ? `${fmt(b.huntPerHour)} hunting${b.pricingPerHour ? `, ${fmt(b.pricingPerHour)} price checks (${n} target${n === 1 ? '' : 's'})` : ''}` : 'add a player or filter'}`
+        + (b.pricingShare > 0.3 ? ` · <span class="down">price checks use ${Math.round(b.pricingShare * 100)}% — fewer targets or a longer “Refresh prices every” leaves more for sniping</span>` : '');
+    },
+
     renderStats() {
       this.renderLearn();
+      this.renderBudget();
       Object.entries(engine.stats).forEach(([k, v]) => {
         const el = this.q(`[data-s="${k}"]`);
         if (el) el.textContent = fmt(v);
@@ -5703,6 +5991,8 @@
       go.setAttribute('aria-label', on ? 'Stop' : 'Start');
       this.tick();
       this.qa('[data-k] , [data-k] button, [data-r=pq], [data-a=price]').forEach((el) => { el.disabled = on; });
+      const bar = this.q('[data-r=jobbar]');
+      if (bar && !jobs.current) { bar.hidden = !on; this.q('[data-r=jobname]').textContent = on ? '▶ Bot running — stop (■) to change settings' : ''; }
       this.qa('[data-a=trade-start], [data-a=hot-scan], [data-a=hot-top], [data-a=hot-add], [data-a=autofill], [data-up], [data-down], [data-fon], [data-fedit], [data-fmax], [data-a=filter-new]').forEach((el) => { el.disabled = on; });
       const ts = this.q('[data-a=trade-start]');
       if (ts) ts.textContent = on ? (engine.cfg.mode === 'trade' ? 'Trading… (■ to stop)' : 'Sniping… (■ to stop)') : 'Start trading';
@@ -5719,6 +6009,8 @@
     log(msg, cls = '', at = Date.now(), restoring = false) {
       const box = this.root && this.q('[data-r=log]');
       if (!box) return;
+      // Problems shouldn't hide in the Log tab: show them on screen too.
+      if (!restoring && (cls === 'err' || /^(Can['’]t start|Busy|Locked|Stop the bot)/.test(msg))) { try { this.toast(msg.length > 120 ? `${msg.slice(0, 117)}…` : msg, 'alert'); } catch { /* ignore */ } }
       const line = document.createElement('div');
       line.className = cls;
       const d = new Date(at);
@@ -5727,12 +6019,12 @@
       line.append(document.createTextNode(msg));
       box.prepend(line);
       if (!restoring) {
-        // keep the log across reloads (last 300 lines)
-        this.saved = (this.saved || store.get(KEYS.log, [])).concat([[at, cls, msg]]).slice(-300);
+        // keep the log across reloads (last LOG_KEEP lines) — and the technical details with it
+        this.saved = (this.saved || store.get(KEYS.log, [])).concat([[at, cls, msg]]).slice(-LOG_KEEP);
         clearTimeout(this.logTimer);
-        this.logTimer = setTimeout(() => store.set(KEYS.log, this.saved), 500);
+        this.logTimer = setTimeout(() => { store.set(KEYS.log, this.saved); store.set(KEYS.debug, debugLog.slice(-200)); }, 500);
       }
-      while (box.childNodes.length > 300) box.lastChild.remove();
+      while (box.childNodes.length > 500) box.lastChild.remove();
       const last = this.q('[data-r=last]');
       if (last) { last.textContent = msg; last.className = `last ${cls}`; }
     },
