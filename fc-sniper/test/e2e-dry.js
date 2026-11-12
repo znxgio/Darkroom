@@ -84,7 +84,8 @@ async function run(b, opts) {
   await p.goto('http://fake.test/');
   const lowest = {};
   opts.players.forEach((x) => { lowest[x.id] = x.lowest; });
-  await p.evaluate(installDryMock, { ...opts, lowest });
+  const { during, ...mockOpts } = opts; void during; // functions can't be sent into the page
+  await p.evaluate(installDryMock, { ...mockOpts, lowest });
   await p.addScriptTag({ content: SCRIPT });
   await p.waitForSelector('#fcs');
   await p.click('#fcs [data-a=toggle]');
@@ -127,26 +128,26 @@ async function run(b, opts) {
   check('gate: at most 1 market search before stopping', stop.D.searched.length <= 1, String(stop.D.searched.length));
 
   // 3) gate with an open bid: wait (💤) without Buy Now searches instead of stopping
-  const gate = await run(b, { coins: 100000, bidSnipe: true, bidWindow: 45, dryTurns: 0, dryAuctionSearches: 60,
-    players: [{ id: 4, name: 'Target A', lowest: 90000, manualMax: 85000 }, { id: 5, name: 'Target B', lowest: 40000, manualMax: 38000 }],
+  const gate = await run(b, { coins: 100000, bidSnipe: true, bidWindow: 45, dryTurns: 0, dryAuctionSearches: 60, maxSearches: 40,
+    players: [{ id: 4, name: 'Target A', lowest: 90000, manualMax: 85000 }, { id: 5, name: 'Target B', lowest: 70000, manualMax: 66000 }],
     auctionOnce: { 4: { bin: 95000, bid: 60000, expires: 40 } },
-    async during({ p, logLines }) {
+    async during({ p }) {
+      // a bid is only placed in its last 45 s, so the bot watches it right away; while it's open and nothing else is affordable,
+      // it must not Buy-Now-search or stop "can't afford"
       const t0 = Date.now();
-      let nap = null;
-      while (Date.now() - t0 < 90000 && !nap) {
-        nap = (await logLines()).find((l) => /^💤 Can't afford any target right now/.test(l));
-        if (!nap) await sleep(500);
+      let bidAt = 0;
+      while (Date.now() - t0 < 90000 && !bidAt) {
+        bidAt = await p.evaluate(() => (window.D.bids.length ? Date.now() - window.D.t0 : 0));
+        if (!bidAt) await sleep(500);
       }
-      if (!nap) return { nap: null };
-      const before = await p.evaluate(() => window.D.searched.length);
+      if (!bidAt) return { bid: false };
       await sleep(20000);
-      const after = await p.evaluate((n) => window.D.searched.slice(n), before);
-      return { nap, buyNowAfter: after.filter((x) => !x.auction).length, afterAll: after.length };
+      const after = await p.evaluate((t) => window.D.searched.filter((x) => x.at > t + 500), bidAt);
+      return { bid: true, buyNowAfter: after.filter((x) => !x.auction).length, afterAll: after.length };
     } });
   const g = gate.extra || {};
   check('gate: the bot bids on the auction for A', gate.D.bids.some((x) => x.id === 4 && x.amount >= 60000 && x.amount < 62000), JSON.stringify(gate.D.bids));
-  check('gate: waits with a 💤 line while the bid is open', !!g.nap, g.nap || gate.log.slice(-4).join(' | '));
-  check('gate: no Buy Now searches while waiting', !!g.nap && g.buyNowAfter === 0, `buyNow=${g.buyNowAfter} all=${g.afterAll}`);
+  check('gate: no Buy Now searches while the bid is open and nothing else is affordable', g.bid && g.buyNowAfter === 0, `buyNow=${g.buyNowAfter} all=${g.afterAll}`);
   check('gate: does not stop while a bid is open', !gate.log.some((l) => /Stopped — can't afford any target/.test(l)), gate.log.filter((l) => /Stopped/.test(l)).join(' | '));
 
   check('no page errors', !dry.errors.length && !stop.errors.length && !gate.errors.length, [...dry.errors, ...stop.errors, ...gate.errors].join('; '));
