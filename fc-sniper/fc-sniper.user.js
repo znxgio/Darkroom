@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FC Sniper
 // @namespace    https://github.com/znxgio/darkroom
-// @version      2.4.2
+// @version      2.4.3
 // @description  Sniper, pack opener, SBC solver and team upgrade advisor for the EA SPORTS FC Ultimate Team Web App, with built-in safety limits.
 // @match        https://www.ea.com/*ultimate-team/web-app*
 // @match        https://www.ea.com/ea-sports-fc/ultimate-team/web-app*
@@ -161,7 +161,7 @@
 
   /**
    * "Keep coins for players higher on the list": buying player #idx at `price`
-   * must leave enough for every unbought player above him.
+   * must leave enough for every unbought player above them.
    */
   function reserveOk(players, idx, price, spendable, cfg) {
     if (!cfg.reserveForHigher || idx <= 0) return true;
@@ -993,7 +993,7 @@
         const ratingGain = ratingAfter - baseRating;
         const chemGain = chemAfter - baseChem;
         const cur = squad[slotIndex].player;
-        // By meta: how much better he is in this position by the stats that matter there.
+        // By meta: how much better the player is in this position by the stats that matter there.
         const playerGain = opts.by === 'meta'
           ? Math.round((metaScore(c, pos) - metaScore(cur, pos)) * 10) / 10
           : c.rating - ((cur && cur.rating) || 0);
@@ -1712,7 +1712,7 @@
 
   const w = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '2.4.2';
+  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '2.4.3';
   const errText = (e) => (e && e.message ? e.message : String(e));
   const fmt = (n) => Number(n || 0).toLocaleString();
 
@@ -2577,7 +2577,7 @@
           ui.log(`${player.name}: avg ${fmt(r.avg)} · lowest ${fmt(r.lowest)} · ${r.count} listed → max ${fmt(plan.maxBuy)}`
             + (plan.cappedByCoins ? ' (all your coins)' : ` (${this.cfg.discount}% under)`)
             + (player.manualMax ? ` — your manual ${fmt(player.manualMax)} is used instead` : ''), 'ok');
-          if (!reach && !player.manualMax) ui.log(`⏭️ ${player.name}: out of reach — your max is ${Math.round(plan.maxBuy / r.lowest * 100)}% of the cheapest listing, so it's skipped while sniping (set a manual max to hunt him anyway)`, 'warn');
+          if (!reach && !player.manualMax) ui.log(`⏭️ ${player.name}: out of reach — your max is ${Math.round(plan.maxBuy / r.lowest * 100)}% of the cheapest listing, so it's skipped while sniping (set a manual max to hunt this player anyway)`, 'warn');
         }
       }
       return true;
@@ -4239,7 +4239,7 @@
           const market = (await this.market(res, searchBudget, { searches: 3 })).filter((o) => !ownedBase.has(baseId(o.id)));
           const ranked = rankUpgrades(slots, idx, [...club, ...market], { budget: searchBudget, by });
           if (ranked[0] && ranked[0].source === 'club') {
-            ui.log(`🧩 ${res.position}: you already own ${ranked[0].name} ${ranked[0].rating} — put him in your squad (no need to buy)`, 'ok');
+            ui.log(`🧩 ${res.position}: you already own ${ranked[0].name} ${ranked[0].rating} — put that card in your squad (no need to buy)`, 'ok');
             continue;
           }
           const best = ranked.find((o) => o.source !== 'club' && !listed.has(baseId(o.id)));
@@ -5607,7 +5607,7 @@
       this.q('[data-r=upg]').innerHTML = upgrades.results.map((r, si) => `
         <div class="card"><h4>${esc(r.position)} — now ${r.current ? `${esc(r.current.name)} ${r.current.rating}` : 'empty'}</h4>
         ${r.options.length ? `<div class="list">${r.options.map((o, oi) => `<div class="li">
-          <span class="t"><b>${esc(o.name)} ${o.rating}</b><small>${o.source === 'club' ? 'You own him' : o.source === 'sbc' ? `SBC “${esc(o.setName)}” · ≈ ${fmt(o.price)} coins` : `${fmt(o.price)} coins`} ·
+          <span class="t"><b>${esc(o.name)} ${o.rating}</b><small>${o.source === 'club' ? 'You own this card' : o.source === 'sbc' ? `SBC “${esc(o.setName)}” · ≈ ${fmt(o.price)} coins` : `${fmt(o.price)} coins`} ·
             team <span class="${o.ratingGain > 0 ? 'up' : ''}">${o.ratingGain > 0 ? '+' : ''}${o.ratingGain}</span> ·
             chem <span class="${o.chemGain > 0 ? 'up' : o.chemGain < 0 ? 'down' : ''}">${o.chemGain > 0 ? '+' : ''}${o.chemGain}</span></small></span>
           ${o.source === 'club' ? '<span class="tag ok">owned</span>' : o.source === 'sbc' ? '<span class="tag">SBC</span>' : `<button class="mini go2" data-a="snipe-opt" data-s="${si}" data-o="${oi}">Snipe</button>`}</div>`).join('')}</div>`
