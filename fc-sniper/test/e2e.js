@@ -134,6 +134,18 @@ const idle = (p) => p.waitForFunction(() => !document.querySelector('#fcs [data-
   // ---------- mobile look
   const m = await page(b, true);
   await m.screenshot({ path: `${S}/v1-mobile-min.png` });
+  // collapsed handle: drag across → snaps to the left edge, remembered
+  const side = await m.evaluate(async () => {
+    const hd = document.querySelector('#fcs .hd'); const r = hd.getBoundingClientRect();
+    const at = (type, x, y, el) => el.dispatchEvent(new PointerEvent(type, { bubbles: true, clientX: x, clientY: y, pointerId: 1 }));
+    at('pointerdown', r.left + 4, r.top + r.height / 2, hd);
+    at('pointermove', 40, r.top + r.height / 2 - 60, window);
+    at('pointerup', 40, r.top + r.height / 2 - 60, window);
+    await new Promise((res) => setTimeout(res, 100));
+    const box = document.querySelector('#fcs').getBoundingClientRect();
+    return { lft: document.querySelector('#fcs').classList.contains('lft'), left: Math.round(box.left), saved: JSON.parse(localStorage.getItem('fc-sniper:ui') || '{}').handleLeft };
+  });
+  check('phone handle drags across and snaps to the left edge', side.lft && side.left < 20 && side.saved === true, JSON.stringify(side));
   await m.tap('#fcs [data-a=fold]');
   await m.fill('#fcs [data-r=pq]', 'mbap');
   await m.waitForSelector('#fcs .sugg [data-pick]');
@@ -144,6 +156,10 @@ const idle = (p) => p.waitForFunction(() => !document.querySelector('#fcs [data-
   await m.screenshot({ path: `${S}/v1-mobile-snipe.png` });
   await m.tap('#fcs [data-tab=settings]');
   await m.screenshot({ path: `${S}/v1-mobile-sell.png` });
+  await m.evaluate(() => { for (let i = 0; i < 3; i++) document.querySelector('#fcs [data-r=log]')?.insertAdjacentHTML('afterbegin', `<div>${'x'.repeat(400)}</div>`); });
+  await m.tap('#fcs [data-tab=log]');
+  const wide = await m.evaluate(() => { const bd = document.querySelector('#fcs .body'); return { body: bd.scrollWidth - bd.clientWidth, page: document.documentElement.scrollWidth - innerWidth }; });
+  check('phone panel never scrolls sideways (long log line)', wide.body <= 0 && wide.page <= 0, JSON.stringify(wide));
   check('no page errors (mobile)', m.errors.length === 0, m.errors.join('; '));
 
   await b.close();

@@ -206,7 +206,7 @@ const idle = (p, ms = 150000) => p.waitForFunction(() => !document.querySelector
   // ---- Upgrades
   await p.click('#fcs [data-tab=squad]');
   await p.click('#fcs [data-a=analyse]');
-  await idle(p, 200000);
+  await idle(p, 400000); // a safety rest (60–120 s) can land in the middle of Analyse
   await p.screenshot({ path: `${S}/t-upgrades.png` });
   const team = await p.textContent('#fcs [data-r=team]');
   check('team rating + chemistry shown', /Rating/.test(team) && /\/33/.test(team), team.trim().slice(0, 60));

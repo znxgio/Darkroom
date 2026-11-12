@@ -5023,7 +5023,8 @@
   #fcs .last.ok{color:var(--green)}#fcs .last.warn{color:var(--amber)}#fcs .last.err{color:var(--red)}#fcs .last.alert{color:#ffe08a}
   #fcs .btn.go-btn{background:var(--green);border-color:var(--green);color:var(--green-ink)}
   #fcs .log{max-height:none}
-  #fcs .body{overflow:auto;padding:12px 14px 14px;overscroll-behavior:contain;-webkit-overflow-scrolling:touch}
+  #fcs .body{overflow-y:auto;overflow-x:hidden;padding:12px 14px 14px;overscroll-behavior:contain;-webkit-overflow-scrolling:touch}
+  #fcs .log div,#fcs small,#fcs .note{overflow-wrap:anywhere}
   #fcs.min .tabs,#fcs.min .body{display:none}
   #fcs .pane{display:none}#fcs .pane.on{display:block}
 
@@ -5131,6 +5132,7 @@
   #fcs.mob .two .btn{font-size:13px;padding:12px 4px}#fcs.mob .chip{padding:9px 6px 9px 12px}#fcs.mob .chip .rm{width:34px;height:34px}
   #fcs.mob .sugg button{padding:13px 12px}#fcs.mob .log{font-size:12px}
   /* collapsed on a phone: a small handle on the right edge, drag it up or down */
+  #fcs.mob.min.lft{right:auto!important;left:6px!important}
   #fcs.mob.min{left:auto!important;right:6px!important;top:var(--fcs-top,58%)!important;bottom:auto;width:auto;
     border:1px solid var(--line);border-radius:16px;padding-bottom:0;box-shadow:0 8px 24px rgba(0,0,0,.5)}
   #fcs.mob.min .hd{padding:6px;gap:6px;cursor:grab}
@@ -5488,20 +5490,25 @@
       this.makeDraggable(this.q('.hd'));
     },
 
-    /** Phone: move the collapsed handle up/down the right edge. */
+    /** Phone: drag the collapsed handle up/down, and across to snap it to the left or right edge. */
     dragHandle(e) {
       e.preventDefault();
       const startTop = this.root.getBoundingClientRect().top;
-      const sy = e.clientY;
+      const sx = e.clientX; const sy = e.clientY;
       const h = this.root.offsetHeight;
-      let top = startTop;
+      let top = startTop; let x = sx;
       const move = (ev) => {
         top = Math.min(w.innerHeight - h - 8, Math.max(8, startTop + ev.clientY - sy));
+        x = ev.clientX;
         this.root.style.setProperty('--fcs-top', `${top}px`);
+        this.root.style.transform = `translateX(${Math.round(ev.clientX - sx)}px)`;
       };
       const up = () => {
         removeEventListener('pointermove', move); removeEventListener('pointerup', up);
-        store.set(KEYS.ui, { ...store.get(KEYS.ui, {}), handleTop: Math.round(top) });
+        this.root.style.transform = '';
+        const left = Math.abs(x - sx) > 30 ? x < w.innerWidth / 2 : this.root.classList.contains('lft');
+        this.root.classList.toggle('lft', left);
+        store.set(KEYS.ui, { ...store.get(KEYS.ui, {}), handleTop: Math.round(top), handleLeft: left });
       };
       addEventListener('pointermove', move); addEventListener('pointerup', up);
     },
@@ -6182,6 +6189,7 @@
     makeDraggable(handle) {
       const saved = store.get(KEYS.ui, {}).handleTop;
       if (saved) this.root.style.setProperty('--fcs-top', `${saved}px`);
+      if (store.get(KEYS.ui, {}).handleLeft) this.root.classList.add('lft');
       handle.addEventListener('pointerdown', (e) => {
         if (e.target.closest('button')) return;
         const cls = this.root.classList;
