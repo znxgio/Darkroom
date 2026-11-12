@@ -1158,3 +1158,17 @@ test('panel markup: every data-r name is unique (a duplicate renders into the wr
   const dup = names.filter((n, i) => names.indexOf(n) !== i);
   assert.deepEqual(dup, []);
 });
+
+test('live updates: search and auction lines say what came back and why', () => {
+  assert.equal(c.shortTime(38), '38 s');
+  assert.equal(c.shortTime(252), '4 min 12 s');
+  assert.equal(c.shortTime(7500), '2 h 5 min');
+  assert.equal(c.searchReport({ n: 12, name: 'Salma', max: 186000, listings: [] }), '🔍 12. Salma ≤ 186,000: nothing listed at or under 186,000');
+  assert.equal(c.searchReport({ n: 13, name: 'Salma', max: 186000, searchMax: 194000, probe: true, cheapest: 194000, listings: [{ buyNowPrice: 193000 }] }),
+    '🔍 13. Salma ≤ 186,000 (near-miss check up to 194,000): 1 listed · cheapest 193,000 (0.5% under the usual cheapest)');
+  assert.match(c.searchReport({ n: 14, name: 'Salma', max: 186000, listings: [{ buyNowPrice: 180000 }, { buyNowPrice: 200000 }] }), /2 listed · cheapest 180,000 · 1 under your max — buying/);
+  assert.equal(c.auctionReport({ n: 15, name: 'Salma', maxBid: 186000, windowSec: 30, listings: [{ expires: 252, currentBid: 160000 }, { expires: 900, startingBid: 150000 }] }),
+    '🔨 15. Auctions Salma ≤ 186,000: 2 seen · soonest ends in 4 min 12 s (bid 160,000) — the bot bids in the last 30 s');
+  assert.match(c.auctionReport({ n: 16, name: 'Salma', maxBid: 186000, windowSec: 30, listings: [{ expires: 12, currentBid: 170000, bidState: 'highest' }] }), /1 seen · you're highest on 1 · 1 ending within 30 s/);
+  assert.equal(c.auctionReport({ n: 17, maxBid: 5000, windowSec: 30, listings: [] }), '🔨 17. Auctions filters ≤ 5,000: none found');
+});

@@ -208,6 +208,47 @@
     return next;
   }
 
+  /** "4 min 12 s", "38 s", "2 h 5 min" */
+  function shortTime(sec) {
+    sec = Math.max(0, Math.round(sec || 0));
+    if (sec < 60) return `${sec} s`;
+    if (sec < 3600) return `${Math.floor(sec / 60)} min${sec % 60 ? ` ${sec % 60} s` : ''}`;
+    return `${Math.floor(sec / 3600)} h${Math.floor(sec % 3600 / 60) ? ` ${Math.floor(sec % 3600 / 60)} min` : ''}`;
+  }
+
+  /**
+   * Live update after a Buy Now search (2.4.8): what came back and how close it was.
+   * o: { n, name, max, searchMax, probe, listings: [{ buyNowPrice }], cheapest (price-checked) }
+   */
+  const num = (n) => Math.round(n || 0).toLocaleString('en-US');
+
+  function searchReport(o) {
+    const prices = (o.listings || []).map((l) => l.buyNowPrice).filter((x) => x > 0).sort((a, b) => a - b);
+    const under = prices.filter((x) => x <= o.max).length;
+    const head = `🔍 ${o.n}. ${o.name || 'filters'} ≤ ${num(o.max)}${o.probe ? ` (near-miss check up to ${num(o.searchMax)})` : ''}`;
+    if (!prices.length) return `${head}: nothing listed at or under ${num(o.searchMax || o.max)}`;
+    const gap = o.cheapest > 0 ? ` (${Math.round((1 - prices[0] / o.cheapest) * 1000) / 10}% under the usual cheapest)` : '';
+    return `${head}: ${prices.length} listed · cheapest ${num(prices[0])}${gap}${under ? ` · ${under} under your max — buying` : ''}`;
+  }
+
+  /**
+   * Live update after an auction search: how many auctions, which end soon, and why it does or doesn't bid.
+   * o: { n, name, maxBid, windowSec, listings: [{ expires, currentBid, startingBid, buyNowPrice, bidState }] }
+   */
+  function auctionReport(o) {
+    const ls = (o.listings || []).filter((l) => l.expires > 0).sort((a, b) => a.expires - b.expires);
+    const head = `🔨 ${o.n}. Auctions ${o.name || 'filters'} ≤ ${num(o.maxBid)}`;
+    if (!ls.length) return `${head}: none found`;
+    const bidOf = (l) => (l.currentBid > 0 ? l.currentBid : l.startingBid || 0);
+    const inWin = ls.filter((l) => l.expires <= o.windowSec);
+    const mine = ls.filter((l) => l.bidState === 'highest').length;
+    const soon = ls[0];
+    const why = inWin.length
+      ? `${inWin.length} ending within ${o.windowSec} s — bidding where the next bid fits your max`
+      : `soonest ends in ${shortTime(soon.expires)} (bid ${num(bidOf(soon))}) — the bot bids in the last ${o.windowSec} s`;
+    return `${head}: ${ls.length} seen${mine ? ` · you're highest on ${mine}` : ''} · ${why}`;
+  }
+
   // ---- Bid wars ------------------------------------------------------------------------
 
   /**
@@ -1820,6 +1861,7 @@
     repriceMinutes: 30, // refresh a player's market price this often while running (sooner when the market drops)
     bidSnipe: false, // also bid on auctions about to end under your max
     bidWindow: 30, // seconds left on an auction before bidding
+    liveLog: true, // 2.4.8: one line per search — what came back and why it did or didn't buy/bid
     maxActiveBids: 5,
     bidWars: 1, // bid wars at once (1–3): counter-bid when outbid in the last seconds
     bidWarStretchPct: 8, // in a war, go up to this % above your normal max (still under avg − 3% / profitable price / Buy Now)
@@ -1897,7 +1939,7 @@
     cacheBustBid, jitter, pickTargets, planSellPrice, classifyStatus,
     normalizeName, parsePlayerDb, searchPlayers, playerForIteration, migrateConfig, filterSummary, sniperTargets, LEAGUES,
     findMarketPrice, robustPrice, searchBudget, addPriceSample, prunePrices, priceTrend, trendText, lookupUrl, planMaxBuy, effectiveMaxBuy, withinReach, huntTargets,
-    planFloor, planBudget, planVerdict, planSummary, robustLow, trendNudge, snipeBase, recordGap, gapStats, smartLevels, gammaSample, betaSample, armPrior, decayArm, upgradeArm, armRate, chooseDiscount, chooseTarget, missWeight, recordArm, deepestArmFor, priceShifted, bestArm, flipPlan, tradeOpts, tradeCap, bidAmount, freeCoins, bidBlock, warCeiling, warSteps, binVsWar, settleSales,
+    shortTime, searchReport, auctionReport, planFloor, planBudget, planVerdict, planSummary, robustLow, trendNudge, snipeBase, recordGap, gapStats, smartLevels, gammaSample, betaSample, armPrior, decayArm, upgradeArm, armRate, chooseDiscount, chooseTarget, missWeight, recordArm, deepestArmFor, priceShifted, bestArm, flipPlan, tradeOpts, tradeCap, bidAmount, freeCoins, bidBlock, warCeiling, warSteps, binVsWar, settleSales,
     listSpendable, reserveOk, afterListBuy,
     aggregateListings, hotScore, rankHot, priceBands, provenFlips, flipValue, priceLadder, sbcCostEstimate,
     addHistory, summarizeHistory, isDiscordWebhook, discordPayload,
@@ -3082,8 +3124,13 @@
           if (errors >= SAFETY.maxConsecutiveErrors) return this.halt('errors', `${errors} errors in a row (${res.status})`);
         } else if (bidTurn) {
           errors = 0;
+          if (cfg.liveLog) ui.log(auctionReport({ n: this.stats.searches, name: player && player.name, maxBid: maxBuy, windowSec: cfg.bidWindow, listings: res.listings }), 'muted');
           if (!tradeFull) await this.bidOn(res.listings, player, maxBuy, plan, this.stats.buys - startBuys);
         } else {
+          if (cfg.liveLog) {
+            const own = player && player.kind !== 'filter' ? res.listings.filter((l) => !l.defId || l.defId === player.id) : res.listings;
+            ui.log(searchReport({ n: this.stats.searches, name: player && player.name, max: maxBuy, searchMax, probe, listings: own, cheapest: player && (player.floor || player.lowest) }), 'muted');
+          }
           errors = 0;
           const range = player && player.kind === 'filter' ? { minRating: player.minRating || 0, maxRating: player.maxRating || 0 } : {};
           // A player hunt matches every version of the card (maskedDefId): only buy the exact card you added.
@@ -5015,7 +5062,12 @@
       if (!gate.ok) { ui.log(`Can't start the plan — ${gate.reason}`, 'err'); return; }
       const coins = fut.coins();
       const sum = planSummary(cfg, coins);
-      if (!w.confirm(`Start this plan?\n\n${sum.text}\n\nAny captcha, market limit or logout ends it at once.`)) return;
+      // the plan's budget can make your players unaffordable — say so before it starts
+      const room = coins - sum.floor;
+      const tooDear = huntTargets(cfg).filter((p) => p.kind !== 'filter' && effectiveMaxBuy(p, cfg) > room).map((p) => p.name);
+      const warn = tooDear.length ? `\n\n⚠️ Over the plan's budget (${fmt(room)}), so skipped: ${tooDear.join(', ')}. Raise "Spend at most %" to snipe them.` : '';
+      if (!w.confirm(`Start this plan?\n\n${sum.text}${warn}\n\nAny captcha, market limit or logout ends it at once.`)) return;
+      if (tooDear.length) ui.log(`📋 Over the plan's budget of ${fmt(room)}, so skipped while the plan runs: ${tooDear.join(', ')}`, 'warn');
       this.state = { startedAt: Date.now(), startCoins: coins, budget: sum.budget, floor: sum.floor, block: 0, blocks: sum.blocks, sbcDone: {}, sbcFailed: [], ended: '',
         saved: { minCoins: cfg.minCoins, sessionMinutes: cfg.sessionMinutes } };
       // the plan's floor and block length only ever tighten your settings; put back at the end
@@ -5093,6 +5145,7 @@
       ['maxBuys', 'Buys per session', 'number'],
       ['bidSnipe', 'Also bid on auctions ending soon', 'toggle'],
       ['bidWindow', 'Bid in the last (seconds)', 'number'],
+      ['liveLog', 'Live updates (a log line for every search)', 'toggle'],
       ['bidWars', 'Bid wars at once (1–3)', 'number'],
       ['bidWarStretchPct', 'War: go up to % over my max', 'number'],
       ['bidWarMaxCounters', 'War: give up after N counter-bids', 'number'],
