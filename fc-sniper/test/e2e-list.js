@@ -38,7 +38,7 @@ function installListMock(opts) {
   };
   localStorage.setItem('fc-sniper:config', JSON.stringify({
     players: opts.players || [{ id: 1, name: 'Top Target', rating: 88, manualMax: 50000 }, { id: 2, name: 'Second Target', rating: 85, manualMax: 20000 }],
-    bidOn240: true, bidSnipe: false, spendLimit: opts.spendLimit ?? 60000, buyOnce: true, reserveForHigher: opts.reserve, autoPrice: !!opts.autoPrice, ...(opts.extra || {}), maxSearches: opts.maxSearches || 20, delayMin: 3000, delayMax: 3500,
+    bidOn240: true, bidSnipe: false, discount: 10, spendLimit: opts.spendLimit ?? 60000, buyOnce: true, reserveForHigher: opts.reserve, autoPrice: !!opts.autoPrice, ...(opts.extra || {}), maxSearches: opts.maxSearches || 20, delayMin: 3000, delayMax: 3500,
   }));
 }
 
@@ -81,13 +81,16 @@ async function run(b, opts) {
   const r = await run(b, { prices: { 2: 18000 }, reserve: true, maxSearches: 4 });
   check('keeps coins for higher players', r.L.bought.length === 0 && r.log.some((l) => /keeping coins for players higher/.test(l)), r.log.filter((l) => /Skipped|Bought/.test(l)).join(' | '));
   // 3) a 2.9M player with 300k coins is skipped; the affordable one is hunted, with a "still sniping" summary
-  const o = await run(b, { prices: { 1: 2900000, 2: 18000 }, reserve: false, autoPrice: true, spendLimit: 0, maxSearches: 26, players: [{ id: 1, name: 'Top Target', rating: 91 }, { id: 2, name: 'Second Target', rating: 87 }], timeout: 400000 });
+  const o = await run(b, { prices: { 1: 2900000, 2: 18000 }, reserve: false, autoPrice: true, spendLimit: 0, maxSearches: 26, players: [{ id: 1, name: 'Top Target', rating: 91 }, { id: 2, name: 'Second Target', rating: 87 }], extra: { smartProbeEvery: 3 }, timeout: 400000 });
   check('out-of-reach player flagged', o.log.some((l) => /⏭️ Top Target: out of reach/.test(l)), o.log.filter((l) => /Top Target/.test(l)).join(' | '));
   check('out-of-reach player never sniped (searches go to the affordable one)', !o.L.searched.some((x) => x.id === 1 && x.max && x.max < 1e6) && o.L.searched.filter((x) => x.id === 2).length >= 20, JSON.stringify(o.L.searched.slice(-3)));
   check('"still sniping" summary every 25 searches', o.log.some((l) => /🔎 Still sniping — 25 searches \(Second Target 25\) · 0 listings under your max · Second Target 16,000 vs cheapest 18,000 \(11% under\)/.test(l)), o.log.filter((l) => /🔎/.test(l)).join(' | '));
+  const om = o.learn && o.learn.targets && o.learn.targets['p:2'];
+  check('default: max measured from the cheapest listing, said in the log', o.log.some((l) => /Second Target: cheapest 18,000 · market 18,000 · \d+ listed · trend: not enough history yet → max 16,000 \(10% under the cheapest\)/.test(l)), o.log.filter((l) => /Second Target: /.test(l))[0]);
+  check('default: learner only picks targets (searches recorded at your Snipe %, no deeper levels)', om && Object.keys(om.arms).join() === '10' && Array.isArray(om.gaps) && om.gaps.length >= 1, om && JSON.stringify({ arms: Object.keys(om.arms), gaps: (om.gaps || []).length }));
   // 4) smart sniping: copies at 17,000 (5.6% under 18,000) — only the 4% arm can buy; most buys are lost races
   const sm = await run(b, { prices: { 2: 18000 }, snipe: { 2: 17000 }, failEvery: 3, reserve: false, autoPrice: true, spendLimit: 0, maxSearches: 40, timeout: 500000,
-    players: [{ id: 2, name: 'Second Target', rating: 87 }], extra: { buyOnce: false, maxBuys: 2, smartProbeEvery: 2, discount: 4 } }); // learner never goes closer than Snipe % under avg
+    players: [{ id: 2, name: 'Second Target', rating: 87 }], extra: { buyOnce: false, maxBuys: 2, smartProbeEvery: 2, discount: 4, smartPrice: true } }); // learner never goes closer than Snipe % under avg
   const mem = sm.learn && sm.learn.targets && sm.learn.targets['p:2'];
   const a4 = mem && mem.arms[4];
   check('smart sniping tries several discounts', mem && Object.keys(mem.arms).length >= 3, mem && JSON.stringify(mem.arms));

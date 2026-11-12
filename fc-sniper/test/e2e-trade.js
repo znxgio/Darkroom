@@ -51,7 +51,7 @@ function installTradeMock(opts) {
         }
         const items = [];
         for (let i = 0; i < 40; i++) items.push(card({ tradeId: 100 + i, bin: 50000 + i * 1000 }));
-        if (c.minBid !== undefined) items.push(card({ tradeId: 555, bin: 45000 })); // a snipe, only in snipe searches
+        if (c.minBid !== undefined) items.push(card({ tradeId: 555, bin: 44000 })); // a snipe, only in snipe searches
         return obs({ success: true, data: { items: items.filter((x) => !c.maxBuy || x._auction.buyNowPrice <= c.maxBuy).slice(0, 20) } });
       },
       bid(item, amount) {
@@ -79,7 +79,7 @@ function installTradeMock(opts) {
   localStorage.setItem('fc-sniper:config', JSON.stringify({
     players: [{ id: 231747, name: 'Mbappé', rating: 91 }],
     bidSnipe: true, bidOn240: true, trade242: true, tradeBudgetPct: 100, bidWindow: 30, minProfit: 1000, undercut: 3, maxBuys: 2, delayMin: 3000, delayMax: 4500,
-    minCoins: 224500, // 75,500 free: the 45,000 snipe and the 30,250 bid fit (in either order), a second bid of 45,750 does not
+    minCoins: 224500, // 75,500 free: the 44,000 snipe and the 30,250 bid fit (in either order), a second bid of 45,750 does not
   }));
   if (opts && opts.restore) {
     // after a reload: Buy mode, one bid from before the reload that has been won in the meantime
@@ -156,8 +156,8 @@ function installHotMock() {
   check('mode switched to Trade', await p.evaluate(() => JSON.parse(localStorage.getItem('fc-sniper:config')).mode === 'trade'));
   check('first upkeep recorded the earlier sale', lines.some((l) => /💰 1 sold · profit 7,500 after tax/.test(l)), lines.find((l) => /sold/.test(l)));
   check('sold items cleared, expired relisted', t.cleared === 1 && t.relisted >= 0, `cleared ${t.cleared}, relisted ${t.relisted}`);
-  check('price checked before trading', lines.some((l) => /avg/.test(l)));
-  check('bought the 45k snipe under the profitable max', t.bought.includes(45000), `bought ${t.bought}`);
+  check('price checked before trading', lines.some((l) => /market [\d,]+ · 2nd cheapest/.test(l)));
+  check('bought the 44k snipe under the profitable max', t.bought.includes(44000), `bought ${t.bought}`);
   const smart = lines.find((l) => /Relisted Mbappé at/.test(l));
   check('smart relist: expired card repriced one step under the cheapest, above break-even', t.listed[0] === 49750 && /at 49,750 \(cheapest 50,000\)/.test(smart || ''), `${smart} · listed ${t.listed}`);
   check('relisted under market average', t.listed.length >= 2 && t.listed[1] < 52000 && t.listed.slice(1).every((x) => x === t.listed[1]), `listed ${t.listed}`);

@@ -63,7 +63,7 @@ const idle = (p) => p.waitForFunction(() => !document.querySelector('#fcs [data-
   await p.click('#fcs .sugg [data-pick]');
   await p.waitForFunction(() => /avg/.test(document.querySelector('#fcs .chip small')?.textContent || ''), null, { timeout: 60000 });
   await idle(p);
-  check('name search + auto price check', (await p.textContent('#fcs .chip .mx')).includes('46,750'), await p.textContent('#fcs .chip'));
+  check('name search + auto price check', (await p.textContent('#fcs .chip .mx')).includes('48,000'), await p.textContent('#fcs .chip'));
   await p.fill('#fcs [data-r=pq]', 'haal');
   await p.press('#fcs [data-r=pq]', 'Enter');
   await p.waitForFunction(() => document.querySelectorAll('#fcs .chip').length === 2 && /avg/.test(document.querySelectorAll('#fcs .chip small')[1].textContent), null, { timeout: 60000 });
@@ -92,7 +92,7 @@ const idle = (p) => p.waitForFunction(() => !document.querySelector('#fcs [data-
   check('relist/clear on start', t.tidy === 2);
   check('bought the 26k snipe', t.bought.join() === '26000', `bought ${t.bought}`);
   check('listed at market avg', t.listed.join() === '52000', `listed ${t.listed}`);
-  check('searched with per-player max', t.calls[0] && t.calls[0].max === 46750, JSON.stringify(t.calls));
+  check('searched with per-player max', t.calls[0] && t.calls[0].max === 48000, JSON.stringify(t.calls));
   check('discord buy notification', p.discord.some((d) => d.includes('Bought Mbappé')));
   await p.screenshot({ path: `${S}/v1-desktop-snipe.png` });
   await p.click('#fcs [data-tab=history]');

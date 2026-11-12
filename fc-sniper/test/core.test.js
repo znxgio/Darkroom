@@ -1076,3 +1076,59 @@ test('price history: hourly samples, 7-day window, trend only with enough data',
   assert.ok(JSON.stringify(c.prunePrices(big, 50000)).length <= 50000);
   assert.match(c.lookupUrl('Kylian Mbappé'), /^https:\/\/www\.google\.com\/search\?q=Kylian%20Mbapp%C3%A9%20FC%2027%20site%3Afut\.gg$/);
 });
+
+test('robustLow: cheapest real listing and the next one, ignoring a lone mistake', () => {
+  assert.deepEqual(c.robustLow([190000, 189000, 192000]), { floor: 189000, second: 190000 });
+  assert.deepEqual(c.robustLow([100000, 189000, 190000]), { floor: 189000, second: 190000 }, 'lone listing >30% under is dropped');
+  assert.deepEqual(c.robustLow([5000]), { floor: 5000, second: 5000 });
+  assert.deepEqual(c.robustLow([170000, 189000, 190000]), { floor: 189000, second: 190000 }, 'one listing 10% under a tight cluster is about to be sniped');
+  assert.deepEqual(c.robustLow([180000, 189000, 199000]), { floor: 180000, second: 189000 }, 'a spread-out market keeps its cheapest');
+  assert.deepEqual(c.robustLow([]), { floor: 0, second: 0 });
+});
+
+test('trendNudge: only falling prices with enough history snipe deeper, max 3 points', () => {
+  assert.equal(c.trendNudge({ thin: true, pct: -10 }), 0);
+  assert.equal(c.trendNudge({ thin: false, pct: 6 }), 0);
+  assert.equal(c.trendNudge({ thin: false, pct: -4 }), 2);
+  assert.equal(c.trendNudge({ thin: false, pct: -20 }), 3);
+  assert.equal(c.trendNudge(null), 0);
+});
+
+test('snipeBase: buy from the cheapest, trade from resale (lower of market and 2nd cheapest)', () => {
+  const m = { avg: 192000, floor: 189000, second: 190000, nudge: 0 };
+  assert.equal(c.snipeBase(m, 'buy'), 189000);
+  assert.equal(c.snipeBase(m, 'trade'), 190000);
+  assert.equal(c.snipeBase({ ...m, second: 195000 }, 'trade'), 192000);
+  assert.ok(c.snipeBase({ ...m, nudge: 2 }, 'trade') <= 190000 * 0.98);
+  assert.equal(c.snipeBase({ avg: 20000 }, 'buy'), 20000, 'no floor (filters) → market price');
+  assert.equal(c.snipeBase({ avg: 0, floor: 5000 }, 'buy'), 0);
+  // 10% under the cheapest is never above 10% under the market price
+  assert.ok(c.planMaxBuy(c.snipeBase(m, 'buy'), 10, 1e9).maxBuy <= c.planMaxBuy(m.avg, 10, 1e9).maxBuy);
+});
+
+test('recordGap/gapStats: probe data as % under the cheapest, last 40, 7 days', () => {
+  let g = c.recordGap([], 180000, 190000, 1000);
+  g = c.recordGap(g, 0, 190000, 2000);
+  g = c.recordGap(g, 171000, 190000, 3000);
+  assert.deepEqual(c.gapStats(g), { probes: 3, near: 2, avgPct: 7.7 });
+  assert.equal(c.recordGap(g, 1, 1, 8 * 864e5).length, 1, 'old entries drop off');
+  let many = [];
+  for (let i = 0; i < 50; i++) many = c.recordGap(many, 0, 1, i);
+  assert.equal(many.length, 40);
+});
+
+test('chooseDiscount: a dry spell (no buys, races or near misses) never pushes deeper', () => {
+  const levels = c.smartLevels(10, 14);
+  const arms = { 10: { n: 100 }, 12: { n: 100 }, 14: { n: 100 } };
+  const r = seeded(5);
+  const counts = {};
+  for (let i = 0; i < 600; i++) { const p = c.chooseDiscount(arms, levels, r).pct; counts[p] = (counts[p] || 0) + 1; }
+  assert.ok((counts[10] || 0) > (counts[14] || 0), JSON.stringify(counts));
+});
+
+test('migrateConfig 2.4.6: old default Snipe % 10 → 4, your own value kept, once', () => {
+  assert.equal(c.migrateConfig({ discount: 10 }).discount, 4);
+  assert.equal(c.migrateConfig({ discount: 7 }).discount, 7);
+  assert.equal(c.migrateConfig({ discount: 10, snipe246: true }).discount, 10, 'set back to 10 after the move: kept');
+  assert.equal(c.DEFAULT_CONFIG.discount, 4);
+});

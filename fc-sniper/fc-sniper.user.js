@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FC Sniper
 // @namespace    https://github.com/znxgio/darkroom
-// @version      2.4.5
+// @version      2.4.6
 // @description  Sniper, pack opener, SBC solver and team upgrade advisor for the EA SPORTS FC Ultimate Team Web App, with built-in safety limits.
 // @match        https://www.ea.com/*ultimate-team/web-app*
 // @match        https://www.ea.com/ea-sports-fc/ultimate-team/web-app*
@@ -680,7 +680,9 @@
       const pr = armPrior(d);
       const good = Math.min(a.good, a.n);
       const p = betaSample(pr.a + good, pr.b + a.n - good, rand) + nearBonus(a);
-      const ev = p * d;
+      // With no buy, lost race or near miss yet, a deeper discount saves nothing: score it at the
+      // shallowest level, so dry spells don't push the learner deeper (2.4.6 debate finding).
+      const ev = p * (good > 0 || (a.near || 0) > 0 ? d : levels[0]);
       if (!best || ev > best.ev) best = { pct: d, ev };
     }
     return best;
@@ -704,6 +706,23 @@
       if (!best || value > best.value) best = { target: t, pct: pick.pct, value };
     }
     return best;
+  }
+
+  /**
+   * Probe data (2.4.6): each near-miss check stores how far under the cheapest the closest
+   * listing above your max was (null = nothing within 4% above it). Last 40, 7 days.
+   * Returns the new list of [time, pctUnderCheapest|null].
+   */
+  function recordGap(gaps, nearPrice, ref, now) {
+    const pct = nearPrice > 0 && ref > 0 ? Math.round((1 - nearPrice / ref) * 1000) / 10 : null;
+    return [...(gaps || []), [now, pct]].filter((g) => now - g[0] < 7 * 864e5).slice(-40);
+  }
+
+  /** Summary of probe data: { probes, near, avgPct } (avgPct = mean % under the cheapest of the near misses). */
+  function gapStats(gaps) {
+    const g = gaps || [];
+    const near = g.filter((x) => x[1] !== null && x[1] !== undefined);
+    return { probes: g.length, near: near.length, avgPct: near.length ? Math.round(near.reduce((a, x) => a + x[1], 0) / near.length * 10) / 10 : null };
   }
 
   /** How much a lost race counts: 0.8 × your race-win rate (from the speed totals), never under 0.25 of that. */
@@ -792,6 +811,8 @@
     }
     // 2.4.4: price checks every 30 min (sooner when the market drops) — only if you had the old default
     if (!out.reprice244) { if (out.repriceMinutes === 15) out.repriceMinutes = 30; out.reprice244 = true; }
+    // 2.4.6: the user picked 4% under the cheapest (was 10% under the market) — only if you had the old default
+    if (!out.snipe246) { if (out.discount === 10 || out.discount === '10') out.discount = 4; out.snipe246 = true; }
     // 2.4.0: the user asked for auction bidding to be switched on (once; they can turn it off again)
     if (!out.bidOn240) { out.bidSnipe = true; out.bidOn240 = true; }
     return out;
@@ -839,7 +860,7 @@
         .forEach((l) => seen.set(l.tradeId, l.buyNowPrice));
       prices = [...seen.values()].sort((a, b) => a - b);
     }
-    return { ok: true, count: prices.length, lowest: prices[0], avg: robustPrice(prices, sample), steps };
+    return { ok: true, count: prices.length, lowest: prices[0], avg: robustPrice(prices, sample), ...robustLow(prices), steps };
   }
 
   // ---- Price history (cards the bot actually sees) ---------------------------------
@@ -938,6 +959,37 @@
    * Max buy for a player: `discountPct` under the market average, but never
    * more than the coins you can spend. Returns { maxBuy, cappedByCoins }.
    */
+  /**
+   * The cheapest real listing (a lone listing >30% under the next one is a mistake that's
+   * about to be sniped, not the market) and the one after it. Returns { floor, second }.
+   */
+  function robustLow(prices) {
+    let p = (prices || []).filter((x) => x > 0).sort((a, b) => a - b);
+    if (p.length >= 3 && p[0] < p[1] * 0.7) p = p.slice(1);
+    // one listing well under a tight cluster is about to be sniped: measure from the cluster
+    else if (p.length >= 3 && p[0] < p[1] * 0.92 && p[2] <= p[1] * 1.03) p = p.slice(1);
+    return { floor: p[0] || 0, second: p[1] || p[0] || 0 };
+  }
+
+  /** A falling price (≥ 24 h of history) snipes deeper: half the drop, at most 3 points. Rising prices change nothing. */
+  function trendNudge(trend) {
+    return trend && !trend.thin && trend.pct < 0 ? Math.min(3, Math.round(-trend.pct / 2)) : 0;
+  }
+
+  /**
+   * What a snipe is measured from (2.4.6, debate): Buy mode — the cheapest real listing;
+   * Trade mode — what it resells for: the lower of the market price and the 2nd-cheapest
+   * listing, lowered by the trend nudge. m: { avg, floor, second, nudge }.
+   */
+  function snipeBase(m, mode) {
+    if (!m || !(m.avg > 0)) return 0;
+    if (mode === 'trade') {
+      const r = Math.min(m.avg, m.second > 0 ? m.second : m.avg);
+      return roundPrice(r * (1 - (m.nudge || 0) / 100), 'down');
+    }
+    return m.floor > 0 ? m.floor : m.avg;
+  }
+
   function planMaxBuy(avg, discountPct, spendable) {
     if (!avg || spendable < MIN_PRICE) return { maxBuy: 0, cappedByCoins: false };
     const target = roundPrice(avg * (1 - Math.max(0, Math.min(90, discountPct || 0)) / 100), 'down');
@@ -1714,12 +1766,13 @@
     minRating: 0,
     // buying
     autoPrice: true, // price-check players and set their max buy automatically
-    discount: 10, // % under the market average to snipe at
+    discount: 4, // % under the cheapest listing to snipe at (2.4.6: 4 — inside the tax band, where fast flip bots can't profit)
     maxBuy: 1000, // used when a player has no price
     maxBuysPerSearch: 1,
     smartSnipe: true, // learn the best discount and target from hits, lost races and near misses
     smartMinPct: 4, // smart sniping never goes closer than this % under the average
     smartMaxPct: 14, // … nor deeper than this
+    smartPrice: false, // 2.4.6: let the learner set the discount too (off: it only picks which card to search)
     smartProbeEvery: 10, // 1 in N searches looks a bit above your max to spot near misses (never buys above it)
     minCoins: 0, // never spend below this balance
     filters: [], // saved search filters: [{ id, kind: 'filter', name, on, level, rarity, position, league, nation, club, minRating, maxRating, manualMax, maxBuy, avg }]
@@ -1799,7 +1852,7 @@
     cacheBustBid, jitter, pickTargets, planSellPrice, classifyStatus,
     normalizeName, parsePlayerDb, searchPlayers, playerForIteration, migrateConfig, filterSummary, sniperTargets, LEAGUES,
     findMarketPrice, robustPrice, searchBudget, addPriceSample, prunePrices, priceTrend, trendText, lookupUrl, planMaxBuy, effectiveMaxBuy, withinReach, huntTargets,
-    smartLevels, gammaSample, betaSample, armPrior, decayArm, upgradeArm, armRate, chooseDiscount, chooseTarget, missWeight, recordArm, deepestArmFor, priceShifted, bestArm, flipPlan, tradeOpts, tradeCap, bidAmount, freeCoins, bidBlock, warCeiling, warSteps, binVsWar, settleSales,
+    robustLow, trendNudge, snipeBase, recordGap, gapStats, smartLevels, gammaSample, betaSample, armPrior, decayArm, upgradeArm, armRate, chooseDiscount, chooseTarget, missWeight, recordArm, deepestArmFor, priceShifted, bestArm, flipPlan, tradeOpts, tradeCap, bidAmount, freeCoins, bidBlock, warCeiling, warSteps, binVsWar, settleSales,
     listSpendable, reserveOk, afterListBuy,
     aggregateListings, hotScore, rankHot, priceBands, provenFlips, flipValue, priceLadder, sbcCostEstimate,
     addHistory, summarizeHistory, isDiscordWebhook, discordPayload,
@@ -1820,7 +1873,7 @@
 
   const w = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '2.4.5';
+  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '2.4.6';
   const errText = (e) => (e && e.message ? e.message : String(e));
   const fmt = (n) => Number(n || 0).toLocaleString();
 
@@ -2582,7 +2635,8 @@
     save() { store.set(KEYS.learn, this.data); },
     key(p) { return `${p.kind === 'filter' ? 'f' : 'p'}:${p.id}`; },
     // never closer than your own "Snipe % under avg" (cfg.discount)
-    levels(cfg) { const d = cfg.discount || 0; return smartLevels(Math.max(cfg.smartMinPct, d), Math.max(cfg.smartMaxPct, d)); },
+    // 2.4.6: unless "Let it set the discount" is on, the learner only picks which card to search (one level = your Snipe %).
+    levels(cfg) { const d = cfg.discount || 0; return cfg.smartPrice ? smartLevels(Math.max(cfg.smartMinPct, d), Math.max(cfg.smartMaxPct, d)) : [Math.max(1, d)]; },
     /** Targets the learner may price: priced, no manual max, Buy or Trade mode. */
     usable(p, cfg) { return !!p && cfg.smartSnipe && cfg.mode !== 'alert' && p.avg > 0 && !p.manualMax; },
     arms(p) { const t = this.data.targets[this.key(p)]; return (t && t.arms) || {}; },
@@ -2614,6 +2668,7 @@
         if (outcome.nearPrice) o.nearArm = deepestArmFor(outcome.nearPrice, p.avg, levels);
       }
       t.arms = recordArm(t.arms, pct, o);
+      if (outcome.probe) t.gaps = recordGap(t.gaps, outcome.nearPrice, p.floor || p.avg, Date.now());
       this.data.targets[k] = t;
       const h = new Date().getHours();
       const hb = this.data.hours[h] || { n: 0, good: 0 };
@@ -2740,16 +2795,28 @@
           ui.log(`${player.name}: none listed right now — skipped until the next price check finds a price`, 'warn');
           continue;
         }
-        if (!isFilter) prices.add(player.id, { name: player.name, rating: player.rating }, r.lowest, r.count);
-        const plan = planMaxBuy(r.avg, this.cfg.discount, fut.coins() - this.cfg.minCoins);
+        let nudge = 0;
+        let trendNote = '';
+        if (!isFilter) {
+          prices.add(player.id, { name: player.name, rating: player.rating }, r.floor || r.lowest, r.count);
+          const tr = prices.trend(player.id);
+          nudge = trendNudge(tr);
+          trendNote = tr && !tr.thin ? ` · trend ${tr.pct > 0 ? '+' : ''}${tr.pct}%${nudge ? ` (falling → max ${nudge}% lower)` : ''}` : ' · trend: not enough history yet';
+        }
+        // Filters cover many different cards: they keep the market price; players use the cheapest real listing.
+        const m = isFilter ? { avg: r.avg } : { avg: r.avg, floor: r.floor, second: r.second, nudge };
+        const base = snipeBase(m, 'buy');
+        const pct = (this.cfg.discount || 0) + nudge;
+        const plan = planMaxBuy(base, pct, fut.coins() - this.cfg.minCoins);
         const reach = this.cfg.mode === 'trade' || isFilter || withinReach(plan.maxBuy, r.lowest);
-        Object.assign(player, { avg: r.avg, lowest: r.lowest, maxBuy: plan.maxBuy, outOfReach: !reach });
-        const flip = this.cfg.mode === 'trade' && flipPlan(r.avg, tradeOpts(r.avg, this.cfg));
+        Object.assign(player, { avg: r.avg, lowest: r.lowest, listed: r.count, floor: m.floor || 0, second: m.second || 0, nudge, maxBuy: plan.maxBuy, outOfReach: !reach });
+        const resale = this.cfg.mode === 'trade' ? snipeBase(m, 'trade') : 0;
+        const flip = this.cfg.mode === 'trade' && r.count >= 3 && flipPlan(resale, tradeOpts(r.avg, this.cfg));
         if (this.cfg.mode === 'trade') {
-          ui.log(`${player.name}: avg ${fmt(r.avg)} · ${flip ? `trade: buy ≤ ${fmt(flip.maxBuy)}, sell ${fmt(flip.sell)} (+${fmt(flip.profit)})` : 'no profitable trade at your min profit'}`, flip ? 'ok' : 'warn');
+          ui.log(`${player.name}: market ${fmt(r.avg)} · 2nd cheapest ${fmt(m.second || r.lowest)}${trendNote} → resale ${fmt(resale)} · ${flip ? `buy ≤ ${fmt(flip.maxBuy)}, sell ${fmt(flip.sell)} (+${fmt(flip.profit)} after tax)` : 'no profitable trade at your min profit'}`, flip ? 'ok' : 'warn');
         } else {
-          ui.log(`${player.name}: avg ${fmt(r.avg)} · lowest ${fmt(r.lowest)} · ${r.count} listed → max ${fmt(plan.maxBuy)}`
-            + (plan.cappedByCoins ? ' (all your coins)' : ` (${this.cfg.discount}% under)`)
+          ui.log(`${player.name}: ${isFilter ? `market ${fmt(r.avg)}` : `cheapest ${fmt(base)} · market ${fmt(r.avg)}`} · ${r.count} listed${trendNote} → max ${fmt(plan.maxBuy)}`
+            + (plan.cappedByCoins ? ' (all your coins)' : ` (${pct}% under the ${isFilter ? 'market' : 'cheapest'})`)
             + (player.manualMax ? ` — your manual ${fmt(player.manualMax)} is used instead` : ''), 'ok');
           if (!reach && !player.manualMax) ui.log(`⏭️ ${player.name}: out of reach — your max is ${Math.round(plan.maxBuy / r.lowest * 100)}% of the cheapest listing, so it's skipped while sniping (set a manual max to hunt this player anyway)`, 'warn');
         }
@@ -2840,7 +2907,9 @@
     planFor(player) {
       const cfg = this.cfg;
       if (cfg.mode !== 'trade') return { maxBuy: effectiveMaxBuy(player, cfg), plan: null };
-      const plan = player && flipPlan(player.avg, tradeOpts(player.avg, cfg));
+      // under 3 listed the "market" can be one overpriced card: no trade
+      if (player && player.listed > 0 && player.listed < 3) return { maxBuy: 0, plan: null };
+      const plan = player && flipPlan(snipeBase(player.kind === 'filter' ? { avg: player.avg } : player, 'trade'), tradeOpts(player.avg, cfg));
       if (!plan) return { maxBuy: 0, plan: null };
       const cap = roundPrice(tradeCap(cfg, fut.coins()), 'down'); // never too many coins on one card
       return { maxBuy: Math.min(plan.maxBuy, player.manualMax || Infinity, cap), plan };
@@ -2913,7 +2982,9 @@
         let maxBuy = planned.maxBuy;
         // Smart sniping: the learned discount, never above your coins / profitable price.
         let smartPct = 0;
-        if (pick.pct && maxBuy) {
+        // the search is recorded under this level (for picking targets) even when the learner doesn't set the price
+        const armPct = cfg.smartPrice ? 0 : (pick.pct && maxBuy ? pick.pct : 0);
+        if (pick.pct && maxBuy && cfg.smartPrice) {
           const cap = cfg.mode === 'trade' ? maxBuy : Math.min(roundPrice(spendable, 'down'), roundPrice(player.avg * (1 - (cfg.discount || 0) / 100), 'down'));
           const learned = roundPrice(player.avg * (1 - pick.pct / 100), 'down');
           if (learned >= MIN_PRICE && learned <= cap) { maxBuy = learned; smartPct = pick.pct; }
@@ -2934,7 +3005,7 @@
 
         const bidTurn = cfg.bidSnipe && cfg.mode !== 'alert' && i % 2 === 1;
         // Now and then look a little above the max to spot near misses (never buys above the max).
-        const probe = !bidTurn && smartPct && cfg.smartProbeEvery > 0 && Math.random() < 1 / cfg.smartProbeEvery;
+        const probe = !bidTurn && (smartPct || armPct) && cfg.smartProbeEvery > 0 && Math.random() < 1 / cfg.smartProbeEvery;
         const searchMax = probe ? roundPrice(maxBuy * 1.04, 'up') : maxBuy;
         this.setStatus('searching', `${bidTurn ? 'Auctions' : 'Searching'} ${player ? player.name : ''} ≤ ${fmt(maxBuy)}${smartPct ? ` (${smartPct}% under)` : ''}`.replace('  ', ' '));
         const res = await fut.search(bidTurn ? fut.criteria(cfg, player, 0, i, maxBuy) : fut.criteria(cfg, player, searchMax, i));
@@ -2948,7 +3019,8 @@
           beat.next += 25;
           const gaps = huntTargets(cfg).filter((p) => p.lowest && p.kind !== 'filter').map((p) => {
             const mx = effectiveMaxBuy(p, cfg);
-            return `${p.name} ${fmt(mx)} vs cheapest ${fmt(p.lowest)} (${Math.max(0, Math.round((1 - mx / p.lowest) * 100))}% under)`;
+            const g = gapStats(((learn.data.targets[learn.key(p)] || {}).gaps));
+            return `${p.name} ${fmt(mx)} vs cheapest ${fmt(p.lowest)} (${Math.max(0, Math.round((1 - mx / p.lowest) * 100))}% under)${g.probes ? ` · near-miss checks ${g.probes}, ${g.near} found${g.near ? ` (avg ${g.avgPct}% under the cheapest)` : ''}` : ''}`;
           });
           ui.log(`🔎 Still sniping — ${this.stats.searches - startSearches} searches (${[...beat.per].map(([n, c]) => `${n} ${c}`).join(', ')}) · ${beat.under} listing${beat.under === 1 ? '' : 's'} under your max${gaps.length ? ` · ${gaps.join(' · ')}` : ''}`, 'muted');
         }
@@ -2967,7 +3039,9 @@
         } else {
           errors = 0;
           const range = player && player.kind === 'filter' ? { minRating: player.minRating || 0, maxRating: player.maxRating || 0 } : {};
-          const targets = pickTargets(res.listings, { ...cfg, ...range, maxBuy }, cfg.mode === 'alert' ? Infinity : Math.min(spendable, freeCoins(cfg, fut.coins(), [...this.bids.values()])));
+          // A player hunt matches every version of the card (maskedDefId): only buy the exact card you added.
+          const buyable = player && player.kind !== 'filter' ? res.listings.filter((l) => !l.defId || l.defId === player.id) : res.listings;
+          const targets = pickTargets(buyable, { ...cfg, ...range, maxBuy }, cfg.mode === 'alert' ? Infinity : Math.min(spendable, freeCoins(cfg, fut.coins(), [...this.bids.values()])));
           const outcome = { hit: 0, miss: 0, near: 0 };
           // Many copies under your max in one search = the market dropped: re-check the price next turn.
           if (player && player.kind !== 'filter' && cfg.autoPrice && !player.manualMax
@@ -3003,9 +3077,10 @@
               else if (r === 'missed') outcome.miss++;
             }
           }
-          if (smartPct && player) {
-            learn.record(player, smartPct, outcome, cfg);
-            if (outcome.near && !outcome.hit) ui.log(`🎯 Near miss: ${player.name} listed just above your ${fmt(maxBuy)} (${smartPct}% under) — learning`, 'muted');
+          if ((smartPct || armPct) && player) {
+            learn.record(player, smartPct || armPct, outcome, cfg);
+            const ref = player.floor || player.avg;
+            if (outcome.near && !outcome.hit) ui.log(`🎯 Near miss: ${player.name} listed at ${fmt(outcome.nearPrice)}, just above your ${fmt(maxBuy)}${ref ? ` (${Math.round((1 - outcome.nearPrice / ref) * 100)}% under the cheapest)` : ''} — noted`, 'muted');
           }
         }
         ui.renderStats();
@@ -4790,7 +4865,8 @@
       ['tradeBudgetPct', 'Max % of my coins on one card', 'number'],
     ],
     smart: [
-      ['smartSnipe', 'Smart sniping (learns the best discount)', 'toggle'],
+      ['smartSnipe', 'Smart sniping (picks which card to search)', 'toggle'],
+      ['smartPrice', 'Also let it set the discount (experimental)', 'toggle'],
       ['smartMinPct', 'Never closer than % under avg', 'number'],
       ['smartMaxPct', 'Never deeper than % under avg', 'number'],
       ['smartProbeEvery', 'Near-miss check: 1 in N searches (0 = off)', 'number'],
@@ -5964,10 +6040,12 @@
         const r = (x) => Math.round(x || 0);
         const n = r(Object.values(arms).reduce((a, x) => a + (x.n || 0), 0));
         const tot = (k) => r(Object.values(arms).reduce((a, x) => a + (x[k] || 0), 0));
-        const best = bestArm(arms, levels, Date.now());
+        const best = cfg.smartPrice ? bestArm(arms, levels, Date.now()) : null;
+        const g = gapStats((learn.data.targets[learn.key(p)] || {}).gaps);
+        const gapLine = g.probes ? `<br>near-miss checks ${g.probes} · ${g.near} found just above your max${g.near ? ` · avg ${g.avgPct}% under the cheapest` : ''}` : '';
         const tried = levels.filter((d) => arms[d] && (arms[d].n || arms[d].near)).map((d) => `${d}%: ${r(arms[d].n)}${arms[d].hits ? ` ✅${r(arms[d].hits)}` : ''}${arms[d].misses ? ` ⚡${r(arms[d].misses)}` : ''}${arms[d].near >= 0.5 ? ` 🎯${r(arms[d].near)}` : ''}`).join(' · ');
         return `<div class="li"><span class="t"><b>${esc(p.name)}${best && (best.hits || best.misses || best.near) ? ` <span class="tag ok">best ${best.pct}% under</span>` : ''}</b>
-          <small>${n ? `${n} searches · ${tot('hits')} bought · ${tot('misses')} lost races · ${tot('near')} near misses` : 'not tried yet'}${tried ? `<br>${tried}` : ''}</small></span></div>`;
+          <small>${n ? `${n} searches · ${tot('hits')} bought · ${tot('misses')} lost races` : 'not tried yet'}${cfg.smartPrice && tried ? `<br>${tried}` : ''}${gapLine}</small></span></div>`;
       });
       const sp = learn.data.speed || {};
       const hours = Object.entries(learn.data.hours || {}).filter(([, h]) => h.n >= 10).map(([h, x]) => ({ h: Number(h), r: x.good / x.n })).sort((a, b) => b.r - a.r).slice(0, 3).filter((x) => x.r > 0);

@@ -19,6 +19,19 @@ Newest learnings go at the end of each section. Dates are when the note was writ
   the Web App's own calls, restores after 3 or 3 min) and skips rare-only for the rest of the session once it came back
   empty. Next: user records a hand search with Rarity = Rare → copy those exact fields into newCriteria/criteria/sbc.
 
+- 2026-11-12, session 2 (cont.): pricing debate (Sonnet A learner-core / B rule-core / referee; Opus observer) →
+  2.4.6 (2.4.5 folded in, never pushed alone). Findings verified in code: with zero hits Thompson score p·d favoured the
+  DEEPEST arm (prior b∝d, but ev ∝ d) → dry spells drifted to 14%; probes on the shallowest arm credited nothing;
+  learner in trade mode was always deeper than flipPlan's ~8% cap (only lowered buys); bid-turn searches never record.
+  Shipped: buy = Snipe % under robust cheapest (robustLow), trade = flipPlan(min(avg, 2nd cheapest) − trend nudge),
+  trendNudge (falling only, ≤3 pts, needs 24 h), learner picks targets only unless `smartPrice` (new, off),
+  depth credit only with evidence, probe gaps (recordGap/gapStats) on the Learning card + heartbeat.
+  User's framing: "multi-source decision" = anchor (live listings) + capped nudges, not an equal vote. Next: turn
+  on probe/learner nudges once logs show ≥30 probes per card; still open: count bid-turn searches.
+- Slow-turn lesson (user said "taking a super long time"): don't wait for one release's full suite before starting
+  the next; fold small releases together and run every suite once. e2e-tasks can time out when a random 80–120 s
+  safety rest lands in "Analyse" (200 s wait) — timing, not code.
+
 ## 1. How the user works and talks
 - Short, casual messages, often typed on a phone while busy (once while driving). Expect typos; read for intent.
 - Thinks out loud and expects Claude to fill in the details, pick the best option and say why, not list everything.
@@ -159,6 +172,15 @@ Newest learnings go at the end of each section. Dates are when the note was writ
   targets, reset-to-defaults, auto-save before restore. Still open: one-row scrollable tabs (8 tabs take 2 rows),
   "Advanced" section for bid-war/win-rule settings, inline copy box instead of prompt(), toast position on phone,
   clearer auto vs manual max chips, league chips instead of IDs.
+
+- 2026-11-12 two-advisor review of 2.4.6 (user's ask: "big brother + little brother"; user wants the cheapest big
+  brother = Opus, and at HIGH effort, not max — "knowledge difference minimal, usage big"; pass effort:'high' and
+  ask to change the setup script). Sonnet little brother (14 s): 6 "check this" items from skimming, 1 real (log
+  wording). Opus big brother (~8 min, no shell, read the file): real finds — wrong-version buys (maskedDefId hunts,
+  pickTargets never checked defId; fixed), floor = a listing about to be sniped (tightened robustLow), trend recorded
+  outlier lows (now floor), thin trade markets (<3 listed → no trade), global Rarity may blind every hunt (ask user),
+  and the key insight: 10% under is where sub-second flip bots win; snipe inside the tax band (4%) → user said yes.
+  One factual slip: claimed 10% under cheapest ≈ 12–15% under the old max (really ~1–3%). Verify advisor numbers.
 
 ## 7. Open work and ideas
 - Shipped in 2.3.1: bidding spend guard (Fable), smart-sniping floor (intern). 2.4.2 fixed: nothing-listed fallback, stop/start run token, SBC hard cap, jobs vs caps. Still open from the Fable review (as of 2.4.2: only minor items — fixed sellMode has no profit floor; price checks don't count toward session maxSearches; special-version id buys):
