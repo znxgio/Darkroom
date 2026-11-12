@@ -1132,3 +1132,22 @@ test('migrateConfig 2.4.6: old default Snipe % 10 → 4, your own value kept, on
   assert.equal(c.migrateConfig({ discount: 10, snipe246: true }).discount, 10, 'set back to 10 after the move: kept');
   assert.equal(c.DEFAULT_CONFIG.discount, 4);
 });
+
+test('plan: floor, budget, verdict, summary', () => {
+  assert.equal(c.planBudget(120000, 10), 12000);
+  assert.equal(c.planBudget(120000, 80), 60000, 'never more than 50 %');
+  assert.equal(c.planFloor(120000, 12000, 0), 108000);
+  assert.equal(c.planFloor(120000, 12000, 115000), 115000, 'Keep coins wins when higher');
+  assert.equal(c.planVerdict('40 min session limit — take a break', 0, 1), 'next');
+  assert.equal(c.planVerdict('session search limit reached', 0, 1), 'next');
+  assert.equal(c.planVerdict('session search limit reached', 5, 1), 'end', 'a safety lock always ends the plan');
+  for (const r of ['EA verification (458) — solve it', 'logged out (401) — log in again', 'stopped by you', 'not enough coins', 'daily search cap reached', '']) assert.equal(c.planVerdict(r, 0, 1), 'end', r);
+  const s = c.planSummary({ planBlocks: 3, planBlockMin: 60, planBreakMin: 30, planBudgetPct: 10, minCoins: 0, searchesPerDay: 600, planSbcs: [], planSbcMax: 3, planSbcCoins: 2000 }, 100000);
+  assert.equal(s.totalMin, 240);
+  assert.match(s.text, /3 × 60 min sniping, 30 min breaks · about 4 h · can spend up to 10,000 · never below 90,000/);
+});
+
+test('clampConfig: plan settings stay inside the safety caps', () => {
+  const r = c.clampConfig({ ...c.DEFAULT_CONFIG, planBlockMin: 500, planBreakMin: 1, planBlocks: 40, planBudgetPct: 90 }).cfg;
+  assert.deepEqual([r.planBlockMin, r.planBreakMin, r.planBlocks, r.planBudgetPct], [120, 20, 8, 50]);
+});

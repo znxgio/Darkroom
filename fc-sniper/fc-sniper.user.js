@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FC Sniper
 // @namespace    https://github.com/znxgio/darkroom
-// @version      2.4.6
+// @version      2.4.7
 // @description  Sniper, pack opener, SBC solver and team upgrade advisor for the EA SPORTS FC Ultimate Team Web App, with built-in safety limits.
 // @match        https://www.ea.com/*ultimate-team/web-app*
 // @match        https://www.ea.com/ea-sports-fc/ultimate-team/web-app*
@@ -959,6 +959,34 @@
    * Max buy for a player: `discountPct` under the market average, but never
    * more than the coins you can spend. Returns { maxBuy, cappedByCoins }.
    */
+  // ---- Session plan (2.4.7, debate) ------------------------------------------------
+
+  /** Coins never go below this during a plan: the higher of Keep coins and (coins at start − budget). */
+  function planFloor(startCoins, budget, minCoins) {
+    return Math.max(minCoins || 0, (startCoins || 0) - Math.max(0, budget || 0));
+  }
+
+  /** Budget in coins from a % of your coins at the start. */
+  function planBudget(startCoins, pct) {
+    return Math.max(0, Math.round((startCoins || 0) * Math.min(50, Math.max(0, pct || 0)) / 100));
+  }
+
+  /** How a sniper block ended: 'next' (a normal block end) or 'end' (anything else ends the whole plan). */
+  function planVerdict(reason, lockedUntil, now) {
+    if (lockedUntil > now) return 'end';
+    return /min session limit|session search limit|session buy limit/i.test(reason || '') ? 'next' : 'end';
+  }
+
+  /** One-line summary shown before a plan starts. */
+  function planSummary(cfg, coins) {
+    const blocks = Math.max(1, cfg.planBlocks || 1);
+    const totalMin = blocks * (cfg.planBlockMin || 0) + (blocks - 1) * (cfg.planBreakMin || 0);
+    const budget = planBudget(coins, cfg.planBudgetPct);
+    const floor = planFloor(coins, budget, cfg.minCoins);
+    const sbcs = (cfg.planSbcs || []).length;
+    return { blocks, totalMin, budget, floor, text: `${blocks} × ${cfg.planBlockMin} min sniping, ${cfg.planBreakMin} min breaks · about ${formatDuration(totalMin * 60e3)} · can spend up to ${budget.toLocaleString('en-US')} · never below ${floor.toLocaleString('en-US')} · up to ${cfg.searchesPerDay} searches today${sbcs ? ` · ${sbcs} SBC${sbcs === 1 ? '' : 's'} in the breaks (≤ ${cfg.planSbcMax} each break, ≤ ${(cfg.planSbcCoins || 0).toLocaleString('en-US')} coins each)` : ''}` };
+  }
+
   /**
    * The cheapest real listing (a lone listing >30% under the next one is a mistake that's
    * about to be sniped, not the market) and the one after it. Returns { floor, second }.
@@ -1028,6 +1056,14 @@
     set('buysPerDay', Math.max(1, num('buysPerDay') || 1));
     set('sessionMinutes', Math.min(SAFETY.maxSessionMinutes, Math.max(1, num('sessionMinutes') || SAFETY.maxSessionMinutes)));
     set('maxSearches', Math.max(1, num('maxSearches') || 1));
+    if (cfg.planBlockMin !== undefined) {
+      set('planBlocks', Math.min(8, Math.max(1, Math.round(num('planBlocks')) || 1)));
+      set('planBlockMin', Math.min(SAFETY.maxSessionMinutes, Math.max(10, num('planBlockMin') || 60)));
+      set('planBreakMin', Math.min(240, Math.max(20, num('planBreakMin') || 20)));
+      set('planBudgetPct', Math.min(50, Math.max(0, num('planBudgetPct'))));
+      set('planSbcMax', Math.min(10, Math.max(0, Math.round(num('planSbcMax')))));
+      set('planSbcCoins', Math.min(50000, Math.max(0, num('planSbcCoins'))));
+    }
     return { cfg, changed };
   }
 
@@ -1834,6 +1870,15 @@
     sbcMaxRating: 86, // never use players rated above this
     sbcProtectSquad: true, // never use players from your active squad
     sbcRepeat: 1, // times to repeat a repeatable SBC
+    // Session plan (2.4.7): sniping blocks with real breaks, cheap repeatable SBCs in the breaks
+    planBlocks: 3,
+    planBlockMin: 60, // ≤ 120 (the session cap)
+    planBreakMin: 30, // ≥ 20, no market activity
+    planBudgetPct: 10, // the plan may spend at most this % of your coins at the start
+    planSbcs: [], // [{ id, name }] in order — only these, never others
+    planSbcMax: 3, // completions per break
+    planSbcCoins: 2000, // max coins of buys per SBC
+    planKeepAlive: true, // one light request every ~10 min in breaks so EA doesn't log you out
     sbcBuyMissing: true, // buy cheap fill-ins from the market when your club can't complete an SBC
     sbcUseUnassigned: true, // move Unassigned players to club / SBC storage first so SBCs can use them
     sbcBuyLimit: 20000, // max coins of fill-ins per SBC
@@ -1852,7 +1897,7 @@
     cacheBustBid, jitter, pickTargets, planSellPrice, classifyStatus,
     normalizeName, parsePlayerDb, searchPlayers, playerForIteration, migrateConfig, filterSummary, sniperTargets, LEAGUES,
     findMarketPrice, robustPrice, searchBudget, addPriceSample, prunePrices, priceTrend, trendText, lookupUrl, planMaxBuy, effectiveMaxBuy, withinReach, huntTargets,
-    robustLow, trendNudge, snipeBase, recordGap, gapStats, smartLevels, gammaSample, betaSample, armPrior, decayArm, upgradeArm, armRate, chooseDiscount, chooseTarget, missWeight, recordArm, deepestArmFor, priceShifted, bestArm, flipPlan, tradeOpts, tradeCap, bidAmount, freeCoins, bidBlock, warCeiling, warSteps, binVsWar, settleSales,
+    planFloor, planBudget, planVerdict, planSummary, robustLow, trendNudge, snipeBase, recordGap, gapStats, smartLevels, gammaSample, betaSample, armPrior, decayArm, upgradeArm, armRate, chooseDiscount, chooseTarget, missWeight, recordArm, deepestArmFor, priceShifted, bestArm, flipPlan, tradeOpts, tradeCap, bidAmount, freeCoins, bidBlock, warCeiling, warSteps, binVsWar, settleSales,
     listSpendable, reserveOk, afterListBuy,
     aggregateListings, hotScore, rankHot, priceBands, provenFlips, flipValue, priceLadder, sbcCostEstimate,
     addHistory, summarizeHistory, isDiscordWebhook, discordPayload,
@@ -1873,13 +1918,13 @@
 
   const w = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '2.4.6';
+  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '2.4.7';
   const errText = (e) => (e && e.message ? e.message : String(e));
   const fmt = (n) => Number(n || 0).toLocaleString();
 
   // ---- Storage ----------------------------------------------------------------
 
-  const KEYS = { cfg: 'fc-sniper:config', safety: 'fc-sniper:safety', history: 'fc-sniper:history', ui: 'fc-sniper:ui', log: 'fc-sniper:log', learn: 'fc-sniper:learn', debug: 'fc-sniper:debug', prices: 'fc-sniper:prices', bids: 'fc-sniper:bids' };
+  const KEYS = { cfg: 'fc-sniper:config', safety: 'fc-sniper:safety', history: 'fc-sniper:history', ui: 'fc-sniper:ui', log: 'fc-sniper:log', learn: 'fc-sniper:learn', debug: 'fc-sniper:debug', prices: 'fc-sniper:prices', bids: 'fc-sniper:bids', plan: 'fc-sniper:plan' };
   const store = {
     get(key, fallback) {
       try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : fallback; } catch { return fallback; }
@@ -2729,6 +2774,7 @@
 
     stop(reason) {
       if (!this.running) return;
+      this.lastStop = reason;
       this.running = false;
       keepAwake(false);
       this.setStatus('idle', 'Idle');
@@ -2845,6 +2891,7 @@
     // -- main loop --
 
     toggle() {
+      if (plan.active) { plan.cancel(); if (jobs.current) jobs.cancel(); else if (this.running) this.stop('stopped by you'); return; }
       if (jobs.current) return jobs.cancel();
       if (this.running) this.stop('stopped by you'); else this.start();
     },
@@ -3452,9 +3499,11 @@
       if (!gate.ok) { ui.log(`Can't start — ${gate.reason}`, 'err'); return; } // daily caps too, not only lockouts
       this.current = name;
       this.cancelled = false;
+      this.loggedOut = false;
       ui.setJob(name);
       try {
         await fn();
+        return true;
       } catch (e) {
         if (!(e instanceof Stopped)) {
           ui.log(`${name} stopped: ${errText(e)}`, 'err');
@@ -3534,7 +3583,7 @@
         sounds.alarm();
         throw new Stopped();
       }
-      if (kind === 'session') { ui.log(`Logged out (${status}) — log in again`, 'err'); throw new Stopped(); }
+      if (kind === 'session') { this.loggedOut = true; ui.log(`Logged out (${status}) — log in again`, 'err'); throw new Stopped(); }
       throw new Error(`${what} failed (EA status ${status ?? 'unknown'})`);
     },
   };
@@ -3662,7 +3711,7 @@
     plan: null, // { set, challenge, solution }
 
     async loadSets() {
-      await jobs.run('Loading SBCs', async () => {
+      return jobs.run('Loading SBCs', async () => {
         engine.setStatus('pricing', 'Loading SBCs…');
         const r = await fut.sbcSets();
         jobs.check(r, 'loading SBCs');
@@ -3673,7 +3722,7 @@
     },
 
     async loadChallenges(set) {
-      await jobs.run('Loading SBC', async () => {
+      return jobs.run('Loading SBC', async () => {
         engine.setStatus('pricing', `Loading ${set.name}…`);
         const r = await fut.challenges(set);
         jobs.check(r, 'loading challenges');
@@ -4064,7 +4113,7 @@
     },
 
     async solve(set, entry) {
-      await jobs.run('Solving SBC', async () => {
+      return jobs.run('Solving SBC', async () => {
         const { challenge } = entry;
         let { parsed } = entry;
         if (parsed.unsupported.length) { ui.log(`Can't auto-solve yet: ${parsed.unsupported.join(', ')}`, 'warn'); return; }
@@ -4221,8 +4270,8 @@
 
     async submit(fillOnly) {
       const plan = this.plan;
-      if (!plan) return;
-      await jobs.run(fillOnly ? 'Filling SBC' : 'Submitting SBC', async () => {
+      if (!plan) return false;
+      return jobs.run(fillOnly ? 'Filling SBC' : 'Submitting SBC', async () => {
         const times = fillOnly ? 1 : Math.max(1, engine.cfg.sbcRepeat || 1);
         let current = plan;
         const before = !fillOnly && engine.cfg.sbcOpenRewards ? await packs.counts() : null;
@@ -4251,6 +4300,7 @@
           this.raw = (this.raw || []).filter((p) => !used.has(p.itemId));
           this.club = (await this.pool()).filter((p) => !used.has(p.id));
           submitted++;
+          this.submittedTotal = (this.submittedTotal || 0) + 1;
           ui.log(`✅ Submitted ${set.name}${entry.challenge.name && entry.challenge.name !== set.name ? ` — ${entry.challenge.name}` : ''}`, 'ok');
           ui.toast(`SBC done: ${set.name}`, 'ok');
           sounds.buy();
@@ -4814,6 +4864,201 @@
     },
   };
 
+  // ---- Session plan (2.4.7) -----------------------------------------------------------
+  // Sniping blocks with real breaks; between blocks, only the SBCs you ticked, cheapest checks first.
+  // One coin floor for everything (sniping, trades, SBC buys). Anything EA pushes back with —
+  // captcha, market limit, logout, a safety lock — ends the whole plan at once. Never auto-resumes.
+
+  const plan = {
+    active: false,
+    cancelled: false,
+    state: store.get(KEYS.plan, null), // { startedAt, startCoins, floor, budget, block, blocks, sbcDone, ended, saved }
+
+    save() { store.set(KEYS.plan, this.state); ui.renderPlan(); },
+    cancel() { if (this.active && !this.cancelled) { this.cancelled = true; ui.log('Stopping the plan…', 'warn'); } },
+    locked() { engine.safety = store.get(KEYS.safety, {}); return (engine.safety.lockUntil || 0) > Date.now(); },
+
+    /** After a reload: a plan that was running is never resumed — put your settings back and say where it stopped. */
+    recover() {
+      const st = this.state;
+      if (!st || st.ended) return;
+      this.restore();
+      st.ended = `interrupted at block ${st.block || 1} of ${st.blocks} (the page reloaded) — start a new plan when you're ready`;
+      this.save();
+      ui.log(`📋 Plan ${st.ended}`, 'warn');
+    },
+
+    /** Put back the settings the plan tightened for its run. */
+    restore() {
+      const st = this.state;
+      if (!st || !st.saved) return;
+      Object.assign(engine.cfg, st.saved);
+      st.saved = null;
+      engine.save(); ui.syncForm();
+    },
+
+    end(reason, kind = 'warn') {
+      const st = this.state;
+      this.restore();
+      st.ended = reason;
+      st.endedAt = Date.now();
+      st.endCoins = fut.coins();
+      this.save();
+      const spent = Math.max(0, st.startCoins - st.endCoins);
+      const done = Object.values(st.sbcDone || {}).reduce((a, x) => a + x.n, 0);
+      const summary = `📋 Plan ended — ${reason} · coins ${fmt(st.startCoins)} → ${fmt(st.endCoins)}${spent ? ` (−${fmt(spent)}, cards bought are in your club/transfer list)` : ''} · ${done} SBC${done === 1 ? '' : 's'} done`;
+      ui.log(summary, kind);
+      notify.discord('stop', { reason: summary.replace('📋 ', '') });
+      this.active = false;
+      ui.setRunning(false);
+    },
+
+    /** Light health check before every block: logged in, market answers normally. Can only stop, never restart. */
+    async check() {
+      if (this.locked()) return `safety lock: ${engine.safety.lockReason || 'EA pushback'}`;
+      if (!fut.ready()) return 'Web App not ready (logged out?)';
+      const gate = engine.gate();
+      if (!gate.ok) return gate.reason;
+      const c = fut.newCriteria();
+      c.level = 'gold';
+      c.maxBuy = 1000;
+      const r = await fut.search(c);
+      engine.countUsage('searches');
+      if (!r.ok) {
+        const kind = classifyStatus(r.status);
+        if (kind === 'captcha' || kind === 'throttled') engine.lock(kind, `EA pushback during the plan check (${r.status})`);
+        return `EA answered ${r.status} to the check (${kind || 'error'})`;
+      }
+      return '';
+    },
+
+    /** A real break: no market calls. Optional keep-alive: one transfer-list read every ~10 min. */
+    async rest(min) {
+      // tests shorten a "minute" (the mock Web App can't wait 20 real minutes)
+      let unit = 60e3;
+      try { unit = Number(localStorage.getItem('fc-sniper:test-minute-ms')) || 60e3; } catch { /* default */ }
+      const until = Date.now() + min * unit;
+      let nextPing = Date.now() + 10 * 60e3;
+      engine.setStatus('resting', `Plan break — block ${this.state.block + 1} of ${this.state.blocks} next`, until);
+      while (Date.now() < until && !this.cancelled) {
+        await sleep(Math.min(1000, until - Date.now()));
+        if (engine.cfg.planKeepAlive && Date.now() >= nextPing && Date.now() < until - 60e3) {
+          nextPing = Date.now() + 10 * 60e3;
+          const items = await fut.transferList();
+          ui.log(items ? '🔌 keep-alive' : '🔌 keep-alive got no answer — EA may have logged you out', items ? 'muted' : 'warn');
+          if (!items) return 'keep-alive got no answer (logged out?)';
+        }
+      }
+      return '';
+    },
+
+    /** The SBCs you ticked, in order: each while it's solvable, under the coin cap and above the floor. */
+    async sbcs() {
+      const st = this.state;
+      const cfg = engine.cfg;
+      const list = cfg.planSbcs || [];
+      if (!list.length || !(cfg.planSbcMax > 0)) return '';
+      let done = 0;
+      const bad = new Set(st.sbcFailed || []);
+      const stopNow = () => this.cancelled || this.locked() || jobs.loggedOut;
+      if (!(await sbc.loadSets()) || stopNow()) return stopNow() ? 'stopped during SBCs' : '';
+      for (const want of list) {
+        while (done < cfg.planSbcMax && !bad.has(want.id)) {
+          if (stopNow()) return 'stopped during SBCs';
+          const set = sbc.sets.find((x) => String(x.id) === String(want.id));
+          const skip = (why) => { ui.log(`📋 ${want.name}: ${why} — skipped for the rest of the plan`, 'muted'); bad.add(want.id); };
+          if (!set) { skip('not available any more (done, expired or not loaded)'); break; }
+          const room = fut.coins() - st.floor;
+          if (room <= 0) return 'coin floor reached';
+          await sbc.loadChallenges(set);
+          if (stopNow()) return 'stopped during SBCs';
+          const entry = (sbc.open.get(set.id) || []).find((e) => !e.parsed.points && !e.parsed.unsupported.length);
+          if (!entry) { skip('no challenge the bot can solve'); break; }
+          // the plan's caps only ever tighten your own SBC limit
+          const before = { limit: cfg.sbcBuyLimit, repeat: cfg.sbcRepeat };
+          cfg.sbcBuyLimit = Math.max(0, Math.min(cfg.sbcBuyLimit || 0, cfg.planSbcCoins || 0, room));
+          cfg.sbcRepeat = 1;
+          try {
+            sbc.plan = null;
+            await sbc.solve(set, entry);
+            if (stopNow()) return 'stopped during SBCs';
+            if (!sbc.plan) { skip('no solution within your caps'); break; }
+            if (fut.coins() - sbc.plan.buyTotal < st.floor) { ui.log(`📋 ${want.name}: buying ${fmt(sbc.plan.buyTotal)} would go under the floor`, 'muted'); return 'coin floor reached'; }
+            const n0 = sbc.submittedTotal || 0;
+            await sbc.submit(false);
+            if (stopNow()) return 'stopped during SBCs';
+            if ((sbc.submittedTotal || 0) > n0) {
+              done++;
+              const d = st.sbcDone[want.id] || { name: want.name, n: 0 };
+              d.n++; st.sbcDone[want.id] = d;
+              this.save();
+              ui.log(`📋 ${want.name} done (${d.n} tonight) — checking it again`, 'ok');
+            } else { skip('submitting failed'); break; }
+          } finally {
+            cfg.sbcBuyLimit = before.limit; cfg.sbcRepeat = before.repeat;
+          }
+        }
+      }
+      st.sbcFailed = [...bad];
+      this.save();
+      return '';
+    },
+
+    async start() {
+      if (this.active || engine.running || engine.busy || jobs.current) return;
+      ui.commit();
+      if (!fut.ready()) { ui.log('Web App not ready — log in first', 'err'); return; }
+      const { cfg } = clampConfig(engine.cfg);
+      engine.cfg = cfg; engine.save(); ui.syncForm();
+      engine.safety = store.get(KEYS.safety, {});
+      const gate = engine.gate();
+      if (!gate.ok) { ui.log(`Can't start the plan — ${gate.reason}`, 'err'); return; }
+      const coins = fut.coins();
+      const sum = planSummary(cfg, coins);
+      if (!w.confirm(`Start this plan?\n\n${sum.text}\n\nAny captcha, market limit or logout ends it at once.`)) return;
+      this.state = { startedAt: Date.now(), startCoins: coins, budget: sum.budget, floor: sum.floor, block: 0, blocks: sum.blocks, sbcDone: {}, sbcFailed: [], ended: '',
+        saved: { minCoins: cfg.minCoins, sessionMinutes: cfg.sessionMinutes } };
+      // the plan's floor and block length only ever tighten your settings; put back at the end
+      cfg.minCoins = Math.max(cfg.minCoins || 0, sum.floor);
+      cfg.sessionMinutes = Math.min(cfg.planBlockMin, SAFETY.maxSessionMinutes); // one block = one session
+      engine.save(); ui.syncForm();
+      this.active = true; this.cancelled = false; jobs.loggedOut = false;
+      this.save();
+      ui.setRunning(true);
+      ui.log(`📋 Plan started — ${sum.text}`, 'ok');
+      try {
+        await this.run();
+      } catch (e) {
+        if (this.active) this.end(`error: ${errText(e)}`, 'err');
+      }
+    },
+
+    async run() {
+      const st = this.state;
+      const cfg = engine.cfg;
+      for (let b = 1; b <= st.blocks; b++) {
+        st.block = b; this.save();
+        if (this.cancelled) return this.end('stopped by you');
+        const bad = await this.check();
+        if (bad) return this.end(`check before block ${b} failed — ${bad}`, 'err');
+        if (fut.coins() <= st.floor) return this.end('coin floor reached');
+        ui.log(`📋 Block ${b} of ${st.blocks}: sniping for up to ${cfg.sessionMinutes} min (✅ check passed)`, 'ok');
+        engine.lastStop = '';
+        await engine.start();
+        while (engine.running || engine.busy) await sleep(500);
+        if (this.cancelled) return this.end('stopped by you');
+        if (planVerdict(engine.lastStop, (store.get(KEYS.safety, {}).lockUntil || 0), Date.now()) === 'end') return this.end(`block ${b} ended: ${engine.lastStop || 'it did not start'}`);
+        if (b === st.blocks) break;
+        const sb = await this.sbcs();
+        if (sb === 'stopped during SBCs') return this.end(this.cancelled ? 'stopped by you' : jobs.loggedOut ? 'logged out during an SBC' : 'EA pushback during an SBC', this.cancelled ? 'warn' : 'err');
+        const rest = await this.rest(cfg.planBreakMin);
+        if (this.cancelled) return this.end('stopped by you');
+        if (rest) return this.end(rest, 'err');
+      }
+      return this.end(`all ${st.blocks} blocks done`, 'ok');
+    },
+  };
+
   // ---- UI -----------------------------------------------------------------------
 
   const ICON = {
@@ -4870,6 +5115,15 @@
       ['smartMinPct', 'Never closer than % under avg', 'number'],
       ['smartMaxPct', 'Never deeper than % under avg', 'number'],
       ['smartProbeEvery', 'Near-miss check: 1 in N searches (0 = off)', 'number'],
+    ],
+    plan: [
+      ['planBlocks', 'Sniping blocks', 'number'],
+      ['planBlockMin', 'Block length (min, ≤ 120)', 'number'],
+      ['planBreakMin', 'Break between blocks (min, ≥ 20)', 'number'],
+      ['planBudgetPct', 'Spend at most % of my coins', 'number'],
+      ['planSbcMax', 'SBCs per break', 'number'],
+      ['planSbcCoins', 'Max coins of buys per SBC', 'number'],
+      ['planKeepAlive', 'Keep me logged in during breaks', 'toggle'],
     ],
     hot: [
       ['hotAuto', 'Pick hot cards when I start trading', 'toggle'],
@@ -5179,6 +5433,13 @@
               </div>
               <p class="note" data-r="budget"></p>
             </div>
+            <details class="card" data-r="plan-card"><summary><h4 style="display:inline">📋 Session plan</h4></summary>
+              <p class="note" data-r="plan"></p>
+              ${FIELDS.plan.map(fieldHtml).join('')}
+              <div data-r="plan-sbcs"></div>
+              <button class="btn blue" data-a="plan-start">Start plan</button>
+              <p class="note">Snipes in blocks with real breaks (no market calls) and, in the breaks, does only the SBCs you add with ＋ Plan on the SBC tab — each while it's solvable and under your coin cap. Your coins never go below the floor shown above. Any captcha, market limit, logout or safety lock ends the plan at once; after a reload it never resumes by itself.</p>
+            </details>
             <div class="card picker">
               <h4>Priority list</h4>
               <div class="chips" data-r="chips"></div>
@@ -5293,6 +5554,7 @@
       this.mountPicker();
       this.showTab(this.tab);
       this.renderPlayers(); this.renderStats(); this.renderHistory(); this.renderStatus(); this.renderTrade();
+      plan.recover(); this.renderPlan();
       setInterval(() => this.tick(), 500);
 
       // previous log, so it survives reloads
@@ -5438,6 +5700,23 @@
           }
           case 'pack-open-all': return packs.open(packs.list.slice());
           case 'sbc-load': return sbc.loadSets();
+          case 'plan-start': return plan.active ? plan.cancel() : plan.start();
+          case 'plan-sbc': {
+            const set = sbc.sets[Number(btn.dataset.i)];
+            if (!set || plan.active) return;
+            const list = engine.cfg.planSbcs || [];
+            const has = list.some((x) => String(x.id) === String(set.id));
+            engine.cfg.planSbcs = has ? list.filter((x) => String(x.id) !== String(set.id)) : [...list, { id: set.id, name: set.name }];
+            engine.save(); this.renderSbc(); this.renderPlan();
+            this.log(has ? `📋 ${set.name} taken off the plan` : `📋 ${set.name} added to the plan (only repeatable, cheap SBCs make sense)`, 'muted');
+            return;
+          }
+          case 'plan-sbc-rm': {
+            if (plan.active) return;
+            engine.cfg.planSbcs = (engine.cfg.planSbcs || []).filter((x) => String(x.id) !== btn.dataset.id);
+            engine.save(); this.renderPlan(); if (sbc.sets.length) this.renderSbc();
+            return;
+          }
           case 'sbc-set': return sbc.loadChallenges(sbc.sets[Number(btn.dataset.i)]);
           case 'sbc-solve': {
             const set = sbc.sets[Number(btn.dataset.i)];
@@ -5537,6 +5816,7 @@
       engine.save();
       this.root.classList.toggle('orange', cfg.theme === 'orange');
       this.renderStatus();
+      this.renderPlan();
     },
 
     /** Push config values back into the fields (after safety clamping). */
@@ -5833,7 +6113,7 @@
             ${ok ? `<button class="mini go2" data-a="sbc-solve" data-i="${i}" data-j="${j}">Solve</button>` : e.parsed.points ? `<button class="mini go2" data-a="sbc-points" data-i="${i}" data-j="${j}">Estimate</button><button class="mini" data-a="sbc-probe" data-i="${i}" data-j="${j}">Details</button>` : ''}</div>`;
         }).join('') : '<p class="empty">All done</p>'}</div>` : '';
         return `<div class="li"><span class="t"><b>${esc(set.name)}${rep}</b><small>${esc(set.description || '')}</small></span>
-          ${loaded ? '' : `<button class="mini" data-a="sbc-set" data-i="${i}">View</button>`}</div>${sub}`;
+          ${loaded ? '' : `<button class="mini" data-a="sbc-set" data-i="${i}">View</button>`}<button class="mini" data-a="plan-sbc" data-i="${i}">${(engine.cfg.planSbcs || []).some((x) => String(x.id) === String(set.id)) ? '✓ Plan' : '＋ Plan'}</button></div>${sub}`;
       }).join('')}</div>` : '<p class="empty">Load SBCs to see which ones can be solved from your club.</p>';
 
       const plan = this.q('[data-r=plan]');
@@ -6036,6 +6316,24 @@
           : `<p class="empty">${r.done ? 'No better option found within budget' : 'Looking…'}</p>`}</div>`).join('');
     },
 
+    renderPlan() {
+      const box = this.q && this.root && this.q('[data-r=plan]');
+      if (!box) return;
+      const cfg = engine.cfg;
+      const st = plan.state;
+      const sum = planSummary(cfg, fut.ready() ? fut.coins() : 0);
+      let line = esc(sum.text);
+      if (plan.active && st) line = `<b>Running: block ${st.block} of ${st.blocks}</b> · floor ${fmt(st.floor)} · coins now ${fmt(fut.coins())}${Object.keys(st.sbcDone).length ? ` · SBCs: ${Object.values(st.sbcDone).map((x) => `${esc(x.name)} ×${x.n}`).join(', ')}` : ''}`;
+      else if (st && st.ended) line = `Last plan (${new Date(st.startedAt).toLocaleString()}): ${esc(st.ended)} · coins ${fmt(st.startCoins)} → ${fmt(st.endCoins || 0)}${Object.keys(st.sbcDone || {}).length ? ` · SBCs: ${Object.values(st.sbcDone).map((x) => `${esc(x.name)} ×${x.n}`).join(', ')}` : ''}<br>Next: ${line}`;
+      box.innerHTML = line;
+      const list = cfg.planSbcs || [];
+      this.q('[data-r=plan-sbcs]').innerHTML = list.length
+        ? `<div class="list">${list.map((x, i) => `<div class="li"><span class="t"><b>${i + 1}. ${esc(x.name)}</b></span><button class="mini" data-a="plan-sbc-rm" data-id="${esc(String(x.id))}">×</button></div>`).join('')}</div>`
+        : '<p class="empty">No SBCs yet — add cheap repeatable ones with ＋ Plan on the SBC tab.</p>';
+      const btn = this.q('[data-a=plan-start]');
+      if (btn) btn.textContent = plan.active ? '■ Stop plan' : 'Start plan';
+    },
+
     renderLearn() {
       const box = this.q('[data-r=learn]');
       if (!box) return;
@@ -6073,6 +6371,7 @@
 
     renderStats() {
       this.renderLearn();
+      this.renderPlan();
       this.renderBudget();
       Object.entries(engine.stats).forEach(([k, v]) => {
         const el = this.q(`[data-s="${k}"]`);
@@ -6133,6 +6432,7 @@
     },
 
     setRunning(on) {
+      on = on || plan.active; // a plan keeps the panel locked through its breaks and SBCs
       const go = this.q('[data-a=toggle]');
       go.classList.toggle('on', on);
       go.innerHTML = on ? ICON.stop : ICON.play;

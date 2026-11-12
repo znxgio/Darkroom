@@ -32,6 +32,17 @@ Newest learnings go at the end of each section. Dates are when the note was writ
   the next; fold small releases together and run every suite once. e2e-tasks can time out when a random 80–120 s
   safety rest lands in "Analyse" (200 s wait) — timing, not code.
 
+- 2026-11-12, session 2 (cont.): 2.4.7 = session plan (debate: strict fixed plan beat a "smart scorer" because
+  repeats-left/expiry/pack-reward values are NOT readable; observer found lockouts EXPIRE (3 h captcha) so the plan
+  needs its own end-on-any-pushback, jobs.run returned nothing (now true on success), spendLimit only covers Buy-list
+  mode → plan uses one coin floor via a temporary Keep coins) + little brother's additions (summary line, Discord on
+  end) + keep-alive (user argued a "don't log me out" ping isn't disguise — agreed: transfer-list read every ~10 min in
+  breaks, never a market search) + health check before each block (can only stop, never restart) + the observer's
+  UI fixes (done by a Sonnet helper in a worktree, merged). User wants work delegated to parallel agents
+  ("remind the text chains, they ghost"). User felt Claude applied EA's terms harder than EA does: clarified the
+  line = no disguise features + keep the safety caps (user-adjustable within them); everything else is their call.
+- Test seam: localStorage 'fc-sniper:test-minute-ms' shortens plan break minutes (test/e2e-plan.js).
+
 ## 1. How the user works and talks
 - Short, casual messages, often typed on a phone while busy (once while driving). Expect typos; read for intent.
 - Thinks out loud and expects Claude to fill in the details, pick the best option and say why, not list everything.
