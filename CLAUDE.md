@@ -14,6 +14,8 @@ something small, and commit it with your work.
 - Work on branch `claude/ea-fc-sniping-bot-jdz6vq`. No PR unless asked. No model names in commits or code.
 - Safety limits in the bot stay. Don't build detection evasion (undetectable modes, human-like browsing to avoid flags, captcha bypass).
 - Anything that spends coins goes through the shared limits (Keep coins, spend limit, session/daily caps, buy-once). Test it.
+- Unsure about a design or decision? Run a debate first (protocol in docs/claude-notes.md §8). If the debate makes you
+  confident, build and push; if it's a judgment call for the user (money risk, account-visible behavior), ask first.
 - Model routing: Opus leads; big-brother advisors and the Sonnet intern per `~/.claude/CLAUDE.md`.
 
 ## Projects

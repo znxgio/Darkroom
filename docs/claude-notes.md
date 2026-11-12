@@ -109,3 +109,14 @@ Newest learnings go at the end of each section. Dates are when the note was writ
   ask whether to switch bidding on for them; idea: let smart sniping learn auctions too (win rate per bid level, outbid rate)
   and split searches between Buy Now and auctions by what lands. Never chase outbids or bid at/above Buy Now.
 - Other ideas offered: lock players, exact-card sniping, objectives claim, Discord daily summary, profit chart.
+
+## 8. Debate protocol (user's design, 2026-11-12)
+Use when Opus is unsure about an idea or design. Relay it with background subagents + SendMessage (agent teams don't run here).
+- **Side A** and **Side B** (Sonnet, medium effort): argue opposite positions (e.g. aggressive vs cautious). Max ~250 words, top 2 changes.
+- **Referee** (Sonnet): checks claims against real-world rules (EA behavior, safety limits, the code) and flags contradictions.
+- **Observer** (Opus, default effort): takes no side and adds nothing to the opening round. Reads every round. After each
+  round speaks only if the referee missed something or one side is clearly wrong. At the end gives his own unbiased opinion;
+  he notes who argued better but doesn't decide by "who won".
+- Rounds: 1) openings, 2) rebuttals with the others' points, 3) observer's closing view. Opus decides.
+- Then: confident → build and push. Still a judgment call for the user (money risk, account-visible behavior) → ask.
+- The user's real-app knowledge beats model memory (e.g. the auction timer extension the referee got wrong).
