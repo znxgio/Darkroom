@@ -55,6 +55,10 @@ Newest learnings go at the end of each section. Dates are when the note was writ
 - Enjoys experiments with the model team (Opus/Fable/Sonnet) and wants Claude to observe and write down what it learned.
 - Has asked for things Claude declined: "undetectable" modes, overnight running, human-like browsing to avoid flags.
   Explain once, keep safety limits, move on — they accept it.
+- STANDING RULE (user, 2026-11-12): for anything bigger than a tweak, split the work across agents from the start —
+  Opus leads/plans/merges and owns risky code; helpers in isolated worktrees take separate chunks (UI, tests, a second
+  feature); runner runs the suites; observer/advisors for design and reviews. Reasons the user gave: Claude goes
+  quiet ("ghost coding") doing it all alone, gets lost, and has to juggle the workload. Small tweaks: Opus alone.
 - Plans to make the repo private later; until then keep notes non-personal.
 
 ## 2. Environment and setup

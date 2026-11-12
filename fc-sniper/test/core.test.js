@@ -1151,3 +1151,10 @@ test('clampConfig: plan settings stay inside the safety caps', () => {
   const r = c.clampConfig({ ...c.DEFAULT_CONFIG, planBlockMin: 500, planBreakMin: 1, planBlocks: 40, planBudgetPct: 90 }).cfg;
   assert.deepEqual([r.planBlockMin, r.planBreakMin, r.planBlocks, r.planBudgetPct], [120, 20, 8, 50]);
 });
+
+test('panel markup: every data-r name is unique (a duplicate renders into the wrong box)', () => {
+  const src = require('fs').readFileSync(require('path').join(__dirname, '..', 'fc-sniper.user.js'), 'utf8');
+  const names = [...src.matchAll(/data-r="([a-z0-9-]+)"/g)].map((m) => m[1]);
+  const dup = names.filter((n, i) => names.indexOf(n) !== i);
+  assert.deepEqual(dup, []);
+});

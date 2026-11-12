@@ -35,7 +35,7 @@ const base = {
   // 1) two blocks, one break with the ticked SBC, settings put back at the end
   const p = await page(b, new Function(`localStorage.setItem('fc-sniper:config', ${JSON.stringify(JSON.stringify(base))}); localStorage.setItem('fc-sniper:test-minute-ms', '100');`));
   await p.click('#fcs [data-r=plan-card] summary');
-  const summary = await p.textContent('#fcs [data-r=plan]');
+  const summary = await p.textContent('#fcs [data-r=plan-info]');
   check('plan summary before start (blocks, budget, floor)', /2 × 10 min sniping, 20 min breaks/.test(summary) && /can spend up to 12,000/.test(summary) && /never below 108,000/.test(summary), summary);
   await p.click('#fcs [data-a=plan-start]');
   await p.waitForFunction(() => [...document.querySelectorAll('#fcs [data-r=log] div')].some((d) => /Plan ended/.test(d.textContent)), null, { timeout: 300000 });

@@ -5440,7 +5440,7 @@
               <p class="note" data-r="budget"></p>
             </div>
             <details class="card" data-r="plan-card"><summary><h4 style="display:inline">📋 Session plan</h4></summary>
-              <p class="note" data-r="plan"></p>
+              <p class="note" data-r="plan-info"></p>
               ${FIELDS.plan.map(fieldHtml).join('')}
               <div data-r="plan-sbcs"></div>
               <button class="btn blue" data-a="plan-start">Start plan</button>
@@ -6326,7 +6326,7 @@
     },
 
     renderPlan() {
-      const box = this.q && this.root && this.q('[data-r=plan]');
+      const box = this.q && this.root && this.q('[data-r=plan-info]');
       if (!box) return;
       const cfg = engine.cfg;
       const st = plan.state;
