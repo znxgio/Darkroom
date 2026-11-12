@@ -962,3 +962,35 @@ test('recordArm / bestArm / armSignals', () => {
   assert.equal(c.bestArm(arms, [6, 10]).pct, 6);
   assert.equal(c.armSignals({ hits: 1, misses: 1, near: 2 }), 1 + 0.8 + 0.7);
 });
+
+// ---- bid wars ------------------------------------------------------------------------
+
+test('warCeiling: a little over your max, never over avg−3%, profitable price or Buy Now', () => {
+  const cfg = { bidWarStretchPct: 8 };
+  assert.equal(c.warCeiling({ maxBid: 10000, avg: 20000, buyNow: 30000, mode: 'buy' }, cfg), 10750);
+  assert.equal(c.warCeiling({ maxBid: 19000, avg: 20000, buyNow: 30000, mode: 'buy' }, cfg), 19250, 'avg − 3%');
+  assert.equal(c.warCeiling({ maxBid: 19000, avg: 0, buyNow: 15000, mode: 'buy' }, cfg), 14750, 'under Buy Now');
+  assert.equal(c.warCeiling({ maxBid: 9000, avg: 12000, mode: 'trade', plan: { maxBuy: 9250 } }, cfg), 9250, 'profitable price');
+  assert.equal(c.warCeiling({ maxBid: 9000, avg: 12000, mode: 'trade' }, cfg), 0, 'trade without a plan: no war');
+});
+
+test('warSteps counts valid bid steps up to the ceiling', () => {
+  assert.equal(c.warSteps(10000, 10750), 3); // 10,250 · 10,500 · 10,750
+  assert.equal(c.warSteps(10750, 10750), 0);
+  assert.equal(c.warSteps(0, 200), 2); // 150 · 200
+});
+
+test("binVsWar follows the user's priority rule", () => {
+  const cfg = { binIdealPct: 20, warKeepPct: 10 };
+  assert.equal(c.binVsWar(15500, 17500, 20000, cfg), 'ideal', 'Buy Now 22.5% under always wins');
+  assert.equal(c.binVsWar(17500, 17750, 20000, cfg), 'war', 'war still 11% under beats an ordinary Buy Now');
+  assert.equal(c.binVsWar(17500, 18500, 20000, cfg), 'bin', 'war only 7.5% under: Buy Now wins');
+  assert.equal(c.binVsWar(17500, 0, 20000, cfg), 'bin', 'war out of room');
+  assert.equal(c.binVsWar(17500, 15000, 0, cfg), 'bin', 'no average: take the sure thing');
+});
+
+test('migrateConfig switches bidding on once (2.4.0)', () => {
+  const a = c.migrateConfig({ bidSnipe: false });
+  assert.equal(a.bidSnipe, true);
+  assert.equal(c.migrateConfig({ ...a, bidSnipe: false }).bidSnipe, false, 'user can turn it off again');
+});

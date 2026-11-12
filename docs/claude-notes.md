@@ -105,6 +105,10 @@ Newest learnings go at the end of each section. Dates are when the note was writ
 - Shipped in 2.3.1: bidding spend guard (Fable), smart-sniping floor (intern). Still open from the Fable review:
   "nothing listed" fallback, jobs skipping daily caps, run token for stop/start, SBC fill-in hard cap, learner reward tuning.
 - Gallery collector (buy → register → resell near break-even): parked until the user checks that a Web App buy registers in the Gallery.
+- Shipped 2.4.0 (2026-11-12): bid wars per the debate + user's Buy Now rule (pure: warCeiling, warSteps, binVsWar;
+  runtime: engine.warDue/warCheck/collectWon; test/e2e-war.js with a rival + timer extension). Bidding switched on once via
+  migrateConfig flag `bidOn240`. Note: under 10k bids step by 100, so 5 counter-bids only cover ~500 coins there — if the
+  user finds wars on cheap cards end too early, consider a price-room stop instead of a fixed counter count (Aggressive's idea).
 - User OK'd auction bidding as a sniping method (2026-11-11: "buy now is a harder snipe"). After the 2.4.0 bid spend guard:
   ask whether to switch bidding on for them; idea: let smart sniping learn auctions too (win rate per bid level, outbid rate)
   and split searches between Buy Now and auctions by what lands. Never chase outbids or bid at/above Buy Now.

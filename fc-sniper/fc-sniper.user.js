@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FC Sniper
 // @namespace    https://github.com/znxgio/darkroom
-// @version      2.3.1
+// @version      2.4.0
 // @description  Sniper, pack opener, SBC solver and team upgrade advisor for the EA SPORTS FC Ultimate Team Web App, with built-in safety limits.
 // @match        https://www.ea.com/*ultimate-team/web-app*
 // @match        https://www.ea.com/ea-sports-fc/ultimate-team/web-app*
@@ -202,6 +202,45 @@
     if (next > maxBid) return 0;
     if (l.buyNowPrice && next >= l.buyNowPrice) return 0; // Buy Now is the better move
     return next;
+  }
+
+  // ---- Bid wars ------------------------------------------------------------------------
+
+  /**
+   * Highest price a bid war may go to: a little above your normal max
+   * (`bidWarStretchPct`), but never above the market average − 3% (Buy mode)
+   * or the price that still leaves your min profit after tax (Trade mode),
+   * and always under the card's Buy Now. 0 = no room.
+   * w: { maxBid, avg, buyNow, mode, plan }
+   */
+  function warCeiling(w, cfg) {
+    const stretch = 1 + Math.max(0, Math.min(25, cfg.bidWarStretchPct ?? 8)) / 100;
+    let cap = roundPrice((w.maxBid || 0) * stretch, 'down');
+    if (w.avg > 0) cap = Math.min(cap, roundPrice(w.avg * 0.97, 'down'));
+    if (w.mode === 'trade') cap = w.plan && w.plan.maxBuy ? Math.min(cap, w.plan.maxBuy) : 0;
+    if (w.buyNow > 0) cap = Math.min(cap, prevPrice(w.buyNow));
+    return cap >= MIN_PRICE ? cap : 0;
+  }
+
+  /** How many bid steps are left between the current bid and the ceiling. */
+  function warSteps(currentBid, ceiling) {
+    let n = 0;
+    for (let p = currentBid > 0 ? nextPrice(currentBid) : MIN_PRICE; p <= ceiling && n < 100; p = nextPrice(p)) n++;
+    return n;
+  }
+
+  /**
+   * Buy Now vs a bid war on the same player (the user's rule):
+   *   'ideal' — Buy Now is extremely good (≥ binIdealPct under avg): buy it, even next to the war
+   *   'war'   — the war's next bid is still ≥ warKeepPct under avg: keep fighting, skip the Buy Now
+   *   'bin'   — otherwise Buy Now wins and the war is dropped
+   */
+  function binVsWar(binPrice, warNext, avg, cfg) {
+    if (!(avg > 0)) return 'bin';
+    const under = (p) => (avg - p) / avg * 100;
+    if (under(binPrice) >= (cfg.binIdealPct ?? 20)) return 'ideal';
+    if (warNext > 0 && under(warNext) >= (cfg.warKeepPct ?? 10)) return 'war';
+    return 'bin';
   }
 
   /**
@@ -665,6 +704,8 @@
     if (!out.sellMode) out.sellMode = out.autoList ? (out.sellPrice > 0 ? 'fixed' : 'profit') : 'off';
     delete out.autoList;
     delete out.type;
+    // 2.4.0: the user asked for auction bidding to be switched on (once; they can turn it off again)
+    if (!out.bidOn240) { out.bidSnipe = true; out.bidOn240 = true; }
     return out;
   }
 
@@ -1497,6 +1538,13 @@
     bidSnipe: false, // also bid on auctions about to end under your max
     bidWindow: 30, // seconds left on an auction before bidding
     maxActiveBids: 5,
+    bidWars: 1, // bid wars at once (1–3): counter-bid when outbid in the last seconds
+    bidWarStretchPct: 8, // in a war, go up to this % above your normal max (still under avg − 3% / profitable price / Buy Now)
+    bidWarMaxCounters: 5, // give up after this many counter-bids without winning
+    bidWarPoolPct: 25, // wars may hold at most this % of your spendable coins
+    bidWarMinSteps: 2, // only start a war with at least this many bid steps of room left
+    binIdealPct: 20, // a Buy Now this far under avg always wins (even next to a war)
+    warKeepPct: 10, // a war whose next bid is this far under avg beats an ordinary Buy Now
     // trading (resell)
     undercut: 3, // list this % under the market average so it sells
     minProfitPct: 3, // and make at least this % of the sell price (as well as Min profit)
@@ -1556,7 +1604,7 @@
     cacheBustBid, jitter, pickTargets, planSellPrice, classifyStatus,
     normalizeName, parsePlayerDb, searchPlayers, playerForIteration, migrateConfig, filterSummary, sniperTargets, LEAGUES,
     findMarketPrice, planMaxBuy, effectiveMaxBuy, withinReach, huntTargets,
-    smartLevels, gammaSample, betaSample, armSignals, chooseDiscount, chooseTarget, recordArm, bestArm, flipPlan, tradeOpts, bidAmount, freeCoins, bidBlock, settleSales,
+    smartLevels, gammaSample, betaSample, armSignals, chooseDiscount, chooseTarget, recordArm, bestArm, flipPlan, tradeOpts, bidAmount, freeCoins, bidBlock, warCeiling, warSteps, binVsWar, settleSales,
     listSpendable, reserveOk, afterListBuy,
     aggregateListings, hotScore, rankHot, priceBands, provenFlips, flipValue, priceLadder, sbcCostEstimate,
     addHistory, summarizeHistory, isDiscordWebhook, discordPayload,
@@ -1577,7 +1625,7 @@
 
   const w = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '2.3.1';
+  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '2.4.0';
   const errText = (e) => (e && e.message ? e.message : String(e));
   const fmt = (n) => Number(n || 0).toLocaleString();
 
@@ -2551,6 +2599,16 @@
 
         // Never fall back to "any card" because every player went out of reach.
         if (sniperTargets(cfg).length && !huntTargets(cfg).length) { await this.finishBids(); return this.stop('every player left is out of reach of your coins'); }
+        // Bid wars: when one of our auctions is in its last seconds, check it (instead of a search) and counter-bid.
+        if (cfg.bidSnipe && cfg.mode !== 'alert' && this.warDue()) {
+          await this.warCheck(startBuys);
+          this.stats.searches++;
+          this.countUsage('searches');
+          ui.renderStats();
+          if (!this.running) return;
+          await this.wait(jitter(cfg.delayMin, cfg.delayMax), 'waiting', 'Bid war');
+          continue;
+        }
         const pick = learn.pick(huntTargets(cfg), cfg, i);
         const player = pick.player;
         // Prices drift — refresh a player's (or filter's) average during long sessions.
@@ -2684,6 +2742,89 @@
       store.set(KEYS.bids, [...this.bids].map(([id, b]) => [id, { ...b, player: b.player ? { id: b.player.id, name: b.player.name, kind: b.player.kind, avg: b.player.avg } : null }]));
     },
 
+    /** A won auction: book it; a second copy (Buy Now won the priority) is resold at a profit. */
+    async collectWon(it, bid, st) {
+      const p = fut.toPlayer(it);
+      const price = st.price || (bid && bid.amount) || 0;
+      let plan = bid && bid.plan;
+      if (bid && bid.resell) {
+        const sell = Math.max(breakEvenSell(price, this.cfg.minProfit || 0), bid.avg ? roundPrice(bid.avg * 0.97, 'down') : 0);
+        plan = { sell, maxBuy: price, profit: profit(price, sell) };
+        ui.log(`Second copy of ${p.name} — listing it for ${fmt(sell)}`, 'muted');
+      }
+      await this.bought(it, { name: p.name, rating: p.rating, defId: p.id, price }, bid && bid.player, plan, 'bid');
+    },
+
+    /** Is one of our auctions in its last seconds (time to check for a counter-bid)? */
+    warDue() {
+      const soon = Date.now() + ((this.cfg.bidWindow || 30) + 5) * 1000;
+      return [...this.bids.values()].some((b) => !b.gaveUp && b.endsAt <= soon && Date.now() - (b.checkedAt || 0) >= 3000 && Date.now() < b.endsAt + 15000);
+    },
+
+    /**
+     * One watchlist check for every open bid: book wins, clear losses, and
+     * counter-bid when outbid — up to the war ceiling, the counter limit, the
+     * war coin pool and the shared spend limits.
+     */
+    async warCheck(startBuys) {
+      const cfg = this.cfg;
+      this.setStatus('searching', 'Bid war — checking your auctions');
+      const watched = await fut.watched();
+      if (!watched) return;
+      const lost = [];
+      const now = Date.now();
+      for (const it of watched) {
+        const st = fut.auctionState(it);
+        const bid = this.bids.get(st.tradeId);
+        if (!bid) continue;
+        bid.checkedAt = now;
+        const l = fut.listing(it);
+        if (st.state === 'won') { this.bids.delete(st.tradeId); await this.collectWon(it, bid, st); continue; }
+        if (st.state === 'lost' || st.state === 'expired') { lost.push(it); this.bids.delete(st.tradeId); if (bid.counters) ui.log(`🏳️ Lost the bid war on ${bid.name} at ${fmt(l.currentBid || bid.amount)}`, 'muted'); continue; }
+        if (l.expires > 0) bid.endsAt = now + l.expires * 1000; // a late bid extends the timer
+        if (l.bidState === 'highest' || bid.gaveUp) continue;
+        // Outbid: counter only in the last seconds (bidding earlier just invites more bids).
+        if (!(l.expires > 0 && l.expires <= (cfg.bidWindow || 30))) continue;
+        bid.current = l.currentBid || bid.amount;
+        const ceiling = warCeiling(bid, cfg);
+        const next = nextPrice(bid.current);
+        const wars = [...this.bids.values()].filter((b) => b.counters > 0 && !b.gaveUp && b !== bid).length;
+        const others = [...this.bids.entries()].filter(([k]) => k !== st.tradeId).map(([, b]) => b);
+        const pool = Math.max(0, fut.coins() - (cfg.minCoins || 0)) * Math.max(5, Math.min(100, cfg.bidWarPoolPct ?? 25)) / 100;
+        const inWars = others.filter((b) => b.counters > 0).reduce((a, b) => a + b.amount, 0);
+        let why = '';
+        if (next > ceiling) why = `next bid ${fmt(next)} is over the war limit ${fmt(ceiling)}`;
+        else if (bid.counters >= (cfg.bidWarMaxCounters ?? 5)) why = `${bid.counters} counter-bids without winning`;
+        else if (!bid.counters && wars >= Math.max(1, Math.min(3, cfg.bidWars || 1))) why = `already in ${wars} bid war${wars === 1 ? '' : 's'}`;
+        else if (!bid.counters && warSteps(bid.current, ceiling) < (cfg.bidWarMinSteps ?? 2)) why = 'too little room under the war limit';
+        else if (inWars + next > pool) why = 'the war coin pool is used up';
+        else {
+          const block = bidBlock(next, bid.player, cfg, fut.coins(), others, this.stats.buys - startBuys);
+          // (this bid itself is left out of `others`: a counter-bid replaces it)
+          if (block) why = { coins: 'not enough free coins', buys: 'session buy limit', reserve: 'keeping coins for higher players', once: 'already buying this player' }[block] || block;
+        }
+        if (why) { bid.gaveUp = true; this.nextUpkeep = Math.min(this.nextUpkeep, bid.endsAt + 8000); ui.log(`🏳️ Letting ${bid.name} go at ${fmt(bid.current)} — ${why}`, 'muted'); continue; }
+        const before = fut.coins();
+        const r = await fut.placeBid(l, next);
+        if (!r.ok) {
+          const kind = classifyStatus(r.status);
+          if (kind === 'captcha' || kind === 'throttled') { this.saveBids(); return this.halt(kind, `blocked while bidding (${r.status})`); }
+          ui.log(`Counter-bid on ${bid.name} at ${fmt(next)} failed (${r.status})`, 'muted');
+          continue;
+        }
+        bid.counters++;
+        bid.amount = next;
+        bid.current = next;
+        bid.debited = before - fut.coins() >= next;
+        bid.endsAt = Date.now() + Math.max(l.expires || 0, 30) * 1000;
+        ui.log(`⚔️ Counter-bid ${fmt(next)} on ${bid.name} (${bid.counters}/${cfg.bidWarMaxCounters ?? 5}, limit ${fmt(ceiling)})`, 'ok');
+        await sleep(jitter(700, 1400));
+      }
+      if (lost.length) await fut.untarget(lost);
+      this.saveBids();
+      ui.renderStats();
+    },
+
     async bidOn(listings, player, maxBid, plan, sessionBuys) {
       const cfg = this.cfg;
       // A filter's rating range, like pickTargets does for Buy Now.
@@ -2708,7 +2849,8 @@
           ui.log(`Bid on ${l.name} at ${fmt(amount)} failed (${r.status})`, 'muted');
           continue;
         }
-        this.bids.set(l.tradeId, { name: l.name, amount, endsAt: Date.now() + (l.expires || 30) * 1000, player, plan, debited: before - fut.coins() >= amount });
+        this.bids.set(l.tradeId, { name: l.name, amount, endsAt: Date.now() + (l.expires || 30) * 1000, player, plan, debited: before - fut.coins() >= amount,
+          defId: l.defId, maxBid, avg: (player && player.avg) || (plan && plan.sell) || 0, buyNow: l.buyNowPrice || 0, counters: 0 });
         this.saveBids();
         this.nextUpkeep = Math.min(this.nextUpkeep, Date.now() + ((l.expires || 30) + 8) * 1000);
         ui.log(`🔨 Bid ${fmt(amount)} on ${l.name} (${l.rating || '?'}) — ends in ${Math.round(l.expires)}s`, 'ok');
@@ -2764,6 +2906,20 @@
           }
           return 'skipped';
         }
+      }
+      // A bid war on the same player: the user's priority rule decides.
+      const war = player && [...this.bids.values()].find((b) => !b.gaveUp && b.player && b.player.id === player.id);
+      if (war) {
+        const next = nextPrice(war.current || war.amount);
+        const ceiling = warCeiling(war, cfg);
+        const pick = binVsWar(t.buyNowPrice, next <= ceiling ? next : 0, war.avg || player.avg, cfg);
+        if (pick === 'war') { ui.log(`⚔️ Kept the bid war on ${war.name} (next bid ${fmt(next)} is still a better deal than Buy Now at ${fmt(t.buyNowPrice)})`, 'muted'); return 'skipped'; }
+        war.gaveUp = true;
+        war.resell = true; // if we still win it, it's a second copy: resell it
+        this.saveBids();
+        ui.log(pick === 'ideal'
+          ? `💎 ${t.name} at ${fmt(t.buyNowPrice)} is too good to skip — buying it; the bid war's card (if won) will be resold`
+          : `🛒 Buy Now beats the bid war on ${war.name} — buying at ${fmt(t.buyNowPrice)}, letting the war go`, 'ok');
       }
       const react = Math.round(performance.now() - (this.searchDoneAt || performance.now()));
       const t0 = performance.now();
@@ -2826,7 +2982,7 @@
               this.bids.delete(st.tradeId);
               this.saveBids();
               out.won++;
-              await this.bought(it, { name: p.name, rating: p.rating, defId: p.id, price: st.price || (bid && bid.amount) || 0 }, bid && bid.player, bid && bid.plan, 'bid');
+              await this.collectWon(it, bid, st);
             } else if (st.state === 'lost' || st.state === 'expired') {
               lost.push(it);
               this.bids.delete(st.tradeId);
@@ -4247,6 +4403,9 @@
       ['maxBuys', 'Buys per session', 'number'],
       ['bidSnipe', 'Also bid on auctions ending soon', 'toggle'],
       ['bidWindow', 'Bid in the last (seconds)', 'number'],
+      ['bidWars', 'Bid wars at once (1–3)', 'number'],
+      ['bidWarStretchPct', 'War: go up to % over my max', 'number'],
+      ['bidWarMaxCounters', 'War: give up after N counter-bids', 'number'],
     ],
     trade: [
       ['undercut', 'List % under market avg', 'number'],
@@ -4322,6 +4481,10 @@
       ['searchesPerDay', 'Searches per day', 'number'],
       ['buysPerDay', 'Buys per day', 'number'],
       ['maxActiveBids', 'Open bids at once', 'number'],
+      ['bidWarPoolPct', 'Wars may hold % of my coins', 'number'],
+      ['bidWarMinSteps', 'Start a war only with N+ bid steps of room', 'number'],
+      ['binIdealPct', 'Buy Now this % under avg always wins', 'number'],
+      ['warKeepPct', 'War this % under avg beats a Buy Now', 'number'],
     ],
     notify: [
       ['theme', 'Accent colour', 'select', OPT([['green', 'Green'], ['orange', 'Orange']])],

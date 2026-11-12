@@ -38,7 +38,7 @@ function installListMock(opts) {
   };
   localStorage.setItem('fc-sniper:config', JSON.stringify({
     players: opts.players || [{ id: 1, name: 'Top Target', rating: 88, manualMax: 50000 }, { id: 2, name: 'Second Target', rating: 85, manualMax: 20000 }],
-    spendLimit: opts.spendLimit ?? 60000, buyOnce: true, reserveForHigher: opts.reserve, autoPrice: !!opts.autoPrice, ...(opts.extra || {}), maxSearches: opts.maxSearches || 20, delayMin: 3000, delayMax: 3500,
+    bidOn240: true, bidSnipe: false, spendLimit: opts.spendLimit ?? 60000, buyOnce: true, reserveForHigher: opts.reserve, autoPrice: !!opts.autoPrice, ...(opts.extra || {}), maxSearches: opts.maxSearches || 20, delayMin: 3000, delayMax: 3500,
   }));
 }
 
