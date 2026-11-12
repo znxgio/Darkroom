@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FC Sniper
 // @namespace    https://github.com/znxgio/darkroom
-// @version      2.4.4
+// @version      2.4.5
 // @description  Sniper, pack opener, SBC solver and team upgrade advisor for the EA SPORTS FC Ultimate Team Web App, with built-in safety limits.
 // @match        https://www.ea.com/*ultimate-team/web-app*
 // @match        https://www.ea.com/ea-sports-fc/ultimate-team/web-app*
@@ -1820,7 +1820,7 @@
 
   const w = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '2.4.4';
+  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '2.4.5';
   const errText = (e) => (e && e.message ? e.message : String(e));
   const fmt = (n) => Number(n || 0).toLocaleString();
 
@@ -1908,7 +1908,9 @@
     async search(criteria, page = 1) {
       if (typeof w.services.Item.clearTransferMarketCache === 'function') w.services.Item.clearTransferMarketCache();
       if (jobs.current) await jobs.gate('search');
-      const res = await observe(w.services.Item.searchTransferMarket(criteria, page));
+      fut.ownSearch = (fut.ownSearch || 0) + 1;
+      let res;
+      try { res = await observe(w.services.Item.searchTransferMarket(criteria, page)); } finally { fut.ownSearch--; }
       jobs.lastMarketAt = Date.now();
       if (!res.success) return { ok: false, status: res.status, listings: [] };
       return { ok: true, listings: ((res.data && res.data.items) || []).map(fut.listing) };
@@ -2230,6 +2232,55 @@
      * (with a short source preview) and, at most twice, a read-only request
      * so we can see the data's shape. Changes nothing. Returns lines for Copy log.
      */
+    /**
+     * Read-only: note how the Web App's OWN transfer-market searches are built (the user searches by hand),
+     * so filters like Rare can be copied exactly. Nothing is changed; the original function is put back
+     * after `n` searches or `ms`. Calls `done(lines)` at the end.
+     */
+    recordSearches(n, ms, done) {
+      const svc = w.services && w.services.Item;
+      if (!svc || typeof svc.searchTransferMarket !== 'function') return false;
+      if (fut.recording) return true;
+      const orig = svc.searchTransferMarket;
+      const lines = [];
+      const fields = (c) => {
+        const o = {};
+        for (const k of Object.keys(c || {})) {
+          const v = c[k];
+          if (typeof v === 'function' || v === undefined || v === null || v === '') continue;
+          if (Array.isArray(v) && !v.length) continue;
+          o[k] = v;
+        }
+        return o;
+      };
+      let timer;
+      const finish = () => {
+        if (!fut.recording) return;
+        clearTimeout(timer);
+        if (svc.searchTransferMarket === wrapped) svc.searchTransferMarket = orig;
+        fut.recording = false;
+        done(lines);
+      };
+      const wrapped = function (criteria, page) {
+        if (!fut.ownSearch) {
+          try {
+            let s = JSON.stringify(fields(criteria), (k, x) => (typeof x === 'function' ? undefined : x));
+            if (s.length > 600) s = s.slice(0, 600) + '…';
+            lines.push(`page ${page}: ${s}`);
+            if (lines.length === 1) {
+              const proto = Object.getPrototypeOf(criteria || {});
+              lines.push(`criteria methods: ${proto ? Object.getOwnPropertyNames(proto).filter((k) => k !== 'constructor').slice(0, 40).join(',') : 'none'}`);
+            }
+          } catch (e) { lines.push(`could not read: ${e.message}`); }
+          if (lines.filter((l) => l.startsWith('page')).length >= n) setTimeout(finish, 0);
+        }
+        return orig.apply(this, arguments);
+      };
+      svc.searchTransferMarket = wrapped;
+      fut.recording = true;
+      timer = setTimeout(finish, ms);
+      return true;
+    },
     async galleryProbe() {
       const rx = /galler|showcase|eventtoken|collection|album|sticker|(?<!up)grade|gtag|token ?store/i;
       const lines = [];
@@ -4594,7 +4645,8 @@
         const all = [];
         let searches = 0;
         // If EA returns nothing, relax the filters step by step (rare-only, then league) and say so.
-        let relax = cfg.hotRareOnly ? 0 : 1;
+        let relax = cfg.hotRareOnly && !this.rareEmpty ? 0 : 1;
+        if (cfg.hotRareOnly && this.rareEmpty) ui.log('Hot scan: “rare only” found nothing earlier this session — scanning all gold cards', 'muted');
         let emptyRun = 0;
         for (const sg of plan) {
           if (jobs.cancelled) break;
@@ -4615,6 +4667,7 @@
           if (emptyRun >= Math.max(2, bands.length) && relax < 2 && !all.length && !r.listings.length) {
             relax++;
             emptyRun = 0;
+            if (relax === 1) this.rareEmpty = true;
             ui.log(relax === 1 ? 'Hot scan: no results with “rare only” — trying all gold cards' : 'Hot scan: still nothing — trying without the league filter', 'warn');
           }
           all.push(...r.listings);
@@ -5134,6 +5187,7 @@
               <button class="btn blue" data-a="ask-claude">Ask Claude (copies the log, opens claude.ai)</button>
               <button class="btn" data-a="reload-app">Reload the Web App</button>
               <button class="btn" data-a="gallery-probe">Gallery check (read-only)</button>
+              <button class="btn" data-a="record-search">Record my next 3 market searches (read-only)</button>
               <button class="btn red" data-a="clear-log">Clear log</button></div>
           </section>
           <section class="pane" data-pane="settings">
@@ -5280,6 +5334,15 @@
             if (w.confirm('Reload the Web App? Your settings, lists and log are kept.')) { if (this.saved) store.set(KEYS.log, this.saved); w.location.reload(); }
             return;
           case 'gallery-probe': return this.galleryProbe();
+          case 'record-search': {
+            if (fut.recording) { this.log('Already recording — do your searches in the Web App', 'muted'); return; }
+            const ok = fut.recordSearches(3, 180000, (lines) => {
+              lines.forEach((l) => debugLog.push(`web app search: ${l}`));
+              this.log(lines.length ? `🔍 Recorded ${lines.filter((l) => l.startsWith('page')).length} Web App search(es) — tap Copy log and send it` : '🔍 No Web App search seen in 3 minutes — recording stopped', lines.length ? 'ok' : 'warn');
+            });
+            this.log(ok ? '🔍 Recording for 3 minutes: search the Transfer Market by hand now (e.g. Quality Gold, Rarity Rare). Nothing is bought or changed.' : 'Web App not ready — log in first', ok ? 'ok' : 'err');
+            return;
+          }
           case 'learn-reset': if (w.confirm('Forget everything smart sniping learned?')) { learn.reset(); this.renderLearn(); this.log('Smart sniping: memory cleared', 'muted'); } return;
           case 'clear-log':
             if (!w.confirm('Clear the activity log?')) return;

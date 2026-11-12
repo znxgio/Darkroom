@@ -139,6 +139,21 @@ function installMock() {
   check('gallery probe finds the service, its methods, globals and data shape', /gallery-like services: .*Gallery/.test(copied) && /requestGallerySets\(0\)/.test(copied) && /UTGallerySetEntity/.test(copied) && /keys sets/.test(copied), (copied || '').split('\n').filter((l) => /gallery probe/.test(l)).slice(0, 3).join(' | ').slice(0, 300));
   check('gallery probe is read-only (one read request, no grading)', G.calls === 1 && !G.graded, JSON.stringify(G));
   void prev;
+  // Search recorder: read-only, notes the Web App's own searches, ignores the bot's, then puts the function back
+  const recBefore = await p.evaluate(() => { window.F.origSearch = services.Item.searchTransferMarket; return F.searches.length; });
+  await p.click('#fcs [data-a=record-search]');
+  await p.evaluate(() => {
+    const c = new UTSearchCriteriaDTO(); c.type = 'player'; c.level = 'gold'; c.rarities = [1]; c.league = 13; c.maxBuy = 7400;
+    for (let i = 0; i < 3; i++) services.Item.searchTransferMarket(c, i + 1);
+  });
+  await p.waitForFunction(() => [...document.querySelectorAll('#fcs [data-r=log] div')].some((d) => /Recorded 3 Web App search/.test(d.textContent)), null, { timeout: 10000 });
+  copied = null;
+  await p.click('#fcs [data-a=copy-log]');
+  await p.waitForTimeout(500);
+  if (!copied) copied = await p.evaluate(() => navigator.clipboard.readText().catch(() => ''));
+  const R = await p.evaluate((n) => ({ restored: services.Item.searchTransferMarket === F.origSearch, passed: F.searches.length - n }), recBefore);
+  check('search recorder logs the Web App search fields', /web app search: page 1: .*"rarities":\[1\]/.test(copied || '') && /"level":"gold"/.test(copied || ''), (copied || '').split('\n').filter((l) => /web app search/.test(l)).join(' | ').slice(0, 300));
+  check('search recorder passes searches through and restores the original', R.restored && R.passed === 3, JSON.stringify(R));
   check('no page errors', !errors.length, errors.join('; '));
   console.log('log:\n  ' + (await log()).join('\n  '));
   await b.close();

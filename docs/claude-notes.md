@@ -12,6 +12,13 @@ Newest learnings go at the end of each section. Dates are when the note was writ
   collector (§7) if they confirm a Web App buy registers in the Gallery. Keep usage low: debates only when unsure,
   use the runner for test suites, read only the log lines the user pastes.
 
+- 2026-11-12, session 2: first real-account log of 2.4.4. Hot scan with `rarities:[1]` + level gold + league +
+  min/maxBuy returned 0 listings in all 5 bands (PL, LaLiga, Bundesliga, Serie A, Ligue 1, 4.4k–60k); without rarities
+  the same sweep found 189 listings → our Rare filter is probably not how EA builds it (also affects filter Rarity and
+  SBC rare searches). 2.4.5 adds a read-only "Record my next 3 market searches" (wraps searchTransferMarket, logs only
+  the Web App's own calls, restores after 3 or 3 min) and skips rare-only for the rest of the session once it came back
+  empty. Next: user records a hand search with Rarity = Rare → copy those exact fields into newCriteria/criteria/sbc.
+
 ## 1. How the user works and talks
 - Short, casual messages, often typed on a phone while busy (once while driving). Expect typos; read for intent.
 - Thinks out loud and expects Claude to fill in the details, pick the best option and say why, not list everything.
