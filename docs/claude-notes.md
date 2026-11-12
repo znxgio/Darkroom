@@ -43,6 +43,17 @@ Newest learnings go at the end of each section. Dates are when the note was writ
   line = no disguise features + keep the safety caps (user-adjustable within them); everything else is their call.
 - Test seam: localStorage 'fc-sniper:test-minute-ms' shortens plan break minutes (test/e2e-plan.js).
 
+- 2026-11-12, session 2 (cont.): 2.4.8. User: bot never bid on ~160k auctions (card BIN 194k, max 186k); wants a LOT
+  more live updates; disliked the 2.4.7 one-row swipe tabs (back to a 4×2 grid) and having to scroll the whole log to
+  copy (buttons above a fixed-height log; inline copy box). Bid debate (A early bids / B late + watchlist; Opus
+  observer): skips were SILENT; bid turn was global `i % 2` → with an even number of plain targets some players never
+  got auction searches (fixed: per-player turn counter); no cheap per-auction refresh exists (watched() only covers our
+  own bids; warCheck counts as a search) → no watchlist; early "next step" bids pointless + lock ~66% of coins. Shipped:
+  bidSkipReason + "not bid: …" tally line, remembered auctions report what they climbed to, bidWindow 30→45 (15–90).
+  User asked to reset today's search counter → declined (makes the cap meaningless); told them to raise Searches per
+  day (≤1500) themselves. Their Rare recording captured a player-name search, not Gold+Rare (recorder skips empty
+  arrays; FC 27 criteria have ovrMin/ovrMax natively, `_category`/`_type` underscored).
+
 ## 1. How the user works and talks
 - Short, casual messages, often typed on a phone while busy (once while driving). Expect typos; read for intent.
 - Thinks out loud and expects Claude to fill in the details, pick the best option and say why, not list everything.

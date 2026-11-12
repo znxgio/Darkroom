@@ -20,7 +20,7 @@ function installListMock(opts) {
     Item: {
       clearTransferMarketCache() {},
       searchTransferMarket(c) {
-        L.searched.push({ id: c.maskedDefId, max: c.maxBuy });
+        L.searched.push({ id: c.maskedDefId, max: c.maxBuy, bid: c.maxBid });
         let price = opts.prices[c.maskedDefId];
         // a cheap copy that appears in snipe searches (they set a min bid to refresh results)
         if (opts.snipe && opts.snipe[c.maskedDefId] && c.minBid !== undefined && c.maxBuy >= opts.snipe[c.maskedDefId]) price = opts.snipe[c.maskedDefId];
@@ -88,6 +88,11 @@ async function run(b, opts) {
   const om = o.learn && o.learn.targets && o.learn.targets['p:2'];
   check('default: max measured from the cheapest listing, said in the log', o.log.some((l) => /Second Target: cheapest 18,000 · market 18,000 · \d+ listed · trend: not enough history yet → max 16,000 \(10% under the cheapest\)/.test(l)), o.log.filter((l) => /Second Target: /.test(l))[0]);
   check('default: learner only picks targets (searches recorded at your Snipe %, no deeper levels)', om && Object.keys(om.arms).join() === '10' && Array.isArray(om.gaps) && om.gaps.length >= 1, om && JSON.stringify({ arms: Object.keys(om.arms), gaps: (om.gaps || []).length }));
+  // 3b) bidding with 2 players: each player gets auction searches too (2.4.7 alternated globally, so one never did)
+  const tw = await run(b, { prices: { 1: 40000, 2: 18000 }, reserve: false, maxSearches: 8, extra: { bidSnipe: true, buyOnce: false } });
+  const auc = (id) => tw.L.searched.filter((x) => x.id === id && x.bid > 0).length;
+  check('both players get auction searches', auc(1) >= 1 && auc(2) >= 1, JSON.stringify(tw.L.searched.map((x) => `${x.id}${x.bid ? 'A' : 'B'}`)));
+  check('live updates: a line per search and per auction search', tw.log.filter((l) => /^🔍 \d+\./.test(l)).length >= 2 && tw.log.some((l) => /^🔨 \d+\. Auctions/.test(l)), tw.log.filter((l) => /^🔍|^🔨/.test(l)).slice(0, 4).join(' | '));
   // 4) smart sniping: copies at 17,000 (5.6% under 18,000) — only the 4% arm can buy; most buys are lost races
   const sm = await run(b, { prices: { 2: 18000 }, snipe: { 2: 17000 }, failEvery: 3, reserve: false, autoPrice: true, spendLimit: 0, maxSearches: 40, timeout: 500000,
     players: [{ id: 2, name: 'Second Target', rating: 87 }], extra: { buyOnce: false, maxBuys: 2, smartProbeEvery: 2, discount: 4, smartPrice: true } }); // learner never goes closer than Snipe % under avg

@@ -1,6 +1,6 @@
 {
   "name": "fc-sniper",
-  "version": "2.4.7",
+  "version": "2.4.8",
   "private": true,
   "description": "Sniper, resell bot, pack opener, SBC solver and squad tools userscript for the EA SPORTS FC Ultimate Team Web App",
   "scripts": {

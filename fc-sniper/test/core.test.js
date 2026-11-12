@@ -1172,3 +1172,27 @@ test('live updates: search and auction lines say what came back and why', () => 
   assert.match(c.auctionReport({ n: 16, name: 'Salma', maxBid: 186000, windowSec: 30, listings: [{ expires: 12, currentBid: 170000, bidState: 'highest' }] }), /1 seen · you're highest on 1 · 1 ending within 30 s/);
   assert.equal(c.auctionReport({ n: 17, maxBid: 5000, windowSec: 30, listings: [] }), '🔨 17. Auctions filters ≤ 5,000: none found');
 });
+
+test('bidSkipReason: says why an auction is not bid on; matches bidAmount', () => {
+  const max = 186000;
+  const cases = [
+    [{ expires: 252, currentBid: 160000 }, 'not ending yet'],
+    [{ expires: 20, currentBid: 190000 }, 'next bid over your max'],
+    [{ expires: 20, currentBid: 170000, bidState: 'highest' }, 'already highest'],
+    [{ expires: 20, currentBid: 170000, buyNowPrice: 171000 }, 'Buy Now is cheaper'],
+    [{ expires: 0 }, 'ended'],
+    [{ expires: 20, currentBid: 170000 }, ''],
+  ];
+  for (const [l, why] of cases) {
+    assert.equal(c.bidSkipReason(l, max, 45), why, JSON.stringify(l));
+    assert.equal(!!c.bidAmount(l, max, 45), why === '', `bidAmount agrees for ${JSON.stringify(l)}`);
+  }
+});
+
+test('bid window 2.4.8: old default 30 → 45 once, clamped 15–90', () => {
+  assert.equal(c.migrateConfig({ bidWindow: 30 }).bidWindow, 45);
+  assert.equal(c.migrateConfig({ bidWindow: 60 }).bidWindow, 60);
+  assert.equal(c.DEFAULT_CONFIG.bidWindow, 45);
+  assert.equal(c.clampConfig({ ...c.DEFAULT_CONFIG, bidWindow: 300 }).cfg.bidWindow, 90);
+  assert.equal(c.clampConfig({ ...c.DEFAULT_CONFIG, bidWindow: 5 }).cfg.bidWindow, 15);
+});

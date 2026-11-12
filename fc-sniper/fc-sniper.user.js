@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FC Sniper
 // @namespace    https://github.com/znxgio/darkroom
-// @version      2.4.7
+// @version      2.4.8
 // @description  Sniper, pack opener, SBC solver and team upgrade advisor for the EA SPORTS FC Ultimate Team Web App, with built-in safety limits.
 // @match        https://www.ea.com/*ultimate-team/web-app*
 // @match        https://www.ea.com/ea-sports-fc/ultimate-team/web-app*
@@ -199,6 +199,17 @@
    * What to bid on an auction about to end, or 0 to skip it.
    * l: { expires (seconds left), currentBid, startingBid, buyNowPrice, bidState }
    */
+  /** Why bidAmount() won't bid on an auction ('' = it would). */
+  function bidSkipReason(l, maxBid, windowSec = 30) {
+    if (!l || !(l.expires > 0)) return 'ended';
+    if (l.expires > windowSec) return 'not ending yet';
+    if (l.bidState === 'highest') return 'already highest';
+    const next = l.currentBid > 0 ? nextPrice(l.currentBid) : Math.max(MIN_PRICE, l.startingBid || MIN_PRICE);
+    if (next > maxBid) return 'next bid over your max';
+    if (l.buyNowPrice && next >= l.buyNowPrice) return 'Buy Now is cheaper';
+    return '';
+  }
+
   function bidAmount(l, maxBid, windowSec = 30) {
     if (!l || !(l.expires > 0) || l.expires > windowSec) return 0;
     if (l.bidState === 'highest') return 0;
@@ -854,6 +865,8 @@
     if (!out.reprice244) { if (out.repriceMinutes === 15) out.repriceMinutes = 30; out.reprice244 = true; }
     // 2.4.6: the user picked 4% under the cheapest (was 10% under the market) — only if you had the old default
     if (!out.snipe246) { if (out.discount === 10 || out.discount === '10') out.discount = 4; out.snipe246 = true; }
+    // 2.4.8: bid window 30 → 45 s (debate) — only if you had the old default
+    if (!out.bid248) { if (out.bidWindow === 30 || out.bidWindow === '30') out.bidWindow = 45; out.bid248 = true; }
     // 2.4.0: the user asked for auction bidding to be switched on (once; they can turn it off again)
     if (!out.bidOn240) { out.bidSnipe = true; out.bidOn240 = true; }
     return out;
@@ -1097,6 +1110,7 @@
     set('buysPerDay', Math.max(1, num('buysPerDay') || 1));
     set('sessionMinutes', Math.min(SAFETY.maxSessionMinutes, Math.max(1, num('sessionMinutes') || SAFETY.maxSessionMinutes)));
     set('maxSearches', Math.max(1, num('maxSearches') || 1));
+    if (cfg.bidWindow !== undefined) set('bidWindow', Math.min(90, Math.max(15, num('bidWindow') || 45)));
     if (cfg.planBlockMin !== undefined) {
       set('planBlocks', Math.min(8, Math.max(1, Math.round(num('planBlocks')) || 1)));
       set('planBlockMin', Math.min(SAFETY.maxSessionMinutes, Math.max(10, num('planBlockMin') || 60)));
@@ -1860,7 +1874,7 @@
     reserveForHigher: false, // don't buy lower players if it leaves too little for higher ones
     repriceMinutes: 30, // refresh a player's market price this often while running (sooner when the market drops)
     bidSnipe: false, // also bid on auctions about to end under your max
-    bidWindow: 30, // seconds left on an auction before bidding
+    bidWindow: 45, // seconds left on an auction before bidding (2.4.8: 45 — searches are 4–8 s apart, so 30 gave each auction about one look)
     liveLog: true, // 2.4.8: one line per search — what came back and why it did or didn't buy/bid
     maxActiveBids: 5,
     bidWars: 1, // bid wars at once (1–3): counter-bid when outbid in the last seconds
@@ -1939,7 +1953,7 @@
     cacheBustBid, jitter, pickTargets, planSellPrice, classifyStatus,
     normalizeName, parsePlayerDb, searchPlayers, playerForIteration, migrateConfig, filterSummary, sniperTargets, LEAGUES,
     findMarketPrice, robustPrice, searchBudget, addPriceSample, prunePrices, priceTrend, trendText, lookupUrl, planMaxBuy, effectiveMaxBuy, withinReach, huntTargets,
-    shortTime, searchReport, auctionReport, planFloor, planBudget, planVerdict, planSummary, robustLow, trendNudge, snipeBase, recordGap, gapStats, smartLevels, gammaSample, betaSample, armPrior, decayArm, upgradeArm, armRate, chooseDiscount, chooseTarget, missWeight, recordArm, deepestArmFor, priceShifted, bestArm, flipPlan, tradeOpts, tradeCap, bidAmount, freeCoins, bidBlock, warCeiling, warSteps, binVsWar, settleSales,
+    bidSkipReason, shortTime, searchReport, auctionReport, planFloor, planBudget, planVerdict, planSummary, robustLow, trendNudge, snipeBase, recordGap, gapStats, smartLevels, gammaSample, betaSample, armPrior, decayArm, upgradeArm, armRate, chooseDiscount, chooseTarget, missWeight, recordArm, deepestArmFor, priceShifted, bestArm, flipPlan, tradeOpts, tradeCap, bidAmount, freeCoins, bidBlock, warCeiling, warSteps, binVsWar, settleSales,
     listSpendable, reserveOk, afterListBuy,
     aggregateListings, hotScore, rankHot, priceBands, provenFlips, flipValue, priceLadder, sbcCostEstimate,
     addHistory, summarizeHistory, isDiscordWebhook, discordPayload,
@@ -1960,7 +1974,7 @@
 
   const w = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '2.4.7';
+  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '2.4.8';
   const errText = (e) => (e && e.message ? e.message : String(e));
   const fmt = (n) => Number(n || 0).toLocaleString();
 
@@ -3017,6 +3031,7 @@
       const beat = { next: 25, per: new Map(), under: 0 };
       this.listStarted = sniperTargets(cfg).length > 0;
       this.reserveWarned = new Set();
+      this.turns = new Map();
       this.nextUpkeep = cfg.mode === 'trade' ? Date.now() : Date.now() + cfg.upkeepMinutes * 60e3;
       // Bids restored after a reload: collect them as soon as they have ended.
       for (const b of this.bids.values()) this.nextUpkeep = Math.min(this.nextUpkeep, b.endsAt + 8000);
@@ -3092,7 +3107,11 @@
         if (tradeFull && !fullWarned) { fullWarned = true; ui.log('Transfer list full — waiting for sales before buying more', 'warn'); }
         if (!tradeFull) fullWarned = false;
 
-        const bidTurn = cfg.bidSnipe && cfg.mode !== 'alert' && i % 2 === 1;
+        // Buy Now and auction searches alternate per player (a global flip skipped some players' auctions)
+        const turnKey = player ? `${player.kind || 'p'}:${player.id}` : '';
+        const turnN = (this.turns.get(turnKey) || 0) + 1;
+        this.turns.set(turnKey, turnN);
+        const bidTurn = cfg.bidSnipe && cfg.mode !== 'alert' && turnN % 2 === 0;
         // Now and then look a little above the max to spot near misses (never buys above the max).
         const probe = !bidTurn && (smartPct || armPct) && cfg.smartProbeEvery > 0 && Math.random() < 1 / cfg.smartProbeEvery;
         const searchMax = probe ? roundPrice(maxBuy * 1.04, 'up') : maxBuy;
@@ -3296,17 +3315,32 @@
       // A filter's rating range, like pickTargets does for Buy Now.
       const lo = (player && player.kind === 'filter' && player.minRating) || 0;
       const hi = (player && player.kind === 'filter' && player.maxRating) || 0;
+      const why = new Map(); // reason -> count, for one live-update line
+      const note = (r) => why.set(r, (why.get(r) || 0) + 1);
+      const seen = this.seenAuctions || (this.seenAuctions = new Map());
       for (const l of listings.slice().sort((a, b) => (a.expires || 0) - (b.expires || 0))) {
-        if (!this.running || this.bids.size >= cfg.maxActiveBids) break;
-        if (this.bids.has(l.tradeId)) continue;
-        if ((lo && (l.rating || 0) < lo) || (hi && (l.rating || 0) > hi)) continue;
+        // remember auctions seen early, to say later what they ended up at (no extra searches)
+        const cur = l.currentBid > 0 ? l.currentBid : l.startingBid || 0;
+        const was = seen.get(l.tradeId);
+        if (!was && l.expires > cfg.bidWindow) {
+          seen.set(l.tradeId, { bid: cur, left: l.expires, name: l.name });
+          if (seen.size > 20) seen.delete(seen.keys().next().value);
+        } else if (was && !was.told && l.expires <= cfg.bidWindow && cfg.liveLog) {
+          was.told = true;
+          const next = l.currentBid > 0 ? nextPrice(l.currentBid) : cur;
+          if (next > maxBid) ui.log(`🔨 ${l.name}: an auction seen at ${fmt(was.bid)} with ${shortTime(was.left)} left is at ${fmt(cur)} with ${shortTime(l.expires)} to go — over your max ${fmt(maxBid)}`, 'muted');
+        }
+        if (!this.running) break;
+        if (this.bids.size >= cfg.maxActiveBids) { note(`already ${cfg.maxActiveBids} open bids`); continue; }
+        if (this.bids.has(l.tradeId)) { note('already bid'); continue; }
+        if ((lo && (l.rating || 0) < lo) || (hi && (l.rating || 0) > hi)) { note('outside the filter rating'); continue; }
         const amount = bidAmount(l, maxBid, cfg.bidWindow);
-        if (!amount) continue;
+        if (!amount) { note(bidSkipReason(l, maxBid, cfg.bidWindow) || 'skipped'); continue; }
         // Same limits as Buy Now, with every open bid counted as coins spent and a buy made.
         const before = fut.coins();
         const block = bidBlock(amount, player, cfg, before, [...this.bids.values()], sessionBuys);
-        if (block === 'buys' || block === 'once') break;
-        if (block) continue;
+        if (block === 'buys' || block === 'once') { note(block === 'buys' ? 'session buy limit' : 'bought once already'); break; }
+        if (block) { note(block === 'coins' ? `not enough free coins (${fmt(freeCoins(cfg, before, [...this.bids.values()]))})` : `limit: ${block}`); continue; }
         const r = await fut.placeBid(l, amount);
         if (!r.ok) {
           const kind = classifyStatus(r.status);
@@ -3322,6 +3356,7 @@
         ui.log(`🔨 Bid ${fmt(amount)} on ${l.name} (${l.rating || '?'}) — ends in ${Math.round(l.expires)}s`, 'ok');
         await sleep(jitter(700, 1400));
       }
+      if (cfg.liveLog && why.size) ui.log(`   not bid: ${[...why].map(([r, n]) => `${n} ${r}`).join(' · ')}`, 'muted');
     },
 
     /** Buy history entry + optional relist after a Buy Now or a won auction. */
