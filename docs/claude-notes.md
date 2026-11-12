@@ -61,6 +61,8 @@ Newest learnings go at the end of each section. Dates are when the note was writ
 - The Web App has 38 services (list in the gallery-probe log). Unknown APIs: probe read-only (list methods + short source, call only request/get).
 - "Logged out (403)" can appear after heavy activity; logging in again fixes it.
 - Bidding: EA takes the coins off your balance as soon as you bid (user confirmed 2026-11-11), and gives them back if you're outbid.
+- Auctions: a bid placed with under ~30 s left EXTENDS the timer (to ~30 s or 1 min, user, 2026-11-12) — so bid wars are real
+  back-and-forths. Models in a debate wrongly assumed no extension: trust the user's real-app knowledge over model memory.
 - Auction bidding (`bidSnipe`) is OFF by default; the user had only ever seen Buy Now. Keep it off until the 2.4.0 bid spend guard ships.
 
 ## 5. Bugs we hit and why (lessons)
@@ -93,6 +95,11 @@ Newest learnings go at the end of each section. Dates are when the note was writ
   review the diff and run the tests itself. Lessons: big fixes from big-brother are good quality but slow (~15+ min) and
   can be lost to interruptions; prefer "advisor diagnoses, Opus fixes" (team v2 rule), or run big fixes in an isolated
   worktree and check the diff, not only the report.
+
+- 2026-11-12 "debate" test: agent teams can't run in this cloud/SDK session (Agent tool has no `name`; teams need an
+  interactive terminal). Ran a relayed debate instead: 3 Sonnet subagents (Aggressive / Cautious / Referee), ~10 s each,
+  round 2 via SendMessage. Useful: Cautious caught the after-tax ceiling, Aggressive the headroom rule, Referee shared
+  request pacing. The Referee's EA fact (no timer extension) was wrong; the user corrected it. Cheap and worth it for design questions.
 
 ## 7. Open work and ideas
 - Shipped in 2.3.1: bidding spend guard (Fable), smart-sniping floor (intern). Still open from the Fable review:
