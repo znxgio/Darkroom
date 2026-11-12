@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FC Sniper
 // @namespace    https://github.com/znxgio/darkroom
-// @version      2.4.8
+// @version      2.4.9
 // @description  Sniper, pack opener, SBC solver and team upgrade advisor for the EA SPORTS FC Ultimate Team Web App, with built-in safety limits.
 // @match        https://www.ea.com/*ultimate-team/web-app*
 // @match        https://www.ea.com/ea-sports-fc/ultimate-team/web-app*
@@ -1875,6 +1875,8 @@
     repriceMinutes: 30, // refresh a player's market price this often while running (sooner when the market drops)
     bidSnipe: false, // also bid on auctions about to end under your max
     bidWindow: 45, // seconds left on an auction before bidding (2.4.8: 45 — searches are 4–8 s apart, so 30 gave each auction about one look)
+    dryTurns: 40, // 2.4.9: after this many Buy Now searches with nothing on a player, try auctions only for a while (0 = off; needs bidding on)
+    dryAuctionSearches: 60, // … for this many of that player's searches
     liveLog: true, // 2.4.8: one line per search — what came back and why it did or didn't buy/bid
     maxActiveBids: 5,
     bidWars: 1, // bid wars at once (1–3): counter-bid when outbid in the last seconds
@@ -1974,7 +1976,7 @@
 
   const w = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '2.4.8';
+  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '2.4.9';
   const errText = (e) => (e && e.message ? e.message : String(e));
   const fmt = (n) => Number(n || 0).toLocaleString();
 
@@ -3032,6 +3034,9 @@
       this.listStarted = sniperTargets(cfg).length > 0;
       this.reserveWarned = new Set();
       this.turns = new Map();
+      this.dry = new Map();
+      this.pstats = new Map();
+      this.idleSaid = false;
       this.nextUpkeep = cfg.mode === 'trade' ? Date.now() : Date.now() + cfg.upkeepMinutes * 60e3;
       // Bids restored after a reload: collect them as soon as they have ended.
       for (const b of this.bids.values()) this.nextUpkeep = Math.min(this.nextUpkeep, b.endsAt + 8000);
@@ -3069,7 +3074,27 @@
           await this.wait(jitter(cfg.delayMin, cfg.delayMax), 'waiting', 'Bid war');
           continue;
         }
-        const pick = learn.pick(huntTargets(cfg), cfg, i);
+        // 2.4.9: only search players you can afford right now (coins held in open bids don't count).
+        const hunt = huntTargets(cfg);
+        const free = cfg.mode === 'alert' ? Infinity : freeCoins(cfg, fut.coins(), [...this.bids.values()]);
+        const priceOf = (p) => p.floor || p.lowest || effectiveMaxBuy(p, cfg) || 0;
+        const affordable = hunt.filter((p) => (p.kind === 'filter' ? free >= MIN_PRICE : withinReach(free, priceOf(p))));
+        if (hunt.length && !affordable.length) {
+          const cheapest = Math.min(...hunt.map(priceOf).filter((x) => x > 0)) || 0;
+          if (this.bids.size) {
+            if (!this.idleSaid) {
+              this.idleSaid = true;
+              ui.log(`💤 Can't afford any target right now (free ${fmt(free)}, cheapest ${fmt(cheapest)}) — no searches until your open bid${this.bids.size === 1 ? '' : 's'} end${this.bids.size === 1 ? 's' : ''}`, 'muted');
+            }
+            const soon = Math.min(this.nextUpkeep, ...[...this.bids.values()].map((b) => b.endsAt - ((cfg.bidWindow || 45) + 5) * 1000));
+            await this.wait(Math.max(1000, Math.min(15000, soon - Date.now())), 'waiting', 'Waiting for your open bids');
+            continue;
+          }
+          await this.finishBids();
+          return this.stop(`can't afford any target (free ${fmt(free)}, cheapest ${fmt(cheapest)})`);
+        }
+        this.idleSaid = false;
+        const pick = learn.pick(affordable, cfg, i);
         const player = pick.player;
         // Prices drift — refresh a player's (or filter's) average during long sessions.
         if (player && cfg.autoPrice && !player.manualMax && Date.now() - (player.checkedAt || 0) > cfg.repriceMinutes * 60e3) {
@@ -3111,7 +3136,12 @@
         const turnKey = player ? `${player.kind || 'p'}:${player.id}` : '';
         const turnN = (this.turns.get(turnKey) || 0) + 1;
         this.turns.set(turnKey, turnN);
-        const bidTurn = cfg.bidSnipe && cfg.mode !== 'alert' && turnN % 2 === 0;
+        // 2.4.9: a long dry spell on Buy Now switches this player to auction-only searches for a while
+        const dry = this.dry.get(turnKey) || { n: 0, left: 0, on: false };
+        this.dry.set(turnKey, dry);
+        const canBid = cfg.bidSnipe && cfg.mode !== 'alert';
+        if (dry.on && (!dry.left || !canBid)) { dry.on = false; dry.n = 0; if (player) ui.log(`🔁 ${player.name}: back to Buy Now`, 'muted'); }
+        const bidTurn = canBid && (dry.on ? (dry.left--, true) : turnN % 2 === 0);
         // Now and then look a little above the max to spot near misses (never buys above the max).
         const probe = !bidTurn && (smartPct || armPct) && cfg.smartProbeEvery > 0 && Math.random() < 1 / cfg.smartProbeEvery;
         const searchMax = probe ? roundPrice(maxBuy * 1.04, 'up') : maxBuy;
@@ -3128,7 +3158,9 @@
           const gaps = huntTargets(cfg).filter((p) => p.lowest && p.kind !== 'filter').map((p) => {
             const mx = effectiveMaxBuy(p, cfg);
             const g = gapStats(((learn.data.targets[learn.key(p)] || {}).gaps));
-            return `${p.name} ${fmt(mx)} vs cheapest ${fmt(p.lowest)} (${Math.max(0, Math.round((1 - mx / p.lowest) * 100))}% under)${g.probes ? ` · near-miss checks ${g.probes}, ${g.near} found${g.near ? ` (avg ${g.avgPct}% under the cheapest)` : ''}` : ''}`;
+            const ps = this.pstats.get(`${p.kind || 'p'}:${p.id}`);
+            const verdict = ps ? ` · ${p.name}: Buy Now ${ps.hits}/${ps.bin} at ≤ ${fmt(mx)}${ps.ends.length ? ` · auctions near the end ~${Math.round(ps.ends.reduce((a, x) => a + x, 0) / ps.ends.length * 10) / 10}% under the cheapest (${ps.ends.length})` : ''}` : '';
+            return `${p.name} ${fmt(mx)} vs cheapest ${fmt(p.lowest)} (${Math.max(0, Math.round((1 - mx / p.lowest) * 100))}% under)${verdict}${g.probes ? ` · near-miss checks ${g.probes}, ${g.near} found${g.near ? ` (avg ${g.avgPct}% under the cheapest)` : ''}` : ''}`;
           });
           ui.log(`🔎 Still sniping — ${this.stats.searches - startSearches} searches (${[...beat.per].map(([n, c]) => `${n} ${c}`).join(', ')}) · ${beat.under} listing${beat.under === 1 ? '' : 's'} under your max${gaps.length ? ` · ${gaps.join(' · ')}` : ''}`, 'muted');
         }
@@ -3188,6 +3220,16 @@
               const r = await this.attempt(t, player, plan);
               if (r === 'bought') outcome.hit++;
               else if (r === 'missed') outcome.miss++;
+            }
+          }
+          if (player) {
+            const ps = this.pstats.get(turnKey) || { bin: 0, hits: 0, ends: [] };
+            ps.bin++; if (outcome.hit) ps.hits++;
+            this.pstats.set(turnKey, ps);
+            if (outcome.hit) dry.n = 0;
+            else if (++dry.n >= (cfg.dryTurns || Infinity) && canBid && !dry.on) {
+              dry.on = true; dry.left = Math.max(1, cfg.dryAuctionSearches || 60);
+              ui.log(`🔁 ${player.name}: ${cfg.dryTurns} Buy Now searches with nothing — the next ${dry.left} searches for ${player.name} are auctions only (late bids)`, 'warn');
             }
           }
           if ((smartPct || armPct) && player) {
@@ -3328,6 +3370,10 @@
         } else if (was && !was.told && l.expires <= cfg.bidWindow && cfg.liveLog) {
           was.told = true;
           const next = l.currentBid > 0 ? nextPrice(l.currentBid) : cur;
+          const key = player ? `${player.kind || 'p'}:${player.id}` : '';
+          const ref = player && (player.floor || player.lowest);
+          const ps = this.pstats && this.pstats.get(key);
+          if (ps && ref) { ps.ends.push(Math.round((1 - cur / ref) * 1000) / 10); if (ps.ends.length > 30) ps.ends.shift(); }
           if (next > maxBid) ui.log(`🔨 ${l.name}: an auction seen at ${fmt(was.bid)} with ${shortTime(was.left)} left is at ${fmt(cur)} with ${shortTime(l.expires)} to go — over your max ${fmt(maxBid)}`, 'muted');
         }
         if (!this.running) break;
@@ -5181,6 +5227,8 @@
       ['bidSnipe', 'Also bid on auctions ending soon', 'toggle'],
       ['bidWindow', 'Bid in the last (seconds)', 'number'],
       ['liveLog', 'Live updates (a log line for every search)', 'toggle'],
+      ['dryTurns', 'Dry spell: switch to auctions after N Buy Now searches (0 = off)', 'number'],
+      ['dryAuctionSearches', '… then auction-only searches for that player', 'number'],
       ['bidWars', 'Bid wars at once (1–3)', 'number'],
       ['bidWarStretchPct', 'War: go up to % over my max', 'number'],
       ['bidWarMaxCounters', 'War: give up after N counter-bids', 'number'],

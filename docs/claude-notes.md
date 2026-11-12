@@ -54,6 +54,15 @@ Newest learnings go at the end of each section. Dates are when the note was writ
   day (≤1500) themselves. Their Rare recording captured a player-name search, not Gold+Rare (recorder skips empty
   arrays; FC 27 criteria have ovrMin/ovrMax natively, `_category`/`_type` underscored).
 
+- 2026-11-12, session 2 (cont.): 2.4.9 from the "long game" debate (user idea: after X dry searches switch to bidding,
+  focus on that bid, don't search without coins). Observer (verified): watching a bid costs a search per check (warCheck),
+  so polling ≈ dry searching — idle with ZERO requests until warDue instead; an early min-step bid on a liquid 194k
+  card ends ~2–4% under BIN anyway and locks coins (160k of 241k → Buy Now blocked); Side B's "≤25% locked" probe
+  could never fire in the user's case; REAL issue = 4% under on a liquid 194k card is inside the tax band where flip
+  bots win in <1 s → 0 hits is expected. Shipped: affordability gate (skip unaffordable; idle with open bids; stop
+  otherwise), dry-spell auction turns (dryTurns 40 / dryAuctionSearches 60), per-player verdict in the heartbeat.
+  Recommended to the user: cheaper/less-watched cards (5k–50k) + Trade mode + Find hot cards; buy Salma at BIN or on a dip.
+
 ## 1. How the user works and talks
 - Short, casual messages, often typed on a phone while busy (once while driving). Expect typos; read for intent.
 - Thinks out loud and expects Claude to fill in the details, pick the best option and say why, not list everything.
