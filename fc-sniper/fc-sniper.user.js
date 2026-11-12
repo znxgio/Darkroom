@@ -5226,7 +5226,7 @@
   }
 
   const CSS = `
-  #fcs{--bg:#0d1116;--card:#151b22;--card2:#1b232c;--line:#26303b;--text:#e9eef3;--muted:#8796a5;--dim:#5b6876;
+  #fcs{--bg:#0d1116;--card:#151b22;--card2:#1b232c;--line:#26303b;--text:#e9eef3;--muted:#8796a5;--dim:#7a8796;
     --green:#3ddc84;--green-ink:#05210f;--red:#ff6b6b;--amber:#ffc857;--blue:#5aa9ff;
     position:fixed;top:14px;right:14px;z-index:2147483000;width:360px;max-height:calc(100vh - 28px);display:flex;flex-direction:column;
     background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:16px;overflow:hidden;
@@ -5269,20 +5269,20 @@
   #fcs .tabs button{padding:7px 2px;color:var(--muted);font-weight:600;font-size:12px;border-radius:8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   #fcs .tabs button.on{color:var(--text);background:var(--card2);box-shadow:inset 0 -2px 0 var(--green)}
   #fcs .body{flex:1;min-height:0}
-  #fcs .last{margin:6px 0 0;font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  #fcs .last{margin:6px 0 0;font-size:12px;color:var(--muted);white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
   #fcs .last:empty{display:none}
   #fcs .jobbar{display:flex;align-items:center;gap:8px;justify-content:space-between;margin:6px 0;padding:8px 10px;border-radius:10px;background:rgba(232,163,61,.15);border:1px solid rgba(232,163,61,.5);font-size:13px}
   #fcs .jobbar[hidden]{display:none}
   #fcs .jobbar .mini{min-height:32px;padding:0 14px}
   #fcs .last.ok{color:var(--green)}#fcs .last.warn{color:var(--amber)}#fcs .last.err{color:var(--red)}#fcs .last.alert{color:#ffe08a}
   #fcs .btn.go-btn{background:var(--green);border-color:var(--green);color:var(--green-ink)}
-  #fcs .log{max-height:none}
   #fcs .body{overflow-y:auto;overflow-x:hidden;padding:12px 14px 14px;overscroll-behavior:contain;-webkit-overflow-scrolling:touch}
   #fcs .log div,#fcs small,#fcs .note{overflow-wrap:anywhere}
   #fcs.min .tabs,#fcs.min .body{display:none}
   #fcs .pane{display:none}#fcs .pane.on{display:block}
 
   #fcs .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 12px;margin-bottom:10px}
+  #fcs .card h4.title{text-transform:none;letter-spacing:0}
   #fcs .card h4{margin:0 0 6px;font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--dim)}
   #fcs .row{display:grid;grid-template-columns:1fr 46%;align-items:center;gap:10px;padding:5px 0}
   #fcs .row>span{color:var(--muted)}
@@ -5340,6 +5340,7 @@
   #fcs .stats div{background:var(--card2);border-radius:9px;padding:7px 6px;text-align:center;color:var(--muted);font-size:11px}
   #fcs .stats b{display:block;color:var(--text);font-size:15px;font-variant-numeric:tabular-nums}
   #fcs .log{max-height:150px;overflow:auto;font:11.5px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace}
+  #fcs [data-pane=log] .log{max-height:none}
   #fcs .log div{padding:2px 0;color:var(--muted)}#fcs .log time{color:var(--dim);margin-right:6px}
   #fcs .log .ok{color:var(--green)}#fcs .log .warn{color:var(--amber)}#fcs .log .err{color:var(--red)}#fcs .log .alert{color:#ffe08a}#fcs .log .muted{color:var(--dim)}
   #fcs .hist{display:flex;flex-direction:column}
@@ -5367,17 +5368,19 @@
   #fcs .plan{border-color:var(--green)}
   #fcs.mob .mini{padding:9px 12px;font-size:14px;min-height:40px}#fcs.mob .rm,#fcs.mob .ord button{min-width:44px;min-height:44px}#fcs.mob .li{padding:10px 0}
 
-  #fcs-toast{position:fixed;left:50%;top:16px;transform:translate(-50%,-30px);opacity:0;visibility:hidden;z-index:2147483001;padding:10px 16px;border-radius:12px;
+  #fcs-toast{position:fixed;left:50%;top:calc(env(safe-area-inset-top, 0px) + 12px);transform:translate(-50%,-30px);opacity:0;visibility:hidden;z-index:2147483001;padding:10px 16px;border-radius:12px;
     font:600 14px -apple-system,system-ui,sans-serif;color:#05210f;background:#3ddc84;box-shadow:0 12px 30px rgba(0,0,0,.4);transition:transform .25s,opacity .25s,visibility .25s;pointer-events:none;max-width:90vw}
   #fcs-toast.show{transform:translate(-50%,0);opacity:1;visibility:visible}#fcs-toast.alert{background:#ffc857;color:#2b1d00}
 
-  #fcs.mob{top:auto!important;left:0!important;right:0!important;bottom:0;width:auto;max-height:78vh;border-radius:20px 20px 0 0;border-bottom:0;
+  #fcs.mob{top:auto!important;left:0!important;right:0!important;bottom:0;width:auto;max-height:78vh;max-height:88dvh;border-radius:20px 20px 0 0;border-bottom:0;
     font-size:15px;padding-bottom:env(safe-area-inset-bottom)}
   #fcs.mob .hd{cursor:default;padding:12px 12px 10px 16px}
   #fcs.mob .hd::before{content:"";position:absolute;left:50%;top:5px;width:36px;height:4px;margin-left:-18px;border-radius:9px;background:var(--line)}
   #fcs.mob .go{width:48px;height:40px}#fcs.mob .fold{width:40px;height:40px}
-  #fcs.mob:not(.min){height:min(80vh,720px)}
-  #fcs.mob .tabs button{padding:9px 2px;font-size:13.5px}
+  #fcs.mob:not(.min){height:min(80vh,720px);height:min(88dvh,760px)}
+  #fcs.mob .tabs{display:flex;overflow-x:auto;scrollbar-width:none;gap:2px}
+  #fcs.mob .tabs::-webkit-scrollbar{display:none}
+  #fcs.mob .tabs button{flex:none;padding:9px 12px;font-size:13.5px}
   #fcs.mob .last{font-size:13px}
   #fcs.mob input,#fcs.mob select{font-size:16px;padding:10px}
   #fcs.mob .row{padding:7px 0}#fcs.mob .seg button{padding:8px 4px;font-size:14px}
@@ -5399,7 +5402,10 @@
     #fcs.mob .tabs button{font-size:12.5px}
   }
   #fcs.mob.min .logo{width:32px;height:32px;flex:none}
-  #fcs.mob.min .go{width:42px;height:36px}#fcs.mob.min .fold{width:30px;height:36px}`;
+  #fcs.mob.min .go{width:42px;height:36px}#fcs.mob.min .fold{min-width:44px;width:44px;height:36px}
+  #fcs.min .jobbar,#fcs.mob.min .tabs{display:none}
+  #fcs.mob.min.running .logo{box-shadow:0 0 0 2px var(--green);animation:fcsPulse 1.6s infinite}
+  @keyframes fcsPulse{0%,100%{opacity:1}50%{opacity:.55}}`;
 
   const ui = {
     root: null,
@@ -5411,7 +5417,7 @@
     mount() {
       if (document.getElementById('fcs')) return;
       const style = document.createElement('style'); style.textContent = CSS; document.head.appendChild(style);
-      const toast = document.createElement('div'); toast.id = 'fcs-toast'; document.body.appendChild(toast);
+      const toast = document.createElement('div'); toast.id = 'fcs-toast'; toast.setAttribute('role', 'status'); document.body.appendChild(toast);
       const root = document.createElement('div'); root.id = 'fcs';
       root.innerHTML = `
         <div class="hd">
@@ -5569,6 +5575,7 @@
     bind() {
       const root = this.root;
       root.addEventListener('click', (e) => {
+        if (root.classList.contains('min') && e.target.closest('.logo')) { root.classList.remove('min'); return; }
         const btn = e.target.closest('button');
         if (!btn) return;
         if (btn.dataset.tab) return this.showTab(btn.dataset.tab);
@@ -5797,6 +5804,7 @@
       this.qa('[data-tab]').forEach((b) => b.classList.toggle('on', b.dataset.tab === tab));
       this.qa('[data-pane]').forEach((p) => p.classList.toggle('on', p.dataset.pane === tab));
       store.set(KEYS.ui, { ...store.get(KEYS.ui, {}), tab });
+      try { this.q('[data-tab].on')?.scrollIntoView({ inline: 'center', block: 'nearest' }); } catch { /* ignore */ }
       if (tab === 'trade') this.renderTrade();
       if (tab === 'squad' && upgrades) this.renderUpgrades();
     },
@@ -6050,6 +6058,7 @@
       const go = this.q('[data-a=toggle]');
       const on = !!name || engine.running;
       go.classList.toggle('on', on);
+      this.root.classList.toggle('running', on);
       go.innerHTML = on ? ICON.stop : ICON.play;
       go.disabled = false;
       this.qa('[data-a=analyse], [data-a=evo-find], [data-a=evo-preview], [data-a=packs-load], [data-a=pack-open], [data-a=pack-open-all], [data-a=sbc-load], [data-a=sbc-set], [data-a=sbc-solve], [data-a=sbc-submit], [data-a=sbc-fill], [data-a=sbc-points], [data-a=sbc-points-go], [data-a=price]')
@@ -6306,7 +6315,7 @@
         this.q('[data-r=team]').innerHTML = `<div class="kpi"><div><b>${s.rating}</b>Rating</div><div><b>${s.chem}/33</b>Chemistry</div><div><b>${esc(s.formation || '—')}</b>Formation</div></div>`;
       }
       this.q('[data-r=upg]').innerHTML = upgrades.results.map((r, si) => `
-        <div class="card"><h4>${esc(r.position)} — now ${r.current ? `${esc(r.current.name)} ${r.current.rating}` : 'empty'}</h4>
+        <div class="card"><h4 class="title">${esc(r.position)} — now ${r.current ? `${esc(r.current.name)} ${r.current.rating}` : 'empty'}</h4>
         ${r.options.length ? `<div class="list">${r.options.map((o, oi) => `<div class="li">
           <span class="t"><b>${esc(o.name)} ${o.rating}</b><small>${o.source === 'club' ? 'You own this card' : o.source === 'sbc' ? `SBC “${esc(o.setName)}” · ≈ ${fmt(o.price)} coins` : `${fmt(o.price)} coins`} ·
             team <span class="${o.ratingGain > 0 ? 'up' : ''}">${o.ratingGain > 0 ? '+' : ''}${o.ratingGain}</span> ·
@@ -6435,6 +6444,7 @@
       on = on || plan.active; // a plan keeps the panel locked through its breaks and SBCs
       const go = this.q('[data-a=toggle]');
       go.classList.toggle('on', on);
+      this.root.classList.toggle('running', on || !!jobs.current);
       go.innerHTML = on ? ICON.stop : ICON.play;
       go.setAttribute('aria-label', on ? 'Stop' : 'Start');
       this.tick();
