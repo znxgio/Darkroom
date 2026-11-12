@@ -3,6 +3,15 @@
 Public repo: no personal details. Add anything that could help the next session, even if small.
 Newest learnings go at the end of each section. Dates are when the note was written.
 
+## 0. Handover (latest first)
+- 2026-11-12, end of the long first session (context got very large → user starts a fresh chat). State: fc-sniper
+  2.4.4 (refresh buttons per feature, stuck-task rescue, Ask Claude, log copy markers/1,500 lines, median pricing,
+  30-min + early reprice, starter filters, budget line, META_NOTES + "Best XI from your club", price history/trends,
+  🔎 look-up links, QoL fixes). User has NOT yet tested 2.4.x on the real account beyond out-of-reach + bidding on.
+  Next: wait for the user's test log (they'll paste "Copy log"); then the open QoL items in §5 and the Gallery
+  collector (§7) if they confirm a Web App buy registers in the Gallery. Keep usage low: debates only when unsure,
+  use the runner for test suites, read only the log lines the user pastes.
+
 ## 1. How the user works and talks
 - Short, casual messages, often typed on a phone while busy (once while driving). Expect typos; read for intent.
 - Thinks out loud and expects Claude to fill in the details, pick the best option and say why, not list everything.
@@ -118,6 +127,29 @@ Newest learnings go at the end of each section. Dates are when the note was writ
     only where the user still had the old default (flag `trade242`). Skipped the rebuttal round when the referee's numbers
     already settled it — saves ~2 agent runs.
 - Runner subagent: ~8 min for all 6 suites in parallel, returns 10 lines — big context saving vs reading suite output.
+
+- 2026-11-12 data-source research: FUTBIN and FUTWIZ return 403 to automated requests (bot protection — never try to get
+  around it). FUT.GG is reachable but its Terms forbid "any automated means (bots, scrapers, crawlers)" and robots.txt
+  disallows /api/*. So the bot never fetches these sites. FUT.GG search URLs (?name=/?search=) didn't return results
+  server-side; look-up links use a Google site:fut.gg search instead (user taps it).
+- Debates 2026-11-12 (data + sniping, 2 sides + referee + observer each):
+  * Data → shipped: META_NOTES (dated, sourced: Liquid FC 21 Oct 2026 = 4-1-2-1-2(2); Dexerto launch = 4-2-1-3, Counter,
+    line 55/45; sources disagree, shown as such), coach relabelled "Best XI from your club", weakest spots, 4-2-1-3 added
+    with noCreate (EA slot order unconfirmed), local price history (KEYS.prices, ≤400 KB, 7 days, trend only with ≥4
+    samples over ≥24 h), 🔎 look-up links. Skipped: paste import, EA service probe (unproven), player lists (stale fast).
+    Refresh META_NOTES when the meta changes (search public guides; show date + source; never claim a winner).
+  * Sniping → the daily cap binds (defaults ≈390 searches/h, 600/day). Shipped: median-of-5 price (robustPrice), 30-min
+    reprice + early reprice when ≥3 copies show under max, starter filters (off), daily budget line. Rejected: "max =
+    0.85 × median of own results" (searches only return listings ≤ max → circular), moving bookkeeping after the buy
+    (1–5 ms), per-slice scoring (too little data at 600/day).
+- User log habits: Copy log now copies only lines since the last copy and adds a "📋 Log copied" marker; "Copy full
+  log" for everything; log keeps 1,500 lines; details (debugLog) survive reloads.
+- User asked for "login to Claude inside the bot": not possible safely (would need an API key stored in the EA page's
+  storage, readable by other scripts). Built "Ask Claude" instead: copies question + new log lines, opens claude.ai.
+- QoL review (Sonnet, 12 items) 2026-11-12: fixed stop bar for tasks, running bar, errors as toasts, ID hints, tap
+  targets, reset-to-defaults, auto-save before restore. Still open: one-row scrollable tabs (8 tabs take 2 rows),
+  "Advanced" section for bid-war/win-rule settings, inline copy box instead of prompt(), toast position on phone,
+  clearer auto vs manual max chips, league chips instead of IDs.
 
 ## 7. Open work and ideas
 - Shipped in 2.3.1: bidding spend guard (Fable), smart-sniping floor (intern). 2.4.2 fixed: nothing-listed fallback, stop/start run token, SBC hard cap, jobs vs caps. Still open from the Fable review (as of 2.4.2: only minor items — fixed sellMode has no profit floor; price checks don't count toward session maxSearches; special-version id buys):
