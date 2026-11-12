@@ -89,7 +89,8 @@ async function run(b, opts) {
   check('default: max measured from the cheapest listing, said in the log', o.log.some((l) => /Second Target: cheapest 18,000 · market 18,000 · \d+ listed · trend: not enough history yet → max 16,000 \(10% under the cheapest\)/.test(l)), o.log.filter((l) => /Second Target: /.test(l))[0]);
   check('default: learner only picks targets (searches recorded at your Snipe %, no deeper levels)', om && Object.keys(om.arms).join() === '10' && Array.isArray(om.gaps) && om.gaps.length >= 1, om && JSON.stringify({ arms: Object.keys(om.arms), gaps: (om.gaps || []).length }));
   // 3b) bidding with 2 players: each player gets auction searches too (2.4.7 alternated globally, so one never did)
-  const tw = await run(b, { prices: { 1: 40000, 2: 18000 }, reserve: false, maxSearches: 8, extra: { bidSnipe: true, buyOnce: false } });
+  // prices above both maxes: nothing bought, so both players reach their auction turns
+  const tw = await run(b, { prices: { 1: 60000, 2: 30000 }, reserve: false, maxSearches: 8, extra: { bidSnipe: true, buyOnce: false } });
   const auc = (id) => tw.L.searched.filter((x) => x.id === id && x.bid > 0).length;
   check('both players get auction searches', auc(1) >= 1 && auc(2) >= 1, JSON.stringify(tw.L.searched.map((x) => `${x.id}${x.bid ? 'A' : 'B'}`)));
   check('live updates: a line per search and per auction search', tw.log.filter((l) => /^🔍 \d+\./.test(l)).length >= 2 && tw.log.some((l) => /^🔨 \d+\. Auctions/.test(l)), tw.log.filter((l) => /^🔍|^🔨/.test(l)).slice(0, 4).join(' | '));
