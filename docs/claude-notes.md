@@ -101,6 +101,13 @@ Newest learnings go at the end of each section. Dates are when the note was writ
   round 2 via SendMessage. Useful: Cautious caught the after-tax ceiling, Aggressive the headroom rule, Referee shared
   request pacing. The Referee's EA fact (no timer extension) was wrong; the user corrected it. Cheap and worth it for design questions.
 
+- 2026-11-12 first debate WITH an observer (learner redesign): Exploit vs Explore (Sonnet), Referee (Sonnet, read the
+  code: confirmed all 5 review claims + found good>n and unused stored data), Observer (Opus). The Observer found what all
+  three missed: hits/misses counted per listing vs n per search; BOTH sides had the near-miss credit direction wrong;
+  Exploit's prior math was off and in round 3 its depth scaling pointed the wrong way; near credit to an unsearched arm
+  inflates it. Shipped the Observer's closing design in 2.4.1; all suites passed first try. The observer role is clearly
+  worth it — keep it on Opus. Cost: ~8 agent runs, ~10-90 s each.
+
 ## 7. Open work and ideas
 - Shipped in 2.3.1: bidding spend guard (Fable), smart-sniping floor (intern). Still open from the Fable review:
   "nothing listed" fallback, jobs skipping daily caps, run token for stop/start, SBC fill-in hard cap, learner reward tuning.

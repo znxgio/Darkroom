@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FC Sniper
 // @namespace    https://github.com/znxgio/darkroom
-// @version      2.4.0
+// @version      2.4.1
 // @description  Sniper, pack opener, SBC solver and team upgrade advisor for the EA SPORTS FC Ultimate Team Web App, with built-in safety limits.
 // @match        https://www.ea.com/*ultimate-team/web-app*
 // @match        https://www.ea.com/ea-sports-fc/ultimate-team/web-app*
@@ -614,28 +614,60 @@
     return x / (x + y || 1);
   }
 
+  // Learner design (debate 2026-11-12, observer's closing view): one 0..1 score per search,
+  // a pessimistic prior that falls with depth, near misses on their own counters, lazy decay.
+  const LEARN_HALF_LIFE_DAYS = 7;
+  const LEARN_MIN_N = 30;
+
+  /** Prior for an arm: Beta(0.5, 25·d/4) — ~2% chance per search at 4% under avg, less for deeper discounts. */
+  function armPrior(d) {
+    return { a: 0.5, b: 25 * Math.max(1, d) / 4 };
+  }
+
   /**
-   * Weighted "good signs" for one discount arm: a buy counts most, a listing
-   * you saw under your max but lost to a faster buyer next, a near miss (just
-   * above your max) least. arm: { n, hits, misses, near }.
+   * Old evidence fades: counts halve every 7 days since the arm was last
+   * updated, but never below ~30 searches' worth (hits are rare; don't throw
+   * all evidence away). Pure: returns a decayed copy.
    */
-  function armSignals(arm) {
-    return (arm.hits || 0) + 0.8 * (arm.misses || 0) + 0.35 * (arm.near || 0);
+  function decayArm(arm, now) {
+    const a = { n: 0, good: 0, near: 0, probes: 0, ...(arm || {}) };
+    if (!a.last || !now || now <= a.last || !a.n) return a;
+    let f = Math.pow(0.5, (now - a.last) / 864e5 / LEARN_HALF_LIFE_DAYS);
+    if (a.n * f < LEARN_MIN_N) f = Math.min(1, LEARN_MIN_N / a.n);
+    return { ...a, n: a.n * f, good: a.good * f, near: a.near * f, probes: a.probes * f };
+  }
+
+  /** Arms saved by older versions counted per listing; turn them into per-search scores. */
+  function upgradeArm(arm) {
+    if (!arm || arm.good !== undefined) return arm;
+    const n = arm.n || 0;
+    return { ...arm, good: Math.min(n, (arm.hits || 0) + 0.8 * (arm.misses || 0)), near: 0, probes: 0 };
+  }
+
+  /** Small bonus from near misses (listings just above this arm's price), from their own counters. */
+  function nearBonus(a) {
+    return 0.35 * ((a.near || 0) + 0.1) / ((a.probes || 0) + 5) / 100;
+  }
+
+  /** Posterior mean chance of a good search on an arm (for display and tests). */
+  function armRate(arm, d, now) {
+    const a = decayArm(upgradeArm(arm), now);
+    const pr = armPrior(d);
+    return (pr.a + a.good) / (pr.a + pr.b + a.n) + nearBonus(a);
   }
 
   /**
    * Pick a discount for a target by Thompson sampling: sample each arm's
-   * chance of a good sign, times how much it saves (the discount). Deeper
-   * discounts save more but show up less; the learner finds the balance, and
-   * untried arms still get explored. Returns { pct, ev }.
+   * chance of a good search, times how much it saves (the discount).
+   * Returns { pct, ev }.
    */
-  function chooseDiscount(arms, levels, rand = Math.random) {
+  function chooseDiscount(arms, levels, rand = Math.random, now = 0) {
     let best = null;
     for (const d of levels) {
-      const a = (arms && arms[d]) || {};
-      const good = armSignals(a);
-      const n = a.n || 0;
-      const p = betaSample(1 + good, 1 + Math.max(0, n - good), rand);
+      const a = decayArm(upgradeArm((arms && arms[d]) || {}), now);
+      const pr = armPrior(d);
+      const good = Math.min(a.good, a.n);
+      const p = betaSample(pr.a + good, pr.b + a.n - good, rand) + nearBonus(a);
       const ev = p * d;
       if (!best || ev > best.ev) best = { pct: d, ev };
     }
@@ -643,40 +675,75 @@
   }
 
   /**
-   * Which target to search next: the one with the best sampled coins saved
-   * per search (chance × discount × price). target: { key, avg, arms }.
+   * Which target to search next: the best sampled coins saved per search,
+   * weighted by the square root of the price (so cheap targets still get
+   * searches); 1 search in 10 rotates across all targets to keep exploring.
+   * target: { key, avg, arms }.
    */
-  function chooseTarget(targets, levels, rand = Math.random) {
+  function chooseTarget(targets, levels, rand = Math.random, now = 0) {
+    if (targets.length > 1 && rand() < 0.1) {
+      const t = targets[Math.floor(rand() * targets.length) % targets.length];
+      return { target: t, pct: chooseDiscount(t.arms, levels, rand, now).pct, value: 0, rotated: true };
+    }
     let best = null;
     for (const t of targets) {
-      const pick = chooseDiscount(t.arms, levels, rand);
-      const value = pick.ev / 100 * Math.max(1000, t.avg || 0);
+      const pick = chooseDiscount(t.arms, levels, rand, now);
+      const value = pick.ev / 100 * Math.sqrt(Math.max(1000, t.avg || 0));
       if (!best || value > best.value) best = { target: t, pct: pick.pct, value };
     }
     return best;
   }
 
-  /** Records one search on an arm. outcome: { hit, miss, near } counts. */
+  /** How much a lost race counts: 0.8 × your race-win rate (from the speed totals), never under 0.25 of that. */
+  function missWeight(speed) {
+    const n = (speed && speed.n) || 0;
+    const wins = n - ((speed && speed.lost) || 0);
+    return 0.8 * Math.max(0.25, (wins + 1) / (n + 2));
+  }
+
+  /**
+   * Records one search on an arm (decaying it first).
+   * outcome: { hit, miss } listing counts → one score per search: 1 for a buy,
+   * missWeight for a lost race, 0 otherwise. Probe searches also count near
+   * misses: `nearArm` (the deepest arm whose price would have caught the
+   * listing) gets near+1, `probeArm` gets probes+1.
+   */
   function recordArm(arms, pct, outcome = {}) {
+    const now = outcome.at || 0;
     const out = { ...(arms || {}) };
-    const a = { n: 0, hits: 0, misses: 0, near: 0, ...(out[pct] || {}) };
+    const touch = (d) => { const a = { hits: 0, misses: 0, ...decayArm(upgradeArm(out[d]), now) }; a.last = now; out[d] = a; return a; };
+    const a = touch(pct);
     a.n++;
-    a.hits += outcome.hit || 0;
-    a.misses += outcome.miss || 0;
-    a.near += outcome.near || 0;
-    a.last = outcome.at || 0;
-    out[pct] = a;
+    const score = outcome.hit ? 1 : outcome.miss ? (outcome.missWeight ?? 0.8) : 0;
+    a.good += score;
+    a.hits += outcome.hit ? 1 : 0;
+    a.misses += !outcome.hit && outcome.miss ? 1 : 0;
+    if (outcome.probeArm !== undefined) touch(outcome.probeArm).probes++;
+    if (outcome.nearArm !== undefined) touch(outcome.nearArm).near++;
     return out;
   }
 
-  /** The arm with the best observed rate (for display). */
-  function bestArm(arms, levels) {
+  /** The deepest level whose price (avg × (1 − d%)) would have caught a listing at `price`. */
+  function deepestArmFor(price, avg, levels) {
+    if (!(avg > 0) || !(price > 0)) return undefined;
+    const under = (avg - price) / avg * 100;
+    const ok = levels.filter((d) => d <= under);
+    return ok.length ? ok[ok.length - 1] : undefined;
+  }
+
+  /** Halve a target's evidence when its average price moved more than 15% since it was learned. */
+  function priceShifted(refAvg, avg) {
+    return refAvg > 0 && avg > 0 && Math.abs(avg - refAvg) / refAvg > 0.15;
+  }
+
+  /** The arm with the best expected saving (same model as the sampler, for display). */
+  function bestArm(arms, levels, now = 0) {
     let best = null;
     for (const d of levels) {
-      const a = arms && arms[d];
-      if (!a || !a.n) continue;
-      const score = (armSignals(a) + 0.5) / (a.n + 1) * d;
-      if (!best || score > best.score) best = { pct: d, score, ...a };
+      const raw = arms && arms[d];
+      if (!raw || !raw.n) continue;
+      const score = armRate(raw, d, now) * d;
+      if (!best || score > best.score) best = { pct: d, score, ...upgradeArm(raw) };
     }
     return best;
   }
@@ -1604,7 +1671,7 @@
     cacheBustBid, jitter, pickTargets, planSellPrice, classifyStatus,
     normalizeName, parsePlayerDb, searchPlayers, playerForIteration, migrateConfig, filterSummary, sniperTargets, LEAGUES,
     findMarketPrice, planMaxBuy, effectiveMaxBuy, withinReach, huntTargets,
-    smartLevels, gammaSample, betaSample, armSignals, chooseDiscount, chooseTarget, recordArm, bestArm, flipPlan, tradeOpts, bidAmount, freeCoins, bidBlock, warCeiling, warSteps, binVsWar, settleSales,
+    smartLevels, gammaSample, betaSample, armPrior, decayArm, upgradeArm, armRate, chooseDiscount, chooseTarget, missWeight, recordArm, deepestArmFor, priceShifted, bestArm, flipPlan, tradeOpts, bidAmount, freeCoins, bidBlock, warCeiling, warSteps, binVsWar, settleSales,
     listSpendable, reserveOk, afterListBuy,
     aggregateListings, hotScore, rankHot, priceBands, provenFlips, flipValue, priceLadder, sbcCostEstimate,
     addHistory, summarizeHistory, isDiscordWebhook, discordPayload,
@@ -1625,7 +1692,7 @@
 
   const w = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '2.4.0';
+  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '2.4.1';
   const errText = (e) => (e && e.message ? e.message : String(e));
   const fmt = (n) => Number(n || 0).toLocaleString();
 
@@ -2325,18 +2392,31 @@
       if (!smart.length) return { player: playerForIteration(targets, i) };
       // plain targets keep their share of the searches
       if (plain.length && i % targets.length < plain.length) return { player: plain[i % plain.length] };
-      const best = chooseTarget(smart.map((p) => ({ p, avg: p.avg, arms: this.arms(p) })), this.levels(cfg));
+      const best = chooseTarget(smart.map((p) => ({ p, avg: p.avg, arms: this.arms(p) })), this.levels(cfg), Math.random, Date.now());
       return { player: best.target.p, pct: best.pct };
     },
-    record(p, pct, outcome) {
+    record(p, pct, outcome, cfg) {
       const k = this.key(p);
       const t = this.data.targets[k] || { name: p.name, arms: {} };
       t.name = p.name;
-      t.arms = recordArm(t.arms, pct, { ...outcome, at: Date.now() });
+      // the card's price moved a lot (promo, crash): old evidence counts half
+      if (priceShifted(t.refAvg, p.avg)) {
+        for (const d of Object.keys(t.arms)) { const a = upgradeArm(t.arms[d]); t.arms[d] = { ...a, n: a.n / 2, good: a.good / 2, near: (a.near || 0) / 2, probes: (a.probes || 0) / 2 }; }
+        t.refAvg = p.avg;
+      }
+      if (!t.refAvg) t.refAvg = p.avg;
+      const levels = this.levels(cfg);
+      const o = { ...outcome, at: Date.now(), missWeight: missWeight(this.data.speed) };
+      if (outcome.probe) {
+        const shallower = levels.filter((d) => d < pct);
+        if (shallower.length) o.probeArm = shallower[shallower.length - 1];
+        if (outcome.nearPrice) o.nearArm = deepestArmFor(outcome.nearPrice, p.avg, levels);
+      }
+      t.arms = recordArm(t.arms, pct, o);
       this.data.targets[k] = t;
       const h = new Date().getHours();
       const hb = this.data.hours[h] || { n: 0, good: 0 };
-      hb.n++; hb.good += (outcome.hit || 0) + (outcome.miss || 0) + (outcome.near || 0) * 0.5;
+      hb.n++; hb.good += outcome.hit ? 1 : outcome.miss ? 0.8 : outcome.nearPrice ? 0.35 : 0;
       this.data.hours[h] = hb;
       this.save();
     },
@@ -2683,7 +2763,11 @@
           const targets = pickTargets(res.listings, { ...cfg, ...range, maxBuy }, cfg.mode === 'alert' ? Infinity : Math.min(spendable, freeCoins(cfg, fut.coins(), [...this.bids.values()])));
           const outcome = { hit: 0, miss: 0, near: 0 };
           const mine = res.listings.filter((l) => l.buyNowPrice > 0 && (!player || player.kind === 'filter' || l.defId === player.id || baseId(l.defId) === baseId(player.id)));
-          if (probe) outcome.near = mine.some((l) => l.buyNowPrice > maxBuy && l.buyNowPrice <= searchMax) ? 1 : 0;
+          if (probe) {
+            outcome.probe = true;
+            const above = mine.filter((l) => l.buyNowPrice > maxBuy && l.buyNowPrice <= searchMax).map((l) => l.buyNowPrice);
+            if (above.length) { outcome.near = 1; outcome.nearPrice = Math.min(...above); }
+          }
           for (const t of targets) {
             if (!this.running) break;
             if (cfg.mode !== 'alert') {
@@ -2707,7 +2791,7 @@
             }
           }
           if (smartPct && player) {
-            learn.record(player, smartPct, outcome);
+            learn.record(player, smartPct, outcome, cfg);
             if (outcome.near && !outcome.hit) ui.log(`🎯 Near miss: ${player.name} listed just above your ${fmt(maxBuy)} (${smartPct}% under) — learning`, 'muted');
           }
         }
@@ -5470,10 +5554,11 @@
       const rows = huntTargets(cfg).map((p) => {
         if (!learn.usable(p, cfg)) return `<div class="li"><span class="t"><b>${esc(p.name)}</b><small>${p.manualMax ? 'manual max — not learning' : 'needs a price check first'}</small></span></div>`;
         const arms = learn.arms(p);
-        const n = Object.values(arms).reduce((a, x) => a + (x.n || 0), 0);
-        const tot = (k) => Object.values(arms).reduce((a, x) => a + (x[k] || 0), 0);
-        const best = bestArm(arms, levels);
-        const tried = levels.filter((d) => arms[d] && arms[d].n).map((d) => `${d}%: ${arms[d].n}${arms[d].hits ? ` ✅${arms[d].hits}` : ''}${arms[d].misses ? ` ⚡${arms[d].misses}` : ''}${arms[d].near ? ` 🎯${arms[d].near}` : ''}`).join(' · ');
+        const r = (x) => Math.round(x || 0);
+        const n = r(Object.values(arms).reduce((a, x) => a + (x.n || 0), 0));
+        const tot = (k) => r(Object.values(arms).reduce((a, x) => a + (x[k] || 0), 0));
+        const best = bestArm(arms, levels, Date.now());
+        const tried = levels.filter((d) => arms[d] && (arms[d].n || arms[d].near)).map((d) => `${d}%: ${r(arms[d].n)}${arms[d].hits ? ` ✅${r(arms[d].hits)}` : ''}${arms[d].misses ? ` ⚡${r(arms[d].misses)}` : ''}${arms[d].near >= 0.5 ? ` 🎯${r(arms[d].near)}` : ''}`).join(' · ');
         return `<div class="li"><span class="t"><b>${esc(p.name)}${best && (best.hits || best.misses || best.near) ? ` <span class="tag ok">best ${best.pct}% under</span>` : ''}</b>
           <small>${n ? `${n} searches · ${tot('hits')} bought · ${tot('misses')} lost races · ${tot('near')} near misses` : 'not tried yet'}${tried ? `<br>${tried}` : ''}</small></span></div>`;
       });

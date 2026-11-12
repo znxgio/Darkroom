@@ -954,13 +954,43 @@ test('chooseTarget: searches go where coins are saved, not to dead targets', () 
   assert.ok(b > 200, String(b));
 });
 
-test('recordArm / bestArm / armSignals', () => {
-  let arms = c.recordArm({}, 6, { miss: 1 });
-  arms = c.recordArm(arms, 6, {});
-  arms = c.recordArm(arms, 10, {});
-  assert.deepEqual({ n: arms[6].n, misses: arms[6].misses }, { n: 2, misses: 1 });
-  assert.equal(c.bestArm(arms, [6, 10]).pct, 6);
-  assert.equal(c.armSignals({ hits: 1, misses: 1, near: 2 }), 1 + 0.8 + 0.7);
+test('recordArm: one score per search, lost races weighted, near misses on their own counters', () => {
+  let arms = c.recordArm({}, 6, { miss: 3, missWeight: 0.4, at: 1 }); // 3 lost listings in one search = one score
+  assert.equal(arms[6].n, 1);
+  assert.equal(arms[6].good, 0.4);
+  arms = c.recordArm(arms, 6, { hit: 2, at: 2 });
+  assert.equal(arms[6].good, 1.4, 'a buy scores 1 per search, however many listings');
+  assert.ok(arms[6].good <= arms[6].n);
+  arms = c.recordArm(arms, 8, { probe: true, probeArm: 6, nearArm: 6, at: 3 });
+  assert.deepEqual([arms[8].n, arms[6].probes, arms[6].near, arms[6].n], [1, 1, 1, 2], 'near credit goes to the shallower arm without adding a search to it');
+  assert.equal(c.bestArm(arms, [6, 8], 3).pct, 6);
+});
+
+test('armPrior: pessimistic and falling with depth', () => {
+  const m = (d) => { const p = c.armPrior(d); return p.a / (p.a + p.b); };
+  assert.ok(m(4) > 0.015 && m(4) < 0.025, String(m(4)));
+  assert.ok(m(14) < m(4) / 3);
+});
+
+test('decayArm: halves every 7 days, keeps at least 30 searches', () => {
+  const day = 864e5;
+  const a = c.decayArm({ n: 400, good: 8, near: 2, probes: 40, last: 0.001 }, 0.001 + 7 * day);
+  assert.ok(Math.abs(a.n - 200) < 1e-6 && Math.abs(a.good - 4) < 1e-6);
+  const b = c.decayArm({ n: 40, good: 2, last: 1 }, 1 + 70 * day);
+  assert.ok(Math.abs(b.n - 30) < 1e-6, 'floor of 30');
+  assert.equal(c.decayArm({ n: 20, good: 1, last: 1 }, 1 + 70 * day).n, 20, 'small arms keep everything');
+});
+
+test('missWeight, deepestArmFor, priceShifted, upgradeArm', () => {
+  assert.equal(c.missWeight({ n: 0, lost: 0 }), 0.4);
+  assert.ok(Math.abs(c.missWeight({ n: 20, lost: 2 }) - 0.8 * 19 / 22) < 1e-9);
+  assert.equal(c.missWeight({ n: 40, lost: 40 }), 0.2, 'a phone that always loses: floor');
+  assert.equal(c.deepestArmFor(18900, 20000, [4, 6, 8]), 4, '5.5% under: only the 4% arm catches it');
+  assert.equal(c.deepestArmFor(18000, 20000, [4, 6, 8, 10, 12]), 10);
+  assert.equal(c.deepestArmFor(19800, 20000, [4, 6]), undefined);
+  assert.equal(c.priceShifted(20000, 23500), true);
+  assert.equal(c.priceShifted(20000, 22000), false);
+  assert.deepEqual(c.upgradeArm({ n: 10, hits: 3, misses: 20 }).good, 10, 'old per-listing counts capped at n');
 });
 
 // ---- bid wars ------------------------------------------------------------------------
