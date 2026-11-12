@@ -1024,3 +1024,18 @@ test('migrateConfig switches bidding on once (2.4.0)', () => {
   assert.equal(a.bidSnipe, true);
   assert.equal(c.migrateConfig({ ...a, bidSnipe: false }).bidSnipe, false, 'user can turn it off again');
 });
+
+test('tradeCap: per-card limit from a fixed amount and/or a % of free coins', () => {
+  assert.equal(c.tradeCap({ minCoins: 0, tradeBudget: 0, tradeBudgetPct: 25 }, 200000), 50000);
+  assert.equal(c.tradeCap({ minCoins: 100000, tradeBudget: 0, tradeBudgetPct: 25 }, 200000), 25000, 'only coins above Keep coins');
+  assert.equal(c.tradeCap({ minCoins: 0, tradeBudget: 30000, tradeBudgetPct: 25 }, 200000), 30000, 'the lower of the two');
+  assert.equal(c.tradeCap({ minCoins: 0, tradeBudget: 0, tradeBudgetPct: 0 }, 200000), 200000, 'no caps: all free coins');
+  assert.equal(c.tradeCap({ minCoins: 300000, tradeBudgetPct: 25 }, 200000), 0);
+});
+
+test('migrateConfig 2.4.2: new trade defaults only replace old defaults', () => {
+  const a = c.migrateConfig({ minProfitPct: 3, listDuration: 3600, maxBuys: 10 });
+  assert.deepEqual([a.minProfitPct, a.listDuration, a.maxBuys], [4, 10800, 12]);
+  const b = c.migrateConfig({ minProfitPct: 7, listDuration: 21600, maxBuys: 3 });
+  assert.deepEqual([b.minProfitPct, b.listDuration, b.maxBuys], [7, 21600, 3], 'your own values stay');
+});

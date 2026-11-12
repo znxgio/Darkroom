@@ -78,7 +78,7 @@ function installTradeMock(opts) {
     { at: Date.now() - 7200e3, id: 231747, itemId: 502, name: 'Mbappé', rating: 91, price: 40000, sell: 52000 }]));
   localStorage.setItem('fc-sniper:config', JSON.stringify({
     players: [{ id: 231747, name: 'Mbappé', rating: 91 }],
-    bidSnipe: true, bidWindow: 30, minProfit: 1000, undercut: 3, maxBuys: 2, delayMin: 3000, delayMax: 4500,
+    bidSnipe: true, bidOn240: true, trade242: true, tradeBudgetPct: 100, bidWindow: 30, minProfit: 1000, undercut: 3, maxBuys: 2, delayMin: 3000, delayMax: 4500,
     minCoins: 224500, // 75,500 free: the 45,000 snipe and the 30,250 bid fit (in either order), a second bid of 45,750 does not
   }));
   if (opts && opts.restore) {
@@ -127,7 +127,7 @@ function installHotMock() {
     },
   };
   window.repositories = { Item: { getPileSize: () => 100, numItemsInCache: () => 0, isPileFull: () => false } };
-  localStorage.setItem('fc-sniper:config', JSON.stringify({ players: [], hotAuto: true, hotPick: 1, maxBuys: 1, delayMin: 3000, delayMax: 3500 }));
+  localStorage.setItem('fc-sniper:config', JSON.stringify({ players: [], hotAuto: true, hotPick: 1, maxBuys: 1, tradeBudgetPct: 100, delayMin: 3000, delayMax: 3500 }));
 }
 
 (async () => {

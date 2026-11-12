@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FC Sniper
 // @namespace    https://github.com/znxgio/darkroom
-// @version      2.4.1
+// @version      2.4.2
 // @description  Sniper, pack opener, SBC solver and team upgrade advisor for the EA SPORTS FC Ultimate Team Web App, with built-in safety limits.
 // @match        https://www.ea.com/*ultimate-team/web-app*
 // @match        https://www.ea.com/ea-sports-fc/ultimate-team/web-app*
@@ -143,7 +143,11 @@
 
   /** Max buy actually used for a player: your manual value, else the price check, else the default. */
   function effectiveMaxBuy(player, cfg) {
-    return (player && (player.manualMax || player.maxBuy)) || cfg.maxBuy;
+    if (player && player.manualMax) return player.manualMax;
+    if (player && player.maxBuy) return player.maxBuy;
+    // Price-checked but nothing was listed: don't fall back to the default max (a rare card could be bought far over value).
+    if (player && player.checkedAt && !player.avg) return 0;
+    return cfg.maxBuy;
   }
 
   // ---- Priority list ----------------------------------------------------------------
@@ -408,6 +412,14 @@
       if (sol) { cost += sol.cost; solved++; } else unknown++;
     }
     return { cost, solved, unknown };
+  }
+
+  /** Most coins Trade mode may put into one card: Max coins per card and/or a % of your coins above Keep coins. */
+  function tradeCap(cfg, coins) {
+    const free = Math.max(0, coins - (cfg.minCoins || 0));
+    let cap = cfg.tradeBudget > 0 ? cfg.tradeBudget : Infinity;
+    if (cfg.tradeBudgetPct > 0) cap = Math.min(cap, free * Math.min(100, cfg.tradeBudgetPct) / 100);
+    return Math.min(cap, free);
   }
 
   /** Trade settings for a card: Min profit, or Min profit % of the price, whichever is higher. */
@@ -771,6 +783,13 @@
     if (!out.sellMode) out.sellMode = out.autoList ? (out.sellPrice > 0 ? 'fixed' : 'profit') : 'off';
     delete out.autoList;
     delete out.type;
+    // 2.4.2: new trade defaults (debate) — only where you still had the old default
+    if (!out.trade242) {
+      if (out.minProfitPct === 3) out.minProfitPct = 4;
+      if (out.listDuration === 3600 || out.listDuration === '3600') out.listDuration = 10800;
+      if (out.maxBuys === 10) out.maxBuys = 12;
+      out.trade242 = true;
+    }
     // 2.4.0: the user asked for auction bidding to be switched on (once; they can turn it off again)
     if (!out.bidOn240) { out.bidSnipe = true; out.bidOn240 = true; }
     return out;
@@ -1614,13 +1633,14 @@
     warKeepPct: 10, // a war whose next bid is this far under avg beats an ordinary Buy Now
     // trading (resell)
     undercut: 3, // list this % under the market average so it sells
-    minProfitPct: 3, // and make at least this % of the sell price (as well as Min profit)
+    minProfitPct: 4, // and make at least this % of the market average (as well as Min profit)
     hotSearches: 14, // market searches per hot-card scan (plus price checks)
     hotLeagues: '13,53,19,31,16', // leagues to scan for hot cards (Premier League, LaLiga, Bundesliga, Serie A, Ligue 1)
     hotPick: 3, // how many hot cards to trade
     hotRareOnly: true,
     hotAuto: false, // pick hot cards automatically when trading starts
-    tradeBudget: 0, // max coins per card for trading (0 = your coins minus Keep coins)
+    tradeBudget: 0, // max coins per card for trading (0 = no fixed amount)
+    tradeBudgetPct: 25, // … and never more than this % of your coins above Keep coins on one card
     upkeepMinutes: 5, // check the transfer list this often while trading
     smartRelist: true, // reprice expired cards to today's market (not below what you paid + Min profit)
     cutLossAfter: 3, // after this many failed relists, allow break-even (0 = never)
@@ -1628,7 +1648,7 @@
     sellMode: 'off', // off | profit | market | fixed
     sellPrice: 0,
     minProfit: 200,
-    listDuration: 3600,
+    listDuration: 10800, // 3 h: cards stay listed while you're away between sessions
     autoRelist: false, // relist expired + clear sold items when starting
     // safety (see SAFETY for the enforced floors)
     delayMin: 4000,
@@ -1638,7 +1658,7 @@
     pauseMax: 120000,
     sessionMinutes: 40,
     maxSearches: 250, // per session
-    maxBuys: 10, // per session
+    maxBuys: 12, // per session
     searchesPerDay: 600,
     buysPerDay: 40,
     // notifications
@@ -1671,7 +1691,7 @@
     cacheBustBid, jitter, pickTargets, planSellPrice, classifyStatus,
     normalizeName, parsePlayerDb, searchPlayers, playerForIteration, migrateConfig, filterSummary, sniperTargets, LEAGUES,
     findMarketPrice, planMaxBuy, effectiveMaxBuy, withinReach, huntTargets,
-    smartLevels, gammaSample, betaSample, armPrior, decayArm, upgradeArm, armRate, chooseDiscount, chooseTarget, missWeight, recordArm, deepestArmFor, priceShifted, bestArm, flipPlan, tradeOpts, bidAmount, freeCoins, bidBlock, warCeiling, warSteps, binVsWar, settleSales,
+    smartLevels, gammaSample, betaSample, armPrior, decayArm, upgradeArm, armRate, chooseDiscount, chooseTarget, missWeight, recordArm, deepestArmFor, priceShifted, bestArm, flipPlan, tradeOpts, tradeCap, bidAmount, freeCoins, bidBlock, warCeiling, warSteps, binVsWar, settleSales,
     listSpendable, reserveOk, afterListBuy,
     aggregateListings, hotScore, rankHot, priceBands, provenFlips, flipValue, priceLadder, sbcCostEstimate,
     addHistory, summarizeHistory, isDiscordWebhook, discordPayload,
@@ -1692,7 +1712,7 @@
 
   const w = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '2.4.1';
+  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '2.4.2';
   const errText = (e) => (e && e.message ? e.message : String(e));
   const fmt = (n) => Number(n || 0).toLocaleString();
 
@@ -1779,7 +1799,9 @@
     },
     async search(criteria, page = 1) {
       if (typeof w.services.Item.clearTransferMarketCache === 'function') w.services.Item.clearTransferMarketCache();
+      if (jobs.current) await jobs.gate('search');
       const res = await observe(w.services.Item.searchTransferMarket(criteria, page));
+      jobs.lastMarketAt = Date.now();
       if (!res.success) return { ok: false, status: res.status, listings: [] };
       return { ok: true, listings: ((res.data && res.data.items) || []).map(fut.listing) };
     },
@@ -1799,10 +1821,14 @@
       };
     },
     async buy(listing) {
+      if (jobs.current) await jobs.gate('buy');
       const res = await observe(w.services.Item.bid(listing.item, listing.buyNowPrice));
+      jobs.lastMarketAt = Date.now();
       return { ok: !!res.success, status: res.status };
     },
     async list(item, sellPrice, duration) {
+      if (jobs.current) await jobs.gate('list');
+      jobs.lastMarketAt = Date.now();
       const moved = await observe(w.services.Item.move(item, w.ItemPile.TRANSFER));
       if (!moved.success) return { ok: false, status: moved.status };
       const res = await observe(w.services.Item.list(item, prevPrice(sellPrice), sellPrice, duration));
@@ -2265,6 +2291,8 @@
       return !!(await observe(w.services.Item.untarget(items))).success;
     },
     async placeBid(listing, amount) {
+      if (jobs.current) await jobs.gate('bid');
+      jobs.lastMarketAt = Date.now();
       const res = await observe(w.services.Item.bid(listing.item, amount));
       return { ok: !!res.success, status: res.status };
     },
@@ -2485,7 +2513,8 @@
     async wait(ms, state, text) {
       const until = Date.now() + ms;
       this.setStatus(state, text, until);
-      while (this.running && Date.now() < until) await sleep(Math.min(250, until - Date.now()));
+      const id = this.runId;
+      while (this.running && id === this.runId && Date.now() < until) await sleep(Math.min(250, until - Date.now()));
     },
 
     gate() {
@@ -2535,7 +2564,7 @@
         player.checkedAt = Date.now();
         if (!r.count) {
           Object.assign(player, { avg: 0, lowest: 0, maxBuy: 0 });
-          ui.log(`${player.name}: none listed right now — using default max ${fmt(this.cfg.maxBuy)}`, 'warn');
+          ui.log(`${player.name}: none listed right now — skipped until the next price check finds a price`, 'warn');
           continue;
         }
         const plan = planMaxBuy(r.avg, this.cfg.discount, fut.coins() - this.cfg.minCoins);
@@ -2597,6 +2626,7 @@
       if (!gate.ok) { ui.log(`Can't start — ${gate.reason}`, 'err'); ui.renderStatus(); return; }
 
       this.running = true;
+      this.runId = (this.runId || 0) + 1;
       ui.setRunning(true);
       keepAwake(true);
       this.session = { startedAt: Date.now(), endsAt: Date.now() + cfg.sessionMinutes * 60e3 };
@@ -2625,7 +2655,7 @@
           }).join(', ')
           : `filters ≤ ${fmt(cfg.maxBuy)}`;
         ui.log(`${{ alert: 'Watching', trade: 'Trading' }[cfg.mode] || 'Sniping'} ${who}${cfg.bidSnipe && cfg.mode !== 'alert' ? ' · bidding on auctions ending soon' : ''}`, 'ok');
-        await this.loop();
+        await this.loop(this.runId);
       } catch (e) {
         this.stop(`error: ${errText(e)}`);
       }
@@ -2637,11 +2667,13 @@
       if (cfg.mode !== 'trade') return { maxBuy: effectiveMaxBuy(player, cfg), plan: null };
       const plan = player && flipPlan(player.avg, tradeOpts(player.avg, cfg));
       if (!plan) return { maxBuy: 0, plan: null };
-      return { maxBuy: Math.min(plan.maxBuy, player.manualMax || Infinity), plan };
+      const cap = roundPrice(tradeCap(cfg, fut.coins()), 'down'); // never too many coins on one card
+      return { maxBuy: Math.min(plan.maxBuy, player.manualMax || Infinity, cap), plan };
     },
 
-    async loop() {
+    async loop(runId) {
       const cfg = this.cfg;
+      const mine = () => this.running && (runId === undefined || runId === this.runId);
       const startSearches = this.stats.searches;
       const startBuys = this.stats.buys;
       const alerted = new Set();
@@ -2656,7 +2688,7 @@
       // Bids restored after a reload: collect them as soon as they have ended.
       for (const b of this.bids.values()) this.nextUpkeep = Math.min(this.nextUpkeep, b.endsAt + 8000);
 
-      while (this.running) {
+      while (mine()) {
         let limit = '';
         if (this.stats.searches - startSearches >= cfg.maxSearches) limit = 'session search limit reached';
         else if (this.stats.buys - startBuys >= cfg.maxBuys) limit = 'session buy limit reached';
@@ -3112,7 +3144,7 @@
           entry.sell = price;
           ui.log(`Relisted ${entry.name} at ${fmt(price)}${lowest ? ` (cheapest ${fmt(lowest)})` : ''}${cut ? ' — break-even' : ''}`, 'muted');
         }
-        await sleep(jitter(1200, 2200));
+        await sleep(jitter(cfg.delayMin, cfg.delayMax)); // same pacing as searches
       }
       store.set(KEYS.history, this.history);
       // everything else (cards the bot didn't buy): relist at the old price
@@ -3158,7 +3190,7 @@
       if (!fut.ready()) { ui.log('Web App not ready — log in first', 'err'); return; }
       engine.safety = store.get(KEYS.safety, {});
       const gate = engine.gate();
-      if (!gate.ok && engine.safety.lockUntil > Date.now()) { ui.log(`Can't start — ${gate.reason}`, 'err'); return; }
+      if (!gate.ok) { ui.log(`Can't start — ${gate.reason}`, 'err'); return; } // daily caps too, not only lockouts
       this.current = name;
       this.cancelled = false;
       ui.setJob(name);
@@ -3174,6 +3206,37 @@
         ui.setJob(null);
         engine.setStatus('idle', 'Idle');
       }
+    },
+
+    /**
+     * Shared gate for every market call a side task makes (search, buy, bid,
+     * list): the same ≥3 s pacing clock as the sniper, rests every N calls,
+     * and the daily caps / lockouts checked before EACH call. A buy straight
+     * after its own search doesn't wait (it still counts toward the caps).
+     * Hitting a limit stops the task cleanly; what's already bought stays.
+     */
+    async gate(kind) {
+      if (this.cancelled) throw new Stopped();
+      const cfg = engine.cfg;
+      engine.safety = store.get(KEYS.safety, {});
+      const g = engine.gate();
+      if (!g.ok) { ui.log(`${this.current} stopped — ${g.reason}. Anything already bought stays in your club.`, 'warn'); throw new Stopped(); }
+      const afterSearch = kind === 'buy' && this.lastKind === 'search';
+      const wait = (this.lastMarketAt || 0) + jitter(cfg.delayMin, cfg.delayMax) - Date.now();
+      if (!afterSearch && wait > 0) await this.pause(wait, wait);
+      this.calls = (this.calls || 0) + 1;
+      if (cfg.pauseEvery > 0 && this.calls % cfg.pauseEvery === 0) {
+        const ms = jitter(cfg.pauseMin, cfg.pauseMax);
+        ui.log(`Resting ${Math.round(ms / 1000)}s`, 'muted');
+        await this.pause(ms, ms);
+      }
+      this.lastKind = kind;
+    },
+
+    /** Refuse up front when a task needs more buys than today's cap has left. */
+    buysLeft() {
+      const u = usageFor(engine.safety.usage, Date.now());
+      return Math.max(0, (engine.cfg.buysPerDay || Infinity) - u.buys);
     },
 
     cancel() {
@@ -3565,6 +3628,7 @@
      */
     async buyForPoints(pt, ch, set, score, goal) {
       const cfg = engine.cfg;
+      if (!jobs.buysLeft()) { ui.log('No buys left today — the rest of the points SBC has to wait', 'warn'); return { score, handed: 0, spent: 0 }; }
       const byRating = new Map(pt.byRating || []);
       const owned = new Set((this.raw || []).map((p) => baseId(p.defId ?? p.id)));
       const minOvr = pt.entry.parsed.constraints.minOvr || 0;
@@ -3799,9 +3863,11 @@
      */
     async buyFillIns(plan) {
       const cfg = engine.cfg;
+      const need = plan.buys.filter((p) => !p.bought).length;
+      if (need > jobs.buysLeft()) throw new Error(`needs ${need} buy${need === 1 ? '' : 's'}, only ${jobs.buysLeft()} left today`);
       if (fut.coins() - cfg.minCoins < plan.buyTotal) throw new Error(`not enough coins for the fill-ins (${fmt(plan.buyTotal)})`);
       const k = plan.entry.parsed.constraints;
-      const cap = Math.round((cfg.sbcBuyLimit || plan.buyTotal) * 1.15);
+      const cap = Math.round(cfg.sbcBuyLimit || plan.buyTotal); // hard cap: never over your SBC coin limit
       const inSquad = new Set(plan.solution.players.map((x) => baseId(x.defId ?? x.id)));
       const ownedBase = new Set([...(this.raw || []).map((x) => baseId(x.defId ?? x.id)), ...(this.guard ? [...this.guard.defIds].map(baseId) : [])]);
       const boughtNow = [];
@@ -3810,6 +3876,7 @@
       const tryBuy = async (options) => {
         for (const l of options.slice(0, 3)) {
           if (plan.spent + l.buyNowPrice > cap) return null;
+          if (fut.coins() - (cfg.minCoins || 0) < l.buyNowPrice) throw new Error('buying this fill-in would go under Keep coins');
           const r = await fut.buy(l);
           if (r.ok) return l;
           const kind = classifyStatus(r.status);
@@ -4340,7 +4407,7 @@
 
     budget() {
       const cfg = engine.cfg;
-      return cfg.tradeBudget || Math.max(0, fut.coins() - cfg.minCoins);
+      return tradeCap(cfg, fut.coins());
     },
 
     /**
@@ -4494,13 +4561,14 @@
     trade: [
       ['undercut', 'List % under market avg', 'number'],
       ['minProfit', 'Min profit per card (after tax)', 'number'],
-      ['minProfitPct', 'Min profit % of sell price', 'number'],
+      ['minProfitPct', 'Min profit % of market avg', 'number'],
       ['listDuration', 'List for', 'select', DURATIONS],
       ['upkeepMinutes', 'Check transfer list every (min)', 'number'],
       ['smartRelist', 'Reprice expired cards to the market', 'toggle'],
       ['cutLossAfter', 'Sell at break-even after N relists (0 = never)', 'number'],
       ['repriceMinutes', 'Refresh prices every (min)', 'number'],
-      ['tradeBudget', 'Max coins per card (0 = my coins)', 'number'],
+      ['tradeBudget', 'Max coins per card (0 = no fixed cap)', 'number'],
+      ['tradeBudgetPct', 'Max % of my coins on one card', 'number'],
     ],
     smart: [
       ['smartSnipe', 'Smart sniping (learns the best discount)', 'toggle'],

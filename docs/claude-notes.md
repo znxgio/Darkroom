@@ -108,8 +108,19 @@ Newest learnings go at the end of each section. Dates are when the note was writ
   inflates it. Shipped the Observer's closing design in 2.4.1; all suites passed first try. The observer role is clearly
   worth it — keep it on Opus. Cost: ~8 agent runs, ~10-90 s each.
 
+- 2026-11-12 two debates in parallel (agents loaded at session start this time: runner used for all suites):
+  * Jobs vs limits: Strict vs Practical mostly agreed; Referee confirmed jobs could start with daily caps used up and had
+    no mid-job checks; Observer added: one shared pacing clock, rests counting job calls, refuse up front when a job needs
+    more buys than are left. Shipped as `jobs.gate()` (hooked into fut.search/buy/placeBid/list when a job runs) in 2.4.2.
+  * Trade defaults: Volume vs Margin far apart; the Referee's flipPlan math (max buy ~88–89% of avg either way, profit per
+    flip 2.3× with Margin) settled most of it; Observer: keep undercut 3, pct 4, 3 h listings (phone users leave between
+    sessions), maxBuys 12, add a per-card cap (`tradeBudgetPct` 25) enforced on trade buys. Changed defaults are migrated
+    only where the user still had the old default (flag `trade242`). Skipped the rebuttal round when the referee's numbers
+    already settled it — saves ~2 agent runs.
+- Runner subagent: ~8 min for all 6 suites in parallel, returns 10 lines — big context saving vs reading suite output.
+
 ## 7. Open work and ideas
-- Shipped in 2.3.1: bidding spend guard (Fable), smart-sniping floor (intern). Still open from the Fable review:
+- Shipped in 2.3.1: bidding spend guard (Fable), smart-sniping floor (intern). 2.4.2 fixed: nothing-listed fallback, stop/start run token, SBC hard cap, jobs vs caps. Still open from the Fable review (as of 2.4.2: only minor items — fixed sellMode has no profit floor; price checks don't count toward session maxSearches; special-version id buys):
   "nothing listed" fallback, jobs skipping daily caps, run token for stop/start, SBC fill-in hard cap, learner reward tuning.
 - Gallery collector (buy → register → resell near break-even): parked until the user checks that a Web App buy registers in the Gallery.
 - Shipped 2.4.0 (2026-11-12): bid wars per the debate + user's Buy Now rule (pure: warCeiling, warSteps, binVsWar;
