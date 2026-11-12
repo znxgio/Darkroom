@@ -134,6 +134,7 @@ function installMock() {
   p.on('dialog', (d) => { copied = d.defaultValue(); d.accept(); });
   await p.click('#fcs [data-a=copy-log]');
   await p.waitForTimeout(500);
+  if (!copied) copied = await p.evaluate(() => { const t = document.querySelector('#fcs [data-r=copytext]'); return t && !t.closest('[hidden]') ? t.value : ''; });
   if (!copied) copied = await p.evaluate(() => navigator.clipboard.readText().catch(() => ''));
   const G = await p.evaluate(() => ({ calls: F.galleryCalls, graded: !!F.galleryGraded }));
   check('gallery probe finds the service, its methods, globals and data shape', /gallery-like services: .*Gallery/.test(copied) && /requestGallerySets\(0\)/.test(copied) && /UTGallerySetEntity/.test(copied) && /keys sets/.test(copied), (copied || '').split('\n').filter((l) => /gallery probe/.test(l)).slice(0, 3).join(' | ').slice(0, 300));
@@ -150,6 +151,7 @@ function installMock() {
   copied = null;
   await p.click('#fcs [data-a=copy-log]');
   await p.waitForTimeout(500);
+  if (!copied) copied = await p.evaluate(() => { const t = document.querySelector('#fcs [data-r=copytext]'); return t && !t.closest('[hidden]') ? t.value : ''; });
   if (!copied) copied = await p.evaluate(() => navigator.clipboard.readText().catch(() => ''));
   const R = await p.evaluate((n) => ({ restored: services.Item.searchTransferMarket === F.origSearch, passed: F.searches.length - n }), recBefore);
   check('search recorder logs the Web App search fields', /web app search: page 1: .*"rarities":\[1\]/.test(copied || '') && /"level":"gold"/.test(copied || ''), (copied || '').split('\n').filter((l) => /web app search/.test(l)).join(' | ').slice(0, 300));

@@ -5428,7 +5428,9 @@
   #fcs .stats div{background:var(--card2);border-radius:9px;padding:7px 6px;text-align:center;color:var(--muted);font-size:11px}
   #fcs .stats b{display:block;color:var(--text);font-size:15px;font-variant-numeric:tabular-nums}
   #fcs .log{max-height:150px;overflow:auto;font:11.5px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace}
-  #fcs [data-pane=log] .log{max-height:none}
+  #fcs [data-pane=log] .log{max-height:50vh}
+  #fcs .copybox{margin-bottom:8px}#fcs .copybox p{margin:0 0 6px}
+  #fcs .copybox textarea{width:100%;box-sizing:border-box;font:11.5px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--card2);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:8px}
   #fcs .log div{padding:2px 0;color:var(--muted)}#fcs .log time{color:var(--dim);margin-right:6px}
   #fcs .log .ok{color:var(--green)}#fcs .log .warn{color:var(--amber)}#fcs .log .err{color:var(--red)}#fcs .log .alert{color:#ffe08a}#fcs .log .muted{color:var(--dim)}
   #fcs .hist{display:flex;flex-direction:column}
@@ -5466,9 +5468,8 @@
   #fcs.mob .hd::before{content:"";position:absolute;left:50%;top:5px;width:36px;height:4px;margin-left:-18px;border-radius:9px;background:var(--line)}
   #fcs.mob .go{width:48px;height:40px}#fcs.mob .fold{width:40px;height:40px}
   #fcs.mob:not(.min){height:min(80vh,720px);height:min(88dvh,760px)}
-  #fcs.mob .tabs{display:flex;overflow-x:auto;scrollbar-width:none;gap:2px}
-  #fcs.mob .tabs::-webkit-scrollbar{display:none}
-  #fcs.mob .tabs button{flex:none;padding:9px 12px;font-size:13.5px}
+  #fcs.mob .tabs{display:grid;grid-template-columns:repeat(4,1fr);gap:4px}
+  #fcs.mob .tabs button{height:39px;padding:0 2px;font-size:13px}
   #fcs.mob .last{font-size:13px}
   #fcs.mob input,#fcs.mob select{font-size:16px;padding:10px}
   #fcs.mob .row{padding:7px 0}#fcs.mob .seg button{padding:8px 4px;font-size:14px}
@@ -5614,14 +5615,16 @@
               <button class="btn red" data-a="clear-history">Clear history</button></div>
           </section>
           <section class="pane" data-pane="log">
-            <div class="card"><h4>Activity</h4><div class="log" data-r="log"></div>
-              <button class="btn" data-a="copy-log">Copy log (new since last copy)</button>
-              <button class="btn" data-a="copy-log-full">Copy full log</button>
+            <div class="card"><h4>Activity</h4>
+              <div class="copybox" data-r="copybox" hidden><p class="note">Select all and copy this text, then paste it in the chat.</p><textarea readonly rows="6" data-r="copytext"></textarea><button class="btn" data-a="copy-close">Close</button></div>
+              <div class="two"><button class="btn" data-a="copy-log">Copy log (new since last copy)</button><button class="btn" data-a="copy-log-full">Copy full log</button></div>
               <button class="btn blue" data-a="ask-claude">Ask Claude (copies the log, opens claude.ai)</button>
+              <div class="log" data-r="log" style="margin-top:8px"></div></div>
+            <details class="card"><summary>Diagnostics</summary>
               <button class="btn" data-a="reload-app">Reload the Web App</button>
               <button class="btn" data-a="gallery-probe">Gallery check (read-only)</button>
               <button class="btn" data-a="record-search">Record my next 3 market searches (read-only)</button>
-              <button class="btn red" data-a="clear-log">Clear log</button></div>
+              <button class="btn red" data-a="clear-log">Clear log</button></details>
           </section>
           <section class="pane" data-pane="settings">
             <div class="card"><h4>Targets & filters</h4>${FIELDS.filters.map(fieldHtml).join('')}
@@ -5726,6 +5729,7 @@
           case 'form-create': return upgrades.createSquad(Number(btn.dataset.i));
           case 'copy-log': return this.copyLog(false);
           case 'copy-log-full': return this.copyLog(true);
+          case 'copy-close': return this.showCopyBox(null);
           case 'job-stop': return jobs.cancel();
           case 'refresh-sbc': {
             if (jobs.current || engine.running) { this.log('Stop the running task first (Stop in the top bar)', 'warn'); return; }
@@ -5892,7 +5896,6 @@
       this.qa('[data-tab]').forEach((b) => b.classList.toggle('on', b.dataset.tab === tab));
       this.qa('[data-pane]').forEach((p) => p.classList.toggle('on', p.dataset.pane === tab));
       store.set(KEYS.ui, { ...store.get(KEYS.ui, {}), tab });
-      try { this.q('[data-tab].on')?.scrollIntoView({ inline: 'center', block: 'nearest' }); } catch { /* ignore */ }
       if (tab === 'trade') this.renderTrade();
       if (tab === 'squad' && upgrades) this.renderUpgrades();
     },
@@ -6393,8 +6396,16 @@
       const text = [...(question ? [question, ''] : []), head, ...part.map(fmtLine), fmtLine([Date.now(), '', `📋 Log copied (${VERSION})`]), '--- details ---', ...debugLog.slice(full ? -200 : -80)].join('\n');
       store.set(KEYS.debug, debugLog.slice(-200));
       try { await navigator.clipboard.writeText(text); this.toast('Log copied — paste it in the chat', 'ok'); } catch {
-        w.prompt('Copy this log:', text);
+        this.showCopyBox(text);
       }
+    },
+    showCopyBox(text) {
+      const box = this.q('[data-r=copybox]'), ta = this.q('[data-r=copytext]');
+      if (!box || !ta) return;
+      if (text == null) { box.hidden = true; ta.value = ''; return; }
+      this.showTab('log');
+      ta.value = text; box.hidden = false;
+      try { box.scrollIntoView({ block: 'nearest' }); ta.focus(); ta.select(); ta.setSelectionRange(0, 1e9); } catch { /* ignore */ }
     },
 
     renderUpgrades() {
