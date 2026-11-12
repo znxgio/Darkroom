@@ -126,6 +126,7 @@ function installMock() {
     window.UTGallerySetEntity = function () {};
   });
   await p.click('#fcs [data-tab=log]');
+  await p.evaluate(() => { const d = document.querySelector('#fcs [data-pane=log] details'); if (d) d.open = true; }); // Diagnostics fold
   await p.click('#fcs [data-a=gallery-probe]');
   await p.waitForFunction(() => [...document.querySelectorAll('#fcs [data-r=log] div')].some((d) => /Gallery/.test(d.textContent) && /details saved/.test(d.textContent)), null, { timeout: 30000 });
   let copied = null;
