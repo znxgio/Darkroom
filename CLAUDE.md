@@ -2,6 +2,7 @@
 
 This repo is **public**. Never write personal details here (names, emails, account data, coin balances).
 
+New session? Start with `docs/HANDOVER.md` (exact first steps), then `docs/claude-notes.md`.
 Read `docs/claude-notes.md` first. It is the running catalog of how to work with this user, what we learned,
 EA Web App facts, bugs and their causes, and open work. **Add to it whenever you learn something**, even
 something small, and commit it with your work.
