@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FC Sniper
 // @namespace    https://github.com/znxgio/darkroom
-// @version      2.4.9
+// @version      2.4.10
 // @description  Sniper, pack opener, SBC solver and team upgrade advisor for the EA SPORTS FC Ultimate Team Web App, with built-in safety limits.
 // @match        https://www.ea.com/*ultimate-team/web-app*
 // @match        https://www.ea.com/ea-sports-fc/ultimate-team/web-app*
@@ -594,7 +594,7 @@
    * Finds players matching `query`. Every query word must start a word of the
    * player's common or full name. Best matches first, then by rating.
    */
-  function searchPlayers(db, query, limit = 8) {
+  function searchPlayers(db, query, limit = 12) {
     const q = normalizeName(query);
     if (!q) return [];
     const tokens = q.split(' ');
@@ -603,13 +603,30 @@
       const words = p.key.split(' ');
       if (!tokens.every((t) => words.some((wd) => wd.startsWith(t)))) continue;
       let score = 0;
-      if (p.nameKey === q) score = 3;
-      else if (p.nameKey.startsWith(q)) score = 2;
+      if (p.nameKey === q) score = 4;
+      else if (p.nameKey.startsWith(q)) score = 3;
+      else if (tokens.every((t) => words.includes(t))) score = 2; // a whole surname/first name, e.g. "thompson" for Gisele Thompson
       else if (p.key.includes(q)) score = 1;
       scored.push([score, p]);
     }
     scored.sort((a, b) => b[0] - a[0] || b[1].rating - a[1].rating || a[1].name.localeCompare(b[1].name));
     return scored.slice(0, limit).map(([, p]) => p);
+  }
+
+  /**
+   * The different cards (versions) of one player seen in market listings, cheapest first per card.
+   * listings: [{ defId, rating, rareflag, name, buyNowPrice }] → [{ defId, rating, rareflag, name, cheapest, count, base }]
+   */
+  function cardVersions(listings, wantBase) {
+    const by = new Map();
+    for (const l of listings || []) {
+      if (!l.defId || (wantBase && (l.defId & 0xFFFFFF) !== wantBase && l.defId !== wantBase)) continue;
+      const v = by.get(l.defId) || { defId: l.defId, rating: l.rating || 0, rareflag: l.rareflag || 0, name: l.name, cheapest: 0, count: 0, base: l.defId === wantBase };
+      v.count++;
+      if (l.buyNowPrice > 0 && (!v.cheapest || l.buyNowPrice < v.cheapest)) v.cheapest = l.buyNowPrice;
+      by.set(l.defId, v);
+    }
+    return [...by.values()].sort((a, b) => b.rating - a.rating || a.cheapest - b.cheapest);
   }
 
   /** Common leagues by EA id (names shown when the Web App can't name them). */
@@ -1953,7 +1970,7 @@
     EA_TAX, MIN_PRICE, MAX_PRICE, DEFAULT_CONFIG,
     priceStep, roundPrice, nextPrice, prevPrice, afterTax, profit, breakEvenSell,
     cacheBustBid, jitter, pickTargets, planSellPrice, classifyStatus,
-    normalizeName, parsePlayerDb, searchPlayers, playerForIteration, migrateConfig, filterSummary, sniperTargets, LEAGUES,
+    normalizeName, parsePlayerDb, searchPlayers, cardVersions, playerForIteration, migrateConfig, filterSummary, sniperTargets, LEAGUES,
     findMarketPrice, robustPrice, searchBudget, addPriceSample, prunePrices, priceTrend, trendText, lookupUrl, planMaxBuy, effectiveMaxBuy, withinReach, huntTargets,
     bidSkipReason, shortTime, searchReport, auctionReport, planFloor, planBudget, planVerdict, planSummary, robustLow, trendNudge, snipeBase, recordGap, gapStats, smartLevels, gammaSample, betaSample, armPrior, decayArm, upgradeArm, armRate, chooseDiscount, chooseTarget, missWeight, recordArm, deepestArmFor, priceShifted, bestArm, flipPlan, tradeOpts, tradeCap, bidAmount, freeCoins, bidBlock, warCeiling, warSteps, binVsWar, settleSales,
     listSpendable, reserveOk, afterListBuy,
@@ -1976,7 +1993,7 @@
 
   const w = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '2.4.9';
+  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '2.4.10';
   const errText = (e) => (e && e.message ? e.message : String(e));
   const fmt = (n) => Number(n || 0).toLocaleString();
 
@@ -2045,7 +2062,8 @@
       // (maskedDefId matches every version of the player, like the Web App's name search).
       const isFilter = player && player.kind === 'filter';
       const src = isFilter ? player : cfg;
-      if (player && !isFilter) c.maskedDefId = player.id;
+      // EA searches by the base player id (every version); the exact card is picked from the results (2.4.10)
+      if (player && !isFilter) c.maskedDefId = baseId(player.id);
       if (src.level && src.level !== 'any') c.level = src.level;
       if (src.rarity !== '' && src.rarity !== undefined && src.rarity !== null && !Number.isNaN(parseInt(src.rarity, 10))) c.rarities = [parseInt(src.rarity, 10)];
       if (src.position) { c._position = src.position; if (isFilter) c.position = src.position; }
@@ -2082,6 +2100,7 @@
         bidState: a._bidState || a.bidState,
         expires: a.expires,
         rating: item.rating,
+        rareflag: item.rareflag || 0,
         defId: item.definitionId,
         name: (item._staticData && item._staticData.name) || item.name || `#${item.definitionId}`,
       };
@@ -3190,11 +3209,11 @@
           const outcome = { hit: 0, miss: 0, near: 0 };
           // Many copies under your max in one search = the market dropped: re-check the price next turn.
           if (player && player.kind !== 'filter' && cfg.autoPrice && !player.manualMax
-            && res.listings.filter((l) => l.buyNowPrice > 0 && l.buyNowPrice <= maxBuy && baseId(l.defId) === baseId(player.id)).length >= 3) {
+            && res.listings.filter((l) => l.buyNowPrice > 0 && l.buyNowPrice <= maxBuy && l.defId === player.id).length >= 3) {
             player.checkedAt = 0;
             ui.log(`📉 ${player.name}: several listed under your max — the price is dropping, re-checking it next`, 'muted');
           }
-          const mine = res.listings.filter((l) => l.buyNowPrice > 0 && (!player || player.kind === 'filter' || l.defId === player.id || baseId(l.defId) === baseId(player.id)));
+          const mine = res.listings.filter((l) => l.buyNowPrice > 0 && (!player || player.kind === 'filter' || l.defId === player.id));
           if (probe) {
             outcome.probe = true;
             const above = mine.filter((l) => l.buyNowPrice > maxBuy && l.buyNowPrice <= searchMax).map((l) => l.buyNowPrice);
@@ -5983,8 +6002,31 @@
       let results = [];
       let timer;
 
+      // 2.4.10: the name list only has each player's base card — look on the market for the other versions
+      // (Future Stars, TOTW…) and let the user pick the exact card. One normal market search, under the usual limits.
+      let versions = null;
+      const chooseVersion = async (p) => {
+        if (!fut.ready() || engine.running || engine.busy || jobs.current) return add(p);
+        input.value = '';
+        sugg.innerHTML = `<div class="msg">Looking for ${esc(p.name)}'s cards on the market…</div>`;
+        let found = [];
+        await jobs.run('Finding card versions', async () => {
+          const c = fut.newCriteria();
+          c.maskedDefId = baseId(p.id);
+          const r = await fut.search(c);
+          engine.countUsage('searches');
+          jobs.check(r, 'finding card versions');
+          found = cardVersions(r.listings, baseId(p.id));
+        });
+        if (!found.length) { this.log(`${p.name}: no cards listed right now — added the base card (type a card ID to pick another version)`, 'muted'); return add(p); }
+        if (found.length === 1 && found[0].defId === p.id) return add(p);
+        const rar = Object.fromEntries(fut.rarityOptions().map((o) => [o.v, o.l]));
+        versions = found.map((v) => ({ id: v.defId, name: `${p.name}${v.defId === p.id ? '' : ` (${rar[String(v.rareflag)] || `special ${v.rareflag}`})`}`, rating: v.rating, cheapest: v.cheapest }));
+        sugg.innerHTML = `<div class="msg">Which ${esc(p.name)} card?</div>${versions.map((v, i) => `<button data-ver="${i}"><span>${esc(v.name)}<br><small>${v.cheapest ? `cheapest seen ${fmt(v.cheapest)}` : 'listed'}</small></span><b>${v.rating || ''}</b></button>`).join('')}`;
+      };
+
       const add = (p) => {
-        input.value = ''; sugg.innerHTML = '';
+        input.value = ''; sugg.innerHTML = ''; versions = null;
         if (engine.cfg.players.some((x) => x.id === p.id)) return;
         const entry = { id: p.id, name: p.name, rating: p.rating };
         engine.cfg.players = [...engine.cfg.players, entry];
@@ -6027,11 +6069,13 @@
         e.preventDefault();
         clearTimeout(timer);
         await show(); // Enter may come before the suggestions have loaded
-        if (results[0] && sugg.querySelector('[data-pick]')) add(results[0]);
+        if (results[0] && sugg.querySelector('[data-pick]')) { if (/^#\d+$/.test(results[0].name)) add(results[0]); else chooseVersion(results[0]); }
       });
       this.root.addEventListener('click', (e) => {
         const pick = e.target.closest('[data-pick]');
-        if (pick) return add(results[Number(pick.dataset.pick)]);
+        if (pick) { const p = results[Number(pick.dataset.pick)]; return /^#\d+$/.test(p.name) ? add(p) : chooseVersion(p); }
+        const ver = e.target.closest('[data-ver]');
+        if (ver && versions) return add(versions[Number(ver.dataset.ver)]);
         const rm = e.target.closest('[data-rm]');
         if (rm && !engine.running) {
           engine.cfg.players = engine.cfg.players.filter((p) => p.id !== Number(rm.dataset.rm));

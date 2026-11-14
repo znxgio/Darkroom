@@ -63,6 +63,14 @@ Newest learnings go at the end of each section. Dates are when the note was writ
   otherwise), dry-spell auction turns (dryTurns 40 / dryAuctionSearches 60), per-player verdict in the heartbeat.
   Recommended to the user: cheaper/less-watched cards (5k–50k) + Trade mode + Find hot cards; buy Salma at BIN or on a dip.
 
+- 2026-11-14: user couldn't find "Thompson" (Gisele Thompson, Future Stars, BIN 49k) in the bot's name search. Causes:
+  (1) list cut at 8 and a surname match ranked as a mere "includes" → pushed off by other Thompsons; (2) players.json
+  has BASE ids only, and since 2.4.6 the bot buys only the exact defId → a special card could never be hunted.
+  2.4.10: searchPlayers ranks whole-word matches (score 2) and returns 12; after picking a name, one market search
+  (jobs.run, counted) lists versions (cardVersions) to choose from; maskedDefId now = baseId(player.id) so special ids
+  search correctly; drop/near-miss checks use the exact defId. Special defId = base + n·2^24 (baseId masks 0xFFFFFF).
+  User's log was still from 2.4.8 — remind them to re-open the install link after each push.
+
 ## 1. How the user works and talks
 - Short, casual messages, often typed on a phone while busy (once while driving). Expect typos; read for intent.
 - Thinks out loud and expects Claude to fill in the details, pick the best option and say why, not list everything.

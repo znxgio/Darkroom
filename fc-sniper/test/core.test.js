@@ -1196,3 +1196,23 @@ test('bid window 2.4.8: old default 30 → 45 once, clamped 15–90', () => {
   assert.equal(c.clampConfig({ ...c.DEFAULT_CONFIG, bidWindow: 300 }).cfg.bidWindow, 90);
   assert.equal(c.clampConfig({ ...c.DEFAULT_CONFIG, bidWindow: 5 }).cfg.bidWindow, 15);
 });
+
+test('searchPlayers 2.4.10: a whole surname ranks above partial matches; up to 12 results', () => {
+  const db = c.parsePlayerDb([
+    ...Array.from({ length: 10 }, (_, i) => ({ id: 1000 + i, f: 'Tom', l: `Thompsonson${i}`, r: 90 - i })),
+    { id: 269404, f: 'Gisele', l: 'Thompson', r: 78 },
+  ]);
+  assert.equal(c.searchPlayers(db, 'thompson')[0].id, 269404);
+  assert.equal(c.searchPlayers(db, 'thomp').length, 11);
+});
+
+test('cardVersions: the different cards of one player from market listings', () => {
+  const FS = 50331648 + 269404;
+  const v = c.cardVersions([
+    { defId: 269404, rating: 78, rareflag: 1, buyNowPrice: 1500 },
+    { defId: FS, rating: 84, rareflag: 41, buyNowPrice: 49000 },
+    { defId: FS, rating: 84, rareflag: 41, buyNowPrice: 48750 },
+    { defId: 999, rating: 80, buyNowPrice: 100 }, // another player: ignored
+  ], 269404);
+  assert.deepEqual(v.map((x) => [x.defId, x.cheapest, x.count]), [[FS, 48750, 2], [269404, 1500, 1]]);
+});
