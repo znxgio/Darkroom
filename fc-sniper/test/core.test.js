@@ -1311,3 +1311,28 @@ test('sbcLikely / sbcOrder: club-solvable (repeatable first), then buys, points,
   const sets = [{ n: 'm', likely: 'manual' }, { n: 'b', likely: 'buys' }, { n: 'c', likely: 'club' }, { n: 'cr', likely: 'club', repeatable: true }, { n: 'u' }];
   assert.deepEqual(sets.sort(c.sbcOrder).map((x) => x.n), ['cr', 'c', 'b', 'm', 'u']);
 });
+
+test('setup check: version, keep coins, reach, bidding, searches left — each with a fix where it makes sense', () => {
+  assert.equal(c.newerVersion('2.5.10', '2.5.9'), true);
+  assert.equal(c.newerVersion('2.5.0', '2.5.0'), false);
+  const cfg = { ...c.DEFAULT_CONFIG, minCoins: 0, bidSnipe: false, mode: 'buy' };
+  const it = c.setupIssues(cfg, { coins: 241832, version: '2.4.8', latest: '2.5.0', targets: 1, reachable: 0, searchesLeft: 20 });
+  const txt = it.map((x) => `${x.level}:${x.text}`).join(' | ');
+  assert.match(txt, /warn:Running 2.4.8 — 2.5.0 is out/);
+  assert.match(txt, /warn:Every player on your list costs more/);
+  assert.match(txt, /warn:Keep coins is 0 — .* Keep 24,000 back\?/);
+  assert.match(txt, /info:Auction bidding is off/);
+  assert.match(txt, /warn:Only 20 searches left today/);
+  assert.deepEqual(it.find((x) => /Keep coins/.test(x.text)).fix, { type: 'keep', value: 24000 });
+  const ok = c.setupIssues({ ...cfg, minCoins: 5000, bidSnipe: true }, { coins: 50000, version: '2.5.0', latest: '2.5.0', targets: 2, reachable: 2, searchesLeft: 400 });
+  assert.deepEqual(ok.map((x) => x.level), ['ok']);
+});
+
+test('adviceFix: the tap-to-apply action that goes with the advice', () => {
+  assert.equal(c.adviceFix({ bin: 40 }), null);
+  assert.equal(c.adviceFix({ bin: 200, hits: 1 }), null);
+  const m = c.adviceFix({ name: 'Salma', id: 7, ref: 194000, bin: 300, hits: 0, pct: 4, probes: 30, near: 6, nearPct: 1.2 });
+  assert.deepEqual([m.type, m.id, m.pct, m.value], ['max', 7, 1, 192000]);
+  assert.equal(c.adviceFix({ name: 'S', bin: 300, hits: 0, pct: 4, ends: [5, 6, 4], bidding: false }).type, 'bid');
+  assert.deepEqual(c.adviceFix({ name: 'S', id: 7, bin: 300, hits: 0, pct: 4, probes: 30, near: 0 }), { type: 'drop', id: 7, label: 'Remove S from the list' });
+});

@@ -224,6 +224,50 @@
     return `${head} · ${tips.join(' · ')}`;
   }
 
+  /** Compare versions like "2.5.0" < "2.5.10". */
+  function newerVersion(latest, current) {
+    const a = String(latest || '').split('.').map(Number); const b = String(current || '').split('.').map(Number);
+    for (let i = 0; i < Math.max(a.length, b.length); i++) { if ((a[i] || 0) !== (b[i] || 0)) return (a[i] || 0) > (b[i] || 0); }
+    return false;
+  }
+
+  /**
+   * Setup check (2.5.0): what looks off, each with an optional one-tap fix.
+   * ctx: { coins, version, latest, targets, reachable, searchesLeft } → [{ level: 'ok'|'warn'|'info', text, fix? }]
+   */
+  function setupIssues(cfg, ctx) {
+    const out = [];
+    const n = (x) => Math.round(x || 0).toLocaleString('en-US');
+    if (ctx.latest && newerVersion(ctx.latest, ctx.version)) out.push({ level: 'warn', text: `Running ${ctx.version} — ${ctx.latest} is out. Open the install link to update.`, fix: { type: 'update' } });
+    else if (ctx.latest) out.push({ level: 'ok', text: `Running ${ctx.version} (latest)` });
+    else out.push({ level: 'info', text: `Running ${ctx.version} (couldn't check for updates from here)` });
+    if (!ctx.targets) out.push({ level: 'warn', text: 'No players or filters to snipe yet — add one on the Snipe tab' });
+    else if (!ctx.reachable) out.push({ level: 'warn', text: 'Every player on your list costs more than your coins can reach — add cheaper cards or use 🎯 Snipe-friendly cards (Trade tab)' });
+    if (!(cfg.minCoins > 0) && ctx.coins >= 20000) {
+      const keep = Math.round(ctx.coins * 0.1 / 1000) * 1000;
+      out.push({ level: 'warn', text: `Keep coins is 0 — the bot may spend everything. Keep ${n(keep)} back?`, fix: { type: 'keep', value: keep } });
+    }
+    if (!cfg.bidSnipe && cfg.mode !== 'alert') out.push({ level: 'info', text: 'Auction bidding is off — turning it on adds late bids and dry-spell auction turns', fix: { type: 'bid' } });
+    if (ctx.searchesLeft !== undefined && ctx.searchesLeft < 50) out.push({ level: 'warn', text: `Only ${n(ctx.searchesLeft)} searches left today (raise Searches per day in Settings, up to 1,500)` });
+    return out;
+  }
+
+  /**
+   * The one-tap fix that goes with cardAdvice (2.5.0) — the user taps it, nothing changes by itself.
+   * Same input as cardAdvice plus { ref (the cheapest), id } → { type: 'max', id, value, label } | { type: 'bid' } | { type: 'drop', id } | null
+   */
+  function adviceFix(o) {
+    if (!o || (o.bin || 0) < 60 || o.hits > 0) return null;
+    if (o.near >= 3 && o.nearPct !== null && o.nearPct !== undefined && o.nearPct < o.pct - 0.5 && o.ref > 0) {
+      const pct = Math.max(1, Math.round(o.nearPct));
+      return { type: 'max', id: o.id, pct, value: roundPrice(o.ref * (1 - pct / 100), 'down'), label: `Set ${o.name}'s max to ${pct}% under` };
+    }
+    const e = o.ends || [];
+    if (e.length >= 3 && !o.bidding && e.reduce((a, x) => a + x, 0) / e.length >= o.pct) return { type: 'bid', label: 'Turn on auction bidding' };
+    if ((o.probes || 0) >= 10 && !o.near) return { type: 'drop', id: o.id, label: `Remove ${o.name} from the list` };
+    return null;
+  }
+
   /**
    * SBC ranker (2.5.0): how likely a challenge is to come from your club, from the players that fit its rating/quality
    * rules (a quick check — the solver still has the final word). Returns 'club' | 'buys' | 'points' | 'manual'.
@@ -2113,7 +2157,7 @@
     cacheBustBid, jitter, pickTargets, planSellPrice, classifyStatus,
     normalizeName, parsePlayerDb, searchPlayers, cardVersions, playerForIteration, migrateConfig, filterSummary, sniperTargets, LEAGUES,
     findMarketPrice, robustPrice, searchBudget, addPriceSample, prunePrices, priceTrend, trendText, lookupUrl, planMaxBuy, effectiveMaxBuy, withinReach, huntTargets,
-    sbcLikely, sbcOrder, coinGoal, cardAdvice, sessionReport, bidSkipReason, shortTime, searchReport, auctionReport, planFloor, planBudget, planVerdict, planSummary, robustLow, trendNudge, snipeBase, recordGap, gapStats, smartLevels, gammaSample, betaSample, armPrior, decayArm, upgradeArm, armRate, chooseDiscount, chooseTarget, missWeight, recordArm, deepestArmFor, priceShifted, bestArm, flipPlan, tradeOpts, tradeCap, bidAmount, freeCoins, bidBlock, warCeiling, warSteps, binVsWar, settleSales,
+    newerVersion, setupIssues, adviceFix, sbcLikely, sbcOrder, coinGoal, cardAdvice, sessionReport, bidSkipReason, shortTime, searchReport, auctionReport, planFloor, planBudget, planVerdict, planSummary, robustLow, trendNudge, snipeBase, recordGap, gapStats, smartLevels, gammaSample, betaSample, armPrior, decayArm, upgradeArm, armRate, chooseDiscount, chooseTarget, missWeight, recordArm, deepestArmFor, priceShifted, bestArm, flipPlan, tradeOpts, tradeCap, bidAmount, freeCoins, bidBlock, warCeiling, warSteps, binVsWar, settleSales,
     listSpendable, reserveOk, afterListBuy,
     aggregateListings, hotScore, rankHot, snipeScore, priceBands, provenFlips, flipValue, priceLadder, sbcCostEstimate,
     addHistory, summarizeHistory, profitSummary, isDiscordWebhook, discordPayload,
@@ -3035,15 +3079,19 @@
     advice() {
       const cfg = this.cfg;
       const out = [];
+      const fixes = [];
       for (const p of sniperTargets(cfg).filter((x) => x.kind !== 'filter')) {
         const ps = this.pstats && this.pstats.get(`${p.kind || 'p'}:${p.id}`);
         const ref = p.floor || p.lowest;
         if (!ps || !ref) continue;
         const g = gapStats((learn.data.targets[learn.key(p)] || {}).gaps);
-        const line = cardAdvice({ name: p.name, bin: ps.bin, hits: ps.hits, pct: Math.max(0, Math.round((1 - effectiveMaxBuy(p, cfg) / ref) * 100)),
-          probes: g.probes, near: g.near, nearPct: g.avgPct, ends: ps.ends, bidding: !!cfg.bidSnipe });
-        if (line) out.push(line);
+        const o = { name: p.name, id: p.id, ref, bin: ps.bin, hits: ps.hits, pct: Math.max(0, Math.round((1 - effectiveMaxBuy(p, cfg) / ref) * 100)),
+          probes: g.probes, near: g.near, nearPct: g.avgPct, ends: ps.ends, bidding: !!cfg.bidSnipe };
+        const line = cardAdvice(o);
+        if (line) { out.push(line); fixes.push({ text: line, fix: adviceFix(o) }); }
       }
+      this.lastAdvice = fixes; // shown with Apply buttons in the setup card
+      ui.renderSetup();
       return out;
     },
 
@@ -5878,6 +5926,7 @@
               </div>
               <p class="note" data-r="budget"></p>
             </div>
+            <div class="card setup" data-r="setup"></div>
             <details class="card" data-r="plan-card"><summary><h4 style="display:inline">📋 Session plan</h4></summary>
               <p class="note" data-r="plan-info"></p>
               ${FIELDS.plan.map(fieldHtml).join('')}
@@ -6155,6 +6204,27 @@
           case 'sbc-load': return sbc.loadSets();
           case 'sbc-rank': return sbc.rank();
           case 'plan-start': return plan.active ? plan.cancel() : plan.start();
+          case 'setup-fix': {
+            const it = (this.setupItems || [])[Number(btn.dataset.i)];
+            if (!it || !it.fix || engine.running) return;
+            if (it.fix.type === 'update') { w.open('https://raw.githubusercontent.com/znxgio/Darkroom/claude/ea-fc-sniping-bot-jdz6vq/fc-sniper/fc-sniper.user.js', '_blank'); return; }
+            if (it.fix.type === 'keep') engine.cfg.minCoins = it.fix.value;
+            if (it.fix.type === 'bid') engine.cfg.bidSnipe = true;
+            engine.save(); this.syncForm(); this.renderSetup();
+            this.log(`✅ ${it.fix.type === 'keep' ? `Keep coins set to ${fmt(it.fix.value)}` : 'Auction bidding turned on'}`, 'ok');
+            return;
+          }
+          case 'advice-fix': {
+            const a = (this.adviceItems || [])[Number(btn.dataset.i)];
+            if (!a || !a.fix || engine.running) return;
+            const f = a.fix;
+            if (f.type === 'max') { engine.cfg.players = engine.cfg.players.map((p) => (p.id === f.id ? { ...p, manualMax: f.value } : p)); this.log(`✅ ${f.label}: ${fmt(f.value)}`, 'ok'); }
+            if (f.type === 'bid') { engine.cfg.bidSnipe = true; this.log('✅ Auction bidding turned on', 'ok'); }
+            if (f.type === 'drop') { engine.cfg.players = engine.cfg.players.filter((p) => p.id !== f.id); this.log(`✅ ${f.label}`, 'ok'); }
+            engine.lastAdvice = (engine.lastAdvice || []).filter((x) => x !== a);
+            engine.save(); this.syncForm(); this.renderPlayers(); this.renderSetup();
+            return;
+          }
           case 'goal-cancel': engine.cfg.goal = null; engine.save(); this.renderGoal(); this.log('🎯 Coin goal cancelled', 'muted'); return;
           case 'goal-start': {
             if (engine.running || jobs.current || plan.active || !sbc.short) return;
@@ -6872,6 +6942,32 @@
           : `<p class="empty">${r.done ? 'No better option found within budget' : 'Looking…'}</p>`}</div>`).join('');
     },
 
+    /** Setup check + advice with one-tap fixes (2.5.0). Checks for an update once per load (if the page allows it). */
+    renderSetup() {
+      const box = this.q && this.root && this.q('[data-r=setup]');
+      if (!box) return;
+      const cfg = engine.cfg;
+      if (this.latest === undefined && !this.latestAsked) {
+        this.latestAsked = true;
+        fetch(`https://raw.githubusercontent.com/znxgio/Darkroom/claude/ea-fc-sniping-bot-jdz6vq/fc-sniper/fc-sniper.user.js?t=${Date.now()}`, { cache: 'no-store', credentials: 'omit' })
+          .then((r) => (r.ok ? r.text() : '')).then((t) => { const m = t.match(/@version\s+([\d.]+)/); this.latest = m ? m[1] : null; this.renderSetup(); })
+          .catch(() => { this.latest = null; this.renderSetup(); });
+      }
+      const coins = fut.ready() ? fut.coins() : 0;
+      engine.safety = engine.safety || store.get(KEYS.safety, {});
+      const left = Math.max(0, (cfg.searchesPerDay || 0) - usageFor(engine.safety.usage, Date.now()).searches);
+      const items = setupIssues(cfg, { coins, version: VERSION, latest: this.latest, targets: sniperTargets(cfg).length, reachable: huntTargets(cfg).length, searchesLeft: left });
+      const adv = (engine.lastAdvice || []).filter((a) => a.fix);
+      this.setupItems = items; this.adviceItems = adv;
+      const icon = { ok: '✅', warn: '⚠️', info: 'ℹ️' };
+      const fixLabel = (f) => ({ update: 'Open install link', keep: `Keep ${fmt(f.value)}`, bid: 'Turn on' }[f.type]);
+      const warn = items.filter((x) => x.level === 'warn').length;
+      box.innerHTML = `<details${warn || adv.length ? ' open' : ''}><summary><h4 style="display:inline">${warn ? `⚠️ Setup check (${warn})` : '✅ Setup check'}</h4></summary>
+        ${items.map((x, i) => `<div class="li"><span class="t"><small>${icon[x.level]} ${esc(x.text)}</small></span>${x.fix ? `<button class="mini" data-a="setup-fix" data-i="${i}">${esc(fixLabel(x.fix))}</button>` : ''}</div>`).join('')}
+        ${adv.length ? `<p class="note" style="margin:8px 0 4px">💡 Suggestions — tap to apply (nothing changes by itself)</p>${adv.map((a, i) => `<div class="li"><span class="t"><small>${esc(a.text.replace(/^💡 /, ''))}</small></span><button class="mini" data-a="advice-fix" data-i="${i}">${esc(a.fix.label)}</button></div>`).join('')}` : ''}
+      </details>`;
+    },
+
     /** SBC coin goal: offer when an SBC needs more coins than you have; progress while trading toward it. */
     renderGoal() {
       const box = this.q('[data-r=goal]');
@@ -6949,6 +7045,7 @@
     renderStats() {
       this.renderLearn();
       this.renderPlan();
+      if (!engine.running) this.renderSetup();
       this.renderBudget();
       Object.entries(engine.stats).forEach(([k, v]) => {
         const el = this.q(`[data-s="${k}"]`);
