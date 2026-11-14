@@ -6971,7 +6971,8 @@
       if (store.get(KEYS.ui, {}).handleLeft) this.root.classList.add('lft');
       // the click that ends a drag is swallowed (capture phase, before the panel's own click handlers)
       this.root.addEventListener('click', (e) => {
-        if (Date.now() - (this.dragEndAt || 0) < 350) { e.preventDefault(); e.stopImmediatePropagation(); }
+        // only the one click a finished drag produces (it arrives right away), never a later real tap
+        if (this.dragEndAt && Date.now() - this.dragEndAt < 200) { this.dragEndAt = 0; e.preventDefault(); e.stopImmediatePropagation(); }
       }, true);
       handle.addEventListener('pointerdown', (e) => {
         const cls = this.root.classList;

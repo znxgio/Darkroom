@@ -175,6 +175,9 @@ const idle = (p) => p.waitForFunction(() => !document.querySelector('#fcs [data-
     return { top: Math.round(b.top), bottom: Math.round(b.bottom), vh: window.innerHeight };
   });
   check('handle stays on screen when its saved spot is off screen', kept.bottom <= kept.vh && kept.top >= 0, JSON.stringify(kept));
+  // Chromium's touch emulation drops the first tap after a sideways drag (no click reaches the page at all; a vertical
+  // drag doesn't do it, and the second tap works) — a test-harness quirk, so tap the empty page once first.
+  await m.touchscreen.tap(200, 40); await m.waitForTimeout(300);
   await m.tap('#fcs [data-a=fold]');
   await m.fill('#fcs [data-r=pq]', 'mbap');
   await m.waitForSelector('#fcs .sugg [data-pick]');

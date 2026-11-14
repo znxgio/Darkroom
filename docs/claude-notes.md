@@ -160,6 +160,11 @@ Newest learnings go at the end of each section. Dates are when the note was writ
   stop→start can run two loops; SBC fill-ins can exceed the limit by 15%; learner reward skew. Status in section 7.
 - Lesson: limit checks added one path at a time leave holes. One shared spend guard and one pacing wrapper is the design to aim for.
 
+- Test-harness quirk (2026-11-14): with CDP touch emulation, the FIRST tap after a sideways touch drag never produces a
+  click (pointerdown/touchstart/pointerup/touchend all fire on the button, no click; vertical drags don't do it; the
+  second tap works) — not pointer capture, not our click-swallow. e2e.js taps the empty page once after the drag test.
+  Don't "fix" the bot for it; check on the real iPhone if a tap after dragging the handle ever seems ignored.
+
 ## 6. Model team observations
 - 2026-11-11 Fable review of the whole bot: ~200 s, read-only as told, found real coin-spending holes Opus missed, gave
   file:line, scenarios and a clear top 3. Confidence Medium and honest about what it couldn't verify. Worth it for big reviews.
