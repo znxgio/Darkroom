@@ -6234,9 +6234,18 @@
   #fcs .body{flex:1;min-height:0}
   #fcs .last{margin:6px 0 0;font-size:12px;color:var(--muted);white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
   #fcs .last:empty{display:none}
-  #fcs .jobbar{display:flex;align-items:center;gap:8px;justify-content:space-between;margin:6px 0;padding:8px 10px;border-radius:10px;background:rgba(232,163,61,.15);border:1px solid rgba(232,163,61,.5);font-size:13px}
+  #fcs .stripw{position:relative;flex:none;height:26px;border-bottom:1px solid var(--line);z-index:3}
+  #fcs .strip{display:flex;align-items:center;gap:10px;height:25px;padding:0 14px;font-size:12px;line-height:1;white-space:nowrap;overflow:hidden;color:var(--muted)}
+  #fcs .strip b{color:var(--text);font-weight:600;flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}
+  #fcs .strip .su{margin-left:auto;flex:none}
+  #fcs.min .stripw{display:none}
+  #fcs .jobbar{position:absolute;top:0;left:8px;right:8px;display:flex;align-items:center;gap:8px;justify-content:space-between;margin:0;padding:6px 10px;border-radius:10px;box-shadow:0 6px 16px rgba(0,0,0,.4);background-color:var(--bg);background-image:linear-gradient(rgba(232,163,61,.15),rgba(232,163,61,.15));background:rgba(232,163,61,.15);border:1px solid rgba(232,163,61,.5);font-size:13px}
   #fcs .jobbar[hidden]{display:none}
   #fcs .jobbar .mini{min-height:32px;padding:0 14px}
+  #fcs.locked .body .row,#fcs.locked .body .chip button,#fcs.locked .body .chip .mx,#fcs.locked .body .frow button,#fcs.locked .body .fed,#fcs.locked .body input,#fcs.locked .body select,#fcs.locked .body .pqw,#fcs.locked .body [data-a=filter-new],#fcs.locked .body [data-a=filter-starters],#fcs.locked .body button:disabled{opacity:.4}
+  #fcs.locked .body button:disabled{pointer-events:none}
+  #fcs.locked [data-pane=log] *,#fcs.locked .tabs *,#fcs.locked .hd *{opacity:1}
+  #fcs.mob .jobbar{padding:6px 10px;font-size:13px}
   #fcs .last.ok{color:var(--green)}#fcs .last.warn{color:var(--amber)}#fcs .last.err{color:var(--red)}#fcs .last.alert{color:#ffe08a}
   #fcs .btn.go-btn{background:var(--green);border-color:var(--green);color:var(--green-ink)}
   #fcs .body{overflow-y:auto;overflow-x:hidden;padding:12px 14px 14px;overscroll-behavior:contain;-webkit-overflow-scrolling:touch}
@@ -6426,8 +6435,11 @@
           <button class="go" data-a="toggle" aria-label="Start">${ICON.play}</button>
           <button class="fold" data-a="fold" aria-label="Collapse">${ICON.chevron}</button>
         </div>
-        <div class="jobbar" data-r="jobbar" hidden><span data-r="jobname"></span><button class="mini" data-a="job-stop">Stop</button></div>
         <nav class="tabs">${TABS.map(([k, l]) => `<button data-tab="${k}">${l}</button>`).join('')}</nav>
+        <div class="stripw">
+          <div class="strip" data-r="strip"><b data-r="s-state">Idle</b><span data-r="s-clock"></span><span class="su" data-r="s-use"></span></div>
+          <div class="jobbar" data-r="jobbar" hidden><span data-r="jobname"></span><button class="mini" data-a="job-stop">Stop</button></div>
+        </div>
         <div class="body">
           <section class="pane" data-pane="snipe">
             <div class="card">
@@ -6603,6 +6615,16 @@
 
     bind() {
       const root = this.root;
+      // locked (bot / plan / side task running): tapping a dimmed control explains why instead of failing silently
+      root.addEventListener('click', (e) => {
+        if (!root.classList.contains('locked')) return;
+        const t = e.target;
+        if (!t.closest || !t.closest('.body') || t.closest('[data-pane=log]')) return;
+        const hit = t.closest('.row, .chip, .frow, .fed, .pqw, input, select, button:disabled, [data-a=filter-new], [data-a=filter-starters], [data-fon], [data-fedit], [data-fmax], [data-up], [data-down], [data-rm], [data-max]');
+        if (!hit) return;
+        e.preventDefault(); e.stopImmediatePropagation();
+        this.toast(this.lockTask && !engine.running && !plan.active ? `Busy: ${this.lockTask} — tap ■ to stop it` : 'Stop the bot (■) to change this', 'alert');
+      }, true);
       root.addEventListener('click', (e) => {
         if (root.classList.contains('min') && e.target.closest('.logo')) { root.classList.remove('min'); return; }
         const btn = e.target.closest('button');
@@ -7231,6 +7253,29 @@
       // a visible "task running — Stop" bar on every tab
       const bar = this.q('[data-r=jobbar]');
       if (bar) { bar.hidden = !name && !engine.running; this.q('[data-r=jobname]').textContent = name ? `⏳ ${name}…` : engine.running ? '▶ Bot running — stop (■) to change settings' : ''; }
+      this.syncLock(name, !name);
+      this.renderStrip();
+    },
+
+    /** Root gets .locked while the bot, a plan or a side task runs; remembers the task name for the "why" toast. */
+    syncLock(jobName, ended) {
+      const task = ended ? null : jobName || jobs.current || null;
+      this.lockTask = task;
+      this.root.classList.toggle('locked', !!(engine.running || plan.active || task));
+    },
+
+    renderStrip() {
+      if (!this.root) return;
+      const gate = engine.gate();
+      const lockedSafety = !engine.running && !engine.busy && !gate.ok && engine.safety.lockUntil > Date.now();
+      const st = engine.status;
+      const u = usageFor(engine.safety.usage, Date.now());
+      let clock = '';
+      if (st.until > Date.now()) clock = `${st.state === 'resting' ? 'back in' : 'next search'} ${Math.ceil((st.until - Date.now()) / 1000)} s`;
+      const set = (k, v) => { const el = this.q(`[data-r=${k}]`); if (el && el.textContent !== v) el.textContent = v; };
+      set('s-state', lockedSafety ? 'Safety lock' : st.text || 'Idle');
+      set('s-clock', clock);
+      set('s-use', `searches ${fmt(u.searches)}/${fmt(engine.cfg.searchesPerDay)} · buys ${fmt(u.buys)}`);
     },
 
     renderPacks() {
@@ -7742,6 +7787,7 @@
       };
       bar('s', u.searches, engine.cfg.searchesPerDay);
       bar('b', u.buys, engine.cfg.buysPerDay);
+      this.renderStrip();
     },
 
     /** Twice a second: countdowns, coins, session timer. */
@@ -7758,6 +7804,8 @@
         clock += `${clock ? ' · ' : ''}${Math.floor(left / 60e3)}:${String(Math.floor((left % 60e3) / 1000)).padStart(2, '0')} left`;
       }
       this.q('[data-r=clock]').textContent = clock;
+      this.renderStrip();
+      if (!jobs.current && !engine.running && !plan.active && this.root.classList.contains('locked')) this.syncLock();
     },
 
     setRunning(on) {
@@ -7771,6 +7819,7 @@
       this.qa('[data-k] , [data-k] button, [data-r=pq], [data-a=price]').forEach((el) => { el.disabled = on; });
       const bar = this.q('[data-r=jobbar]');
       if (bar && !jobs.current) { bar.hidden = !on; this.q('[data-r=jobname]').textContent = on ? '▶ Bot running — stop (■) to change settings' : ''; }
+      this.syncLock();
       this.qa('[data-a=trade-start], [data-a=hot-scan], [data-a=hot-top], [data-a=hot-add], [data-a=snipe-add], [data-a=autofill], [data-up], [data-down], [data-fon], [data-fedit], [data-fmax], [data-a=filter-new]').forEach((el) => { el.disabled = on; });
       const ts = this.q('[data-a=trade-start]');
       if (ts) ts.textContent = on ? (engine.cfg.mode === 'trade' ? 'Trading… (■ to stop)' : 'Sniping… (■ to stop)') : 'Start trading';
