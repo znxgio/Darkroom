@@ -76,7 +76,7 @@ Newest learnings go at the end of each section. Dates are when the note was writ
   cheapest). Then the user said "add more sniping features / continue smart learning, do what's best" → 2.5.0:
   session report on stop (+Discord), cardAdvice per card (suggestions only, ≥60 searches; uses probe gaps, hits,
   auction end prices), snipe-friendly cards from the hot scan (snipeScore: spread & deep listings; helper in worktree).
-  Pushed 2.4.10 alone first (push a specific commit: git push origin <sha>:<branch>) so the fix wasn't held up.
+  User then said: don't make multiple pushes — combine (2.4.10 folded into 2.5.0).
 
 ## 1. How the user works and talks
 - Short, casual messages, often typed on a phone while busy (once while driving). Expect typos; read for intent.
@@ -90,6 +90,8 @@ Newest learnings go at the end of each section. Dates are when the note was writ
 - Enjoys experiments with the model team (Opus/Fable/Sonnet) and wants Claude to observe and write down what it learned.
 - Has asked for things Claude declined: "undetectable" modes, overnight running, human-like browsing to avoid flags.
   Explain once, keep safety limits, move on — they accept it.
+- STANDING RULE (user, 2026-11-14): ONE combined push per round of requests — don't push each small release separately;
+  fold new asks into the release in progress.
 - STANDING RULE (user, 2026-11-12): for anything bigger than a tweak, split the work across agents from the start —
   Opus leads/plans/merges and owns risky code; helpers in isolated worktrees take separate chunks (UI, tests, a second
   feature); runner runs the suites; observer/advisors for design and reviews. Reasons the user gave: Claude goes
