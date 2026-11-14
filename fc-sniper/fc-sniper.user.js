@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FC Sniper
 // @namespace    https://github.com/znxgio/darkroom
-// @version      2.5.1
+// @version      2.5.2
 // @description  Sniper, pack opener, SBC solver and team upgrade advisor for the EA SPORTS FC Ultimate Team Web App, with built-in safety limits.
 // @match        https://www.ea.com/*ultimate-team/web-app*
 // @match        https://www.ea.com/ea-sports-fc/ultimate-team/web-app*
@@ -2669,7 +2669,7 @@
 
   const w = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '2.5.1';
+  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '2.5.2';
   const errText = (e) => (e && e.message ? e.message : String(e));
   const fmt = (n) => Number(n || 0).toLocaleString();
 
@@ -3622,7 +3622,7 @@
       this.safety.lockUntil = Date.now() + ms;
       this.safety.lockReason = reason;
       this.saveSafety();
-      ui.log(`Safety lock: won't start again for ${formatDuration(ms)}`, 'err');
+      ui.log(`Safety lock (${reason || kind}): won't start again for ${formatDuration(ms)}`, 'err');
       ui.renderStatus();
     },
 
@@ -5534,6 +5534,11 @@
       this.updating = true;
       try {
         await this.readSquad();
+        const blank = (this.squad || []).filter((x) => x.player && /^(-+|#\d+)?$/.test(String(x.player.name || '').trim())).length;
+        if (blank >= 3) {
+          this.squad = null; this.summary = null;
+          throw new Error(`the Web App hasn't loaded player names yet (${blank} show as “---”)`);
+        }
         if (!this.probed) {
           this.probed = true;
           try { // read-only diagnostics — must never stop the team from being saved
@@ -6917,7 +6922,7 @@
       this.renderUpgrades();
       // 2.5.0: read the squad by itself (one request, no market) — retried while the Web App is still loading
       let tries = 0;
-      const autoRead = async () => { tries++; if (!(await upgrades.updateTeam(true)) && tries < 6 && !store.get(KEYS.team, null)) setTimeout(autoRead, 5000); };
+      const autoRead = async () => { tries++; if (!(await upgrades.updateTeam(true)) && tries < 8) setTimeout(autoRead, 6000); }; // keeps trying until names have loaded (a saved team may be a bad early read)
       setTimeout(autoRead, 4000);
       setInterval(() => this.tick(), 500);
 

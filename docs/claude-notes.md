@@ -286,6 +286,8 @@ Newest learnings go at the end of each section. Dates are when the note was writ
 
 - 2.5.1 (user ask): overlay shows ✅ green under / ❌ red over the usual price. Offered but not asked for: per-listing tags in EA's results list, and a usual price from the search itself for unpriced cards.
 
+- 2.5.2 (from the user's 2.5.1 log): (a) a "throttled" (429/426/512/521) answer during a side task locked 24 h but the log never said why → the lock line now names the task and status. (b) The launch team read ran before EA loaded static data: names "---", chemistry 0, odd positions — reads with ≥3 blank names are now rejected and retried (up to 8×, every 6 s). (c) REAL EA FIELDS seen: `attributes=[pac,sho,pas,dri,def,phy]` (face stats ✔), `_playStyles=[{traitId, isIcon}]` plus methods getPlayStyles/getPlusPlayStyles/hasPlayStyle, `playStyle=<id>`, `_basePlusRoles`. traitId→name map still unknown — don't guess; next step is logging getPlayStyles() output. (d) points SBC loadChallenge 403 seen once.
+
 ## 8. Debate protocol (user's design, 2026-11-12)
 Use when Opus is unsure about an idea or design. Relay it with background subagents + SendMessage (agent teams don't run here).
 - **Side A** and **Side B** (Sonnet, medium effort): argue opposite positions (e.g. aggressive vs cautious). Max ~250 words, top 2 changes.
