@@ -81,6 +81,30 @@ function installMock() {
   check('snipe by rating: only the 85 is bought (not 83 or 87)', f.bought.length === 1 && f.bought[0].r === 85, JSON.stringify(f.bought));
   check('filter stays after a buy (not ticked off)', /Gold · Rare/.test(await p.textContent('#fcs [data-r=filters]')));
 
+  // Status strip on every tab, locked state + why-toast, no layout jump when the bot starts
+  await p.click('#fcs [data-tab=settings]');
+  const stripTxt = await p.textContent('#fcs [data-r=strip]');
+  check('status strip shows Idle and usage on a non-Snipe tab', /Idle/.test(stripTxt) && /searches \d+\/\d+ · buys \d+/.test(stripTxt), stripTxt);
+  const stripH = await p.evaluate(() => document.querySelector('#fcs [data-r=strip]').getBoundingClientRect().height);
+  check('status strip is at most 26px tall', stripH > 0 && stripH <= 26, String(stripH));
+  await p.click('#fcs [data-tab=snipe]');
+  check('not locked while idle', !(await p.evaluate(() => document.getElementById('fcs').classList.contains('locked'))));
+  const tabY = () => p.evaluate(() => document.querySelector('#fcs [data-tab=trade]').getBoundingClientRect().top);
+  const y0 = await tabY();
+  await p.click('#fcs [data-a=toggle]');
+  await p.waitForFunction(() => document.getElementById('fcs').classList.contains('locked'), null, { timeout: 10000 });
+  check('tab buttons do not move when the bot starts (job bar overlays)', Math.abs((await tabY()) - y0) < 0.5, `${y0} → ${await tabY()}`);
+  check('status strip shows live state while running', !/^Idle/.test(await p.textContent('#fcs [data-r=s-state]')) || /next search|\d+ s/.test(await p.textContent('#fcs [data-r=strip]')), await p.textContent('#fcs [data-r=strip]'));
+  await p.click('#fcs [data-tab=snipe]');
+  const tgState = () => p.evaluate(() => document.querySelector('#fcs [data-pane=snipe] label.row.tg input').checked);
+  const tg0 = await tgState();
+  await p.click('#fcs [data-pane=snipe] label.row.tg span', { force: true });
+  const toastTxt = await p.textContent('#fcs-toast');
+  check('tapping a locked toggle shows the why-toast', /Stop the bot \(■\) to change this/.test(toastTxt) && await p.evaluate(() => document.getElementById('fcs-toast').classList.contains('show')), toastTxt);
+  check('locked toggle left the setting unchanged', (await tgState()) === tg0);
+  await p.click('#fcs [data-a=toggle]');
+  await p.waitForFunction(() => !document.getElementById('fcs').classList.contains('locked'), null, { timeout: 10000 });
+
   // Profit calculator
   await p.click('#fcs [data-tab=trade]');
   await p.fill('#fcs [data-r=pc-buy]', '45000');
