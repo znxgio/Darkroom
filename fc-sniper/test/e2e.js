@@ -103,6 +103,7 @@ const idle = (p) => p.waitForFunction(() => !document.querySelector('#fcs [data-
   await p.screenshot({ path: `${S}/v1-desktop-snipe.png` });
   await p.click('#fcs [data-tab=history]');
   check('history recorded', (await p.textContent('#fcs [data-r=hist]')).includes('listed 52,000'), (await p.textContent('#fcs [data-r=hist]')).trim().slice(0, 80));
+  check('profit card renders', (await p.textContent('#fcs [data-r=profit]')).includes('💰 Profit'));
   await p.screenshot({ path: `${S}/v1-desktop-history.png` });
   console.log('desktop log:\n  ' + (await log(p)).join('\n  '));
 

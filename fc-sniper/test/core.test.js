@@ -1243,3 +1243,54 @@ test('sessionReport: one line', () => {
     '📊 Session (38 min): 412 searches · 1 bought · 3 lost to faster buyers · 5 near misses · spent 17,000 · 1 listed · est. profit 900 · best hour so far: 21:00');
   assert.equal(c.sessionReport({ searches: 10, buys: 0, missed: 0, spent: 0, listed: 0, profit: 0 }), '📊 Session: 10 searches · 0 bought · 0 lost to faster buyers · spent 0');
 });
+
+test('profitSummary: tax math, unsold coins, periods, per-card ranking, old entries', () => {
+  const now = new Date(2026, 5, 15, 15, 0).getTime();
+  const H = 36e5;
+  const h = [
+    { id: 1, name: 'A', price: 10000, sell: 12000, soldFor: 12000, at: now - 4 * H, soldAt: now - 2 * H },
+    { id: 1, name: 'A', price: 10000, sell: 12000, at: now - 3 * H }, // listed, unsold -> tied up
+    { id: 2, name: 'B', price: 10000, sell: 10500, soldFor: 10000, at: now - 3 * 864e5, soldAt: now - 2 * 864e5 }, // loss
+    { id: 3, name: 'C', price: 5000, sell: 8000, soldFor: 8000, at: now - 20 * 864e5, soldAt: now - 19 * 864e5 }, // old
+    { id: 4, name: 'D', price: 3000, via: 'bid' }, // kept, not a flip
+    { name: 'Legacy', price: 2000 }, // no id, no sale fields
+    null,
+  ];
+  const s = c.profitSummary(h, now);
+  assert.equal(s.today.bought, 2);
+  assert.equal(s.today.spent, 20000);
+  assert.equal(s.today.sold, 1);
+  assert.equal(s.today.received, 11400);
+  assert.equal(s.today.net, 1400);
+  assert.equal(s.today.tiedUp, 10000);
+  assert.equal(s.today.avgHours, 2);
+  assert.equal(s.today.sellThrough, 50);
+  assert.equal(s.week.sold, 2);
+  assert.equal(s.week.net, 1400 + (9500 - 10000));
+  assert.equal(s.all.sold, 3);
+  assert.equal(s.all.received, 11400 + 9500 + 7600);
+  assert.equal(s.all.net, 1400 - 500 + 2600);
+  assert.equal(s.all.bought, 6);
+  assert.equal(s.all.tiedUp, 10000);
+  assert.equal(s.all.sellThrough, 75); // 3 of 4 listed
+  assert.equal(s.days.length, 7);
+  assert.equal(s.days[6].net, 1400);
+  assert.equal(s.days[4].net, -500);
+  assert.deepEqual(s.best.map((x) => x.id), [3, 1, 2]);
+  assert.deepEqual(s.worst, []); // fewer than 6 cards: nothing left over for "worst"
+  assert.equal(s.best[1].bought, 2);
+  assert.equal(s.best[1].sold, 1);
+});
+
+test('profitSummary: best 5 / worst 3 split and empty history', () => {
+  const now = Date.now();
+  const h = [];
+  for (let i = 1; i <= 9; i++) h.push({ id: i, name: `P${i}`, price: 10000, soldFor: 10000 + i * 1000, at: now - 1000, soldAt: now });
+  const s = c.profitSummary(h, now);
+  assert.deepEqual(s.best.map((x) => x.id), [9, 8, 7, 6, 5]);
+  assert.deepEqual(s.worst.map((x) => x.id), [1, 2, 3]);
+  const e = c.profitSummary(undefined, now);
+  assert.equal(e.all.bought, 0);
+  assert.equal(e.all.sellThrough, null);
+  assert.deepEqual(e.best, []);
+});

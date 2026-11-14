@@ -2018,6 +2018,66 @@
     lineupBy: 'meta', // formation coach: 'meta' (position-weighted stats) or 'rating'
   };
 
+  /**
+   * Read-only profit dashboard numbers from the buy history (no market calls).
+   * Bought counts by buy time (at), sold counts by sale time (soldAt). Net =
+   * received after the 5% tax minus what you paid, on sold cards only. "Tied up"
+   * = coins paid for cards you listed (have a sell price) that haven't sold yet;
+   * cards you kept (no listing) aren't flips and aren't counted. Old entries
+   * without soldFor/soldAt/id are tolerated.
+   * -> { today, week, all (each { bought, spent, sold, received, net, tiedUp, sellThrough, avgHours }),
+   *      days: [{ key, net, sold }] (7, oldest first), cards: [...], best: top 5, worst: bottom 3 }
+   */
+  function profitSummary(history, now) {
+    const L = (history || []).filter((e) => e && Number(e.price) > 0);
+    const t = new Date(now);
+    const cut = { today: new Date(t.getFullYear(), t.getMonth(), t.getDate()).getTime(), week: new Date(t.getFullYear(), t.getMonth(), t.getDate() - 6).getTime(), all: -Infinity };
+    const isSold = (e) => Number(e.soldFor) > 0;
+    const sale = (e) => e.soldAt || e.at || 0;
+    const period = (from) => {
+      const bought = L.filter((e) => (e.at || 0) >= from);
+      const sold = L.filter((e) => isSold(e) && sale(e) >= from);
+      const timed = sold.filter((e) => e.soldAt && e.at && e.soldAt >= e.at);
+      const received = sold.reduce((a, e) => a + afterTax(e.soldFor), 0);
+      const paidSold = sold.reduce((a, e) => a + e.price, 0);
+      const listedBought = bought.filter((e) => e.sell > 0);
+      return {
+        bought: bought.length,
+        spent: bought.reduce((a, e) => a + e.price, 0),
+        sold: sold.length,
+        received,
+        net: received - paidSold,
+        tiedUp: bought.filter((e) => !isSold(e) && e.sell > 0).reduce((a, e) => a + e.price, 0),
+        sellThrough: listedBought.length ? Math.round(listedBought.filter(isSold).length / listedBought.length * 100) : null,
+        avgHours: timed.length ? Math.round(timed.reduce((a, e) => a + (e.soldAt - e.at), 0) / timed.length / 36e5 * 10) / 10 : null,
+      };
+    };
+    const days = [];
+    for (let i = 6; i >= 0; i--) {
+      const key = dayKey(new Date(t.getFullYear(), t.getMonth(), t.getDate() - i).getTime());
+      const s = L.filter((e) => isSold(e) && dayKey(sale(e)) === key);
+      days.push({ key, net: s.reduce((a, e) => a + afterTax(e.soldFor) - e.price, 0), sold: s.length });
+    }
+    const m = new Map();
+    for (const e of L) {
+      const k = e.id != null ? e.id : e.name;
+      if (k == null) continue;
+      const c = m.get(k) || { id: k, name: e.name || String(k), rating: e.rating, bought: 0, sold: 0, net: 0, days: 0, timed: 0 };
+      c.bought++;
+      if (isSold(e)) {
+        c.sold++; c.net += afterTax(e.soldFor) - e.price;
+        if (e.soldAt && e.at && e.soldAt >= e.at) { c.days += (e.soldAt - e.at) / 864e5; c.timed++; }
+      }
+      m.set(k, c);
+    }
+    const cards = [...m.values()].filter((c) => c.sold > 0)
+      .map((c) => ({ id: c.id, name: c.name, rating: c.rating, bought: c.bought, sold: c.sold, net: c.net, avgDays: c.timed ? Math.round(c.days / c.timed * 10) / 10 : null }))
+      .sort((a, b) => b.net - a.net);
+    const best = cards.slice(0, 5);
+    const worst = cards.slice(best.length).slice(-3).reverse();
+    return { today: period(cut.today), week: period(cut.week), all: period(cut.all), days, cards, best, worst };
+  }
+
   const core = {
     EA_TAX, MIN_PRICE, MAX_PRICE, DEFAULT_CONFIG,
     priceStep, roundPrice, nextPrice, prevPrice, afterTax, profit, breakEvenSell,
@@ -2027,7 +2087,7 @@
     cardAdvice, sessionReport, bidSkipReason, shortTime, searchReport, auctionReport, planFloor, planBudget, planVerdict, planSummary, robustLow, trendNudge, snipeBase, recordGap, gapStats, smartLevels, gammaSample, betaSample, armPrior, decayArm, upgradeArm, armRate, chooseDiscount, chooseTarget, missWeight, recordArm, deepestArmFor, priceShifted, bestArm, flipPlan, tradeOpts, tradeCap, bidAmount, freeCoins, bidBlock, warCeiling, warSteps, binVsWar, settleSales,
     listSpendable, reserveOk, afterListBuy,
     aggregateListings, hotScore, rankHot, snipeScore, priceBands, provenFlips, flipValue, priceLadder, sbcCostEstimate,
-    addHistory, summarizeHistory, isDiscordWebhook, discordPayload,
+    addHistory, summarizeHistory, profitSummary, isDiscordWebhook, discordPayload,
     squadRating, squadChemistry, topValues, rankUpgrades,
     POS_NAMES, normPos, baseId, FORMATIONS, META_NOTES, squadRatingExact, lineupScore, bestLineup, metaScore, readStats,
     fodderValue, playerCost, qualityOf, COIN_WEIGHT, parseRequirements, solveSbc, sortItem, sbcCheck, solveSbcSearch, matchesReq, marketLevel, planPoints,
@@ -5634,6 +5694,14 @@
   #fcs .hist div:last-child{border-bottom:0}
   #fcs .hist small{color:var(--dim)}#fcs .hist .p{text-align:right;font-weight:700;font-variant-numeric:tabular-nums}
   #fcs .hist .g{color:var(--green)}
+  #fcs .profit .stats b.g,#fcs .profit .hist .g{color:var(--green)}#fcs .profit .stats b.r,#fcs .profit .hist .r{color:var(--red)}
+  #fcs .profit .stats small{display:block;font-size:10px;color:var(--dim)}
+  #fcs .profit h5{margin:10px 0 2px;font-size:12px;color:var(--muted)}
+  #fcs .pbars{display:flex;align-items:flex-end;gap:5px;height:64px;margin:8px 0 4px}
+  #fcs .pbars span{flex:1;height:100%;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;gap:2px}
+  #fcs .pbars i{display:block;width:100%;background:var(--green);border-radius:3px 3px 0 0}
+  #fcs .pbars i.neg{background:var(--red)}
+  #fcs .pbars em{font-style:normal;font-size:10px;color:var(--dim)}
   #fcs .empty{color:var(--dim);text-align:center;padding:14px 0}
   #fcs [hidden]{display:none!important}
   #fcs .list{display:flex;flex-direction:column}
@@ -5806,6 +5874,7 @@
               <p class="note">Never uses your active squad (starters, subs, reserves), loans, evolutions, specials or tradeables unless you allow them, or anyone above your max rating — and checks every player again right before sending. Cheapest fodder first: SBC storage and duplicates, then untradeables. When your club can’t complete one, it adds the cheapest market fill-ins (never cards you own) and shows the cost before buying. Chemistry, league/nation/club and “from league X” requirements are solved with players in the right positions. 💎 points SBCs (a points bar instead of a squad): Estimate shows what your spare cards cover and what the rest would cost, then hands them in 20 at a time.</p></div>
           </section>
           <section class="pane" data-pane="history">
+            <div class="card profit" data-r="profit"></div>
             <div class="card"><h4>Totals</h4><div class="stats" data-r="totals"></div></div>
             <div class="card"><h4>Recent buys</h4><div class="hist" data-r="hist"></div>
               <button class="btn red" data-a="clear-history">Clear history</button></div>
@@ -6736,7 +6805,29 @@
       });
     },
 
+    renderProfit() {
+      const el = this.q('[data-r=profit]');
+      if (!el) return;
+      const ps = profitSummary(engine.history, Date.now());
+      const sg = (n) => `${n > 0 ? '+' : ''}${fmt(n)}`;
+      const cls = (n) => (n > 0 ? 'g' : n < 0 ? 'r' : '');
+      const cell = (label, p) => `<div><b class="${cls(p.net)}">${sg(p.net)}</b>${label}<small>${fmt(p.sold)} sold / ${fmt(p.bought)} bought</small></div>`;
+      const max = Math.max(1, ...ps.days.map((d) => Math.abs(d.net)));
+      const bars = ps.days.map((d) => {
+        const wd = new Date(`${d.key}T12:00:00`).toLocaleDateString([], { weekday: 'narrow' });
+        return `<span title="${esc(d.key)}: ${sg(d.net)}"><i class="${d.net < 0 ? 'neg' : ''}" style="height:${d.net ? Math.max(4, Math.round(Math.abs(d.net) / max * 100)) : 0}%"></i><em>${esc(wd)}</em></span>`;
+      }).join('');
+      const row = (c) => `<div><span>${esc(c.name)}${c.rating ? ` · ${c.rating}` : ''}</span><span class="p ${cls(c.net)}">${sg(c.net)}</span><small>sold ${c.sold}/${c.bought}${c.avgDays != null ? ` · ${c.avgDays}d avg` : ''}</small></div>`;
+      el.innerHTML = `<h4>💰 Profit</h4>
+        <div class="stats">${cell('Today', ps.today)}${cell('7 days', ps.week)}${cell('All time', ps.all)}</div>
+        <p class="note">Tied up in unsold listings: <b>${fmt(ps.all.tiedUp)}</b>${ps.all.sellThrough != null ? ` · sell-through ${ps.all.sellThrough}%` : ''}${ps.all.avgHours != null ? ` · avg ${ps.all.avgHours}h to sell` : ''} · received ${fmt(ps.all.received)} after tax</p>
+        <div class="pbars">${bars}</div>
+        ${ps.best.length ? `<h5>Best cards</h5><div class="hist">${ps.best.map(row).join('')}</div>` : '<p class="empty">No sales yet</p>'}
+        ${ps.worst.length ? `<h5>Worst cards</h5><div class="hist">${ps.worst.map(row).join('')}</div>` : ''}`;
+    },
+
     renderHistory() {
+      this.renderProfit();
       const sum = summarizeHistory(engine.history, Date.now());
       this.q('[data-r=totals]').innerHTML = `
         <div><b>${fmt(sum.today.buys)}</b>Buys today</div><div><b>${fmt(sum.today.spent)}</b>Spent today</div><div><b>${fmt(sum.today.profit)}</b>Profit today</div>
