@@ -71,6 +71,13 @@ Newest learnings go at the end of each section. Dates are when the note was writ
   search correctly; drop/near-miss checks use the exact defId. Special defId = base + n·2^24 (baseId masks 0xFFFFFF).
   User's log was still from 2.4.8 — remind them to re-open the install link after each push.
 
+- 2026-11-14: 2.4.10 card picker became a visual selector at the user's request (rating, portrait from the Web
+  App's own content server — derived from players.json/portrait resource URLs, no market calls — version label,
+  cheapest). Then the user said "add more sniping features / continue smart learning, do what's best" → 2.5.0:
+  session report on stop (+Discord), cardAdvice per card (suggestions only, ≥60 searches; uses probe gaps, hits,
+  auction end prices), snipe-friendly cards from the hot scan (snipeScore: spread & deep listings; helper in worktree).
+  Pushed 2.4.10 alone first (push a specific commit: git push origin <sha>:<branch>) so the fix wasn't held up.
+
 ## 1. How the user works and talks
 - Short, casual messages, often typed on a phone while busy (once while driving). Expect typos; read for intent.
 - Thinks out loud and expects Claude to fill in the details, pick the best option and say why, not list everything.

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FC Sniper
 // @namespace    https://github.com/znxgio/darkroom
-// @version      2.4.10
+// @version      2.5.0
 // @description  Sniper, pack opener, SBC solver and team upgrade advisor for the EA SPORTS FC Ultimate Team Web App, with built-in safety limits.
 // @match        https://www.ea.com/*ultimate-team/web-app*
 // @match        https://www.ea.com/ea-sports-fc/ultimate-team/web-app*
@@ -2045,7 +2045,7 @@
 
   const w = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '2.4.10';
+  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '2.5.0';
   const errText = (e) => (e && e.message ? e.message : String(e));
   const fmt = (n) => Number(n || 0).toLocaleString();
 
@@ -5952,7 +5952,7 @@
             this.log('↻ Old prices forgotten — checking every player and filter again', 'muted');
             return engine.checkPricesNow();
           }
-          case 'refresh-hot': hot.list = []; hot.scannedAt = 0; { const box = this.q('[data-r=hot]'); if (box) box.innerHTML = ''; } this.log('↻ Hot-card list cleared', 'muted'); return;
+          case 'refresh-hot': hot.list = []; hot.snipeList = []; hot.scannedAt = 0; { const box = this.q('[data-r=hot]'); if (box) box.innerHTML = ''; } this.log('↻ Hot-card list cleared', 'muted'); return;
           case 'reset-defaults': {
             if (engine.running || jobs.current) { this.log('Stop the bot before resetting settings', 'warn'); return; }
             if (!w.confirm('Reset all settings to defaults? Your players, filters, history and the learning stay.')) return;
