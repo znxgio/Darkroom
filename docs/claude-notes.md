@@ -239,6 +239,10 @@ Newest learnings go at the end of each section. Dates are when the note was writ
   and the key insight: 10% under is where sub-second flip bots win; snipe inside the tax band (4%) → user said yes.
   One factual slip: claimed 10% under cheapest ≈ 12–15% under the old max (really ~1–3%). Verify advisor numbers.
 
+- 2026-11-14: three background helpers (safety review, UI layout helper, a runner) silently ended without reporting
+  while the user kept sending messages — ListAgents showed them gone. Lesson: check ListAgents when a helper is
+  quiet for long; tell helpers to commit after each step so partial work survives; relaunch promptly.
+
 ## 7. Open work and ideas
 - Shipped in 2.3.1: bidding spend guard (Fable), smart-sniping floor (intern). 2.4.2 fixed: nothing-listed fallback, stop/start run token, SBC hard cap, jobs vs caps. Still open from the Fable review (as of 2.4.2: only minor items — fixed sellMode has no profit floor; price checks don't count toward session maxSearches; special-version id buys):
   "nothing listed" fallback, jobs skipping daily caps, run token for stop/start, SBC fill-in hard cap, learner reward tuning.
