@@ -48,6 +48,7 @@ function installDryMock(opts) {
         const items = [];
         if (c.maxBid > 0) {
           const a = opts.auctionOnce && opts.auctionOnce[id];
+          if (opts.wrongVersion && !served['w' + id]) { served['w' + id] = true; items.push(card(id + 50331648, { bin: 90000, bid: 1000, expires: 20, key: 'wv' })); }
           if (a && !served[id]) { served[id] = true; items.push(card(id, { bin: a.bin, bid: a.bid, expires: a.expires, key: 'a1' })); }
           else items.push(card(id, { bin: opts.lowest[id] + 5000, bid: opts.lowest[id] - 4000, expires: 3000 })); // ends in ~50 min: outside the bid window
         } else {
@@ -69,7 +70,8 @@ function installDryMock(opts) {
   window.repositories = { Item: { getPileSize: () => 100, numItemsInCache: () => 0, isPileFull: () => false } };
   const now = Date.now();
   localStorage.setItem('fc-sniper:config', JSON.stringify({
-    players: opts.players.map((p) => ({ id: p.id, name: p.name, rating: 88, manualMax: p.manualMax, lowest: p.lowest, avg: Math.round(p.lowest * 1.05), floor: p.lowest, checkedAt: now })),
+    players: opts.players.map((p) => (p.none ? { id: p.id, name: p.name, rating: 88, avg: 0, lowest: 0, maxBuy: 0, checkedAt: now }
+      : { id: p.id, name: p.name, rating: 88, manualMax: p.manualMax, lowest: p.lowest, avg: Math.round(p.lowest * 1.05), floor: p.lowest, checkedAt: now })),
     autoPrice: false, bidSnipe: !!opts.bidSnipe, bidWindow: opts.bidWindow || 30, minCoins: 0, spendLimit: 0, buyOnce: false,
     dryTurns: opts.dryTurns, dryAuctionSearches: opts.dryAuctionSearches, maxSearches: opts.maxSearches || 0, pauseEvery: 60, delayMin: 3000, delayMax: 3500,
     snipe246: true, bid248: true, bidOn240: true, trade242: true, reprice244: true,
@@ -150,7 +152,17 @@ async function run(b, opts) {
   check('gate: no Buy Now searches while the bid is open and nothing else is affordable', g.bid && g.buyNowAfter === 0, `buyNow=${g.buyNowAfter} all=${g.afterAll}`);
   check('gate: does not stop while a bid is open', !gate.log.some((l) => /Stopped — can't afford any target/.test(l)), gate.log.filter((l) => /Stopped/.test(l)).join(' | '));
 
-  check('no page errors', !dry.errors.length && !stop.errors.length && !gate.errors.length, [...dry.errors, ...stop.errors, ...gate.errors].join('; '));
+  // 4) review fix: an auction for another version of the player (same base id) is never bid on
+  const wv = await run(b, { coins: 300000, bidSnipe: true, bidWindow: 45, dryTurns: 0, dryAuctionSearches: 60, maxSearches: 4, wrongVersion: true,
+    players: [{ id: 6, name: 'Exact Target', lowest: 18000, manualMax: 16000 }] });
+  check('never bids on another version of the card', wv.D.bids.length === 0 && wv.D.searched.some((x) => x.auction), JSON.stringify(wv.D.bids));
+
+  // 5) review fix: one card with nothing listed + one unaffordable card → stops with a reason (no frozen tab)
+  const fz = await run(b, { coins: 50000, bidSnipe: false, dryTurns: 0, dryAuctionSearches: 60, maxSearches: 20, timeout: 60000,
+    players: [{ id: 7, name: 'None Listed', none: true }, { id: 8, name: 'Pricey Target', lowest: 194000, manualMax: 186000 }] });
+  check('no frozen loop: stops when nothing can be bought (none listed + unaffordable)', fz.log.some((l) => /Stopped — (no player or filter can be bought right now|no player or filter can be traded for profit|can't afford any target)/.test(l)), fz.log.slice(-3).join(' | '));
+
+  check('no page errors', !dry.errors.length && !stop.errors.length && !gate.errors.length && !wv.errors.length && !fz.errors.length, [...dry.errors, ...stop.errors, ...gate.errors, ...wv.errors, ...fz.errors].join('; '));
   await b.close();
   console.log(results.join('\n'));
   if (results.some((x) => x.startsWith('FAIL'))) process.exit(1);

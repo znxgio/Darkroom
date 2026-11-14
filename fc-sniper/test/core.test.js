@@ -1336,3 +1336,9 @@ test('adviceFix: the tap-to-apply action that goes with the advice', () => {
   assert.equal(c.adviceFix({ name: 'S', bin: 300, hits: 0, pct: 4, ends: [5, 6, 4], bidding: false }).type, 'bid');
   assert.deepEqual(c.adviceFix({ name: 'S', id: 7, bin: 300, hits: 0, pct: 4, probes: 30, near: 0 }), { type: 'drop', id: 7, label: 'Remove S from the list' });
 });
+
+test('huntTargets: while trading toward a coin goal only hot cards are traded (never your own list)', () => {
+  const cfg = { ...c.DEFAULT_CONFIG, mode: 'trade', goal: { coins: 100000, label: 'x' }, players: [{ id: 1, name: 'Mine' }, { id: 2, name: 'Hot', hot: true }], filters: [] };
+  assert.deepEqual(c.huntTargets(cfg).map((p) => p.id), [2]);
+  assert.deepEqual(c.huntTargets({ ...cfg, goal: null }).map((p) => p.id).sort(), [1, 2]);
+});

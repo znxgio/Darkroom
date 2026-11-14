@@ -973,7 +973,9 @@
 
   /** Players and filters the sniper hunts: out-of-reach players are left out. */
   function huntTargets(cfg) {
-    return sniperTargets(cfg).filter((p) => !p.outOfReach || p.manualMax);
+    const list = sniperTargets(cfg).filter((p) => !p.outOfReach || p.manualMax);
+    // trading toward an SBC coin goal flips hot cards only — never the players on your own list
+    return cfg.goal && cfg.mode === 'trade' ? list.filter((p) => p.hot) : list;
   }
 
   /** Players are searched in rotation, one per search request. */
@@ -2249,6 +2251,8 @@
       const src = isFilter ? player : cfg;
       // EA searches by the base player id (every version); the exact card is picked from the results (2.4.10)
       if (player && !isFilter) c.maskedDefId = baseId(player.id);
+      // a special card shares its base id with the cheap common card: search only its rating so page 1 isn't all common copies
+      if (player && !isFilter && player.id > 0xFFFFFF && player.rating > 0) { c.ovrMin = player.rating; c.ovrMax = player.rating; }
       if (src.level && src.level !== 'any') c.level = src.level;
       if (src.rarity !== '' && src.rarity !== undefined && src.rarity !== null && !Number.isNaN(parseInt(src.rarity, 10))) c.rarities = [parseInt(src.rarity, 10)];
       if (src.position) { c._position = src.position; if (isFilter) c.position = src.position; }
@@ -3306,7 +3310,9 @@
         if (!gate.ok) return this.stop(gate.reason);
         if (cfg.goal && fut.coins() >= cfg.goal.coins) {
           const g = cfg.goal;
-          cfg.goal = null; this.save();
+          cfg.goal = null;
+          if (g.prevMode) cfg.mode = g.prevMode; // back to the mode you had before the goal
+          this.save(); ui.syncForm();
           await this.finishBids();
           sounds.buy();
           ui.toast(`🎯 Goal reached: ${fmt(fut.coins())}`, 'ok');
@@ -3343,7 +3349,9 @@
         const hunt = huntTargets(cfg);
         const free = cfg.mode === 'alert' ? Infinity : freeCoins(cfg, fut.coins(), [...this.bids.values()]);
         const priceOf = (p) => p.floor || p.lowest || effectiveMaxBuy(p, cfg) || 0;
-        const affordable = hunt.filter((p) => (p.kind === 'filter' ? free >= MIN_PRICE : withinReach(free, priceOf(p))));
+        const reachable = hunt.filter((p) => (p.kind === 'filter' ? free >= MIN_PRICE : withinReach(free, priceOf(p))));
+        const affordable = reachable.filter((p) => !skipped.has(p.id)); // ones with no buy price yet are skipped, not searched
+        if (reachable.length && !affordable.length) return this.stop('no player or filter can be bought right now — none listed / no profitable price; check prices or Min profit');
         if (hunt.length && !affordable.length) {
           const cheapest = Math.min(...hunt.map(priceOf).filter((x) => x > 0)) || 0;
           if (this.bids.size) {
@@ -3391,6 +3399,7 @@
           }
           i++;
           if (huntTargets(cfg).every((p) => skipped.has(p.id))) return this.stop('no player or filter can be traded for profit — check prices / Min profit');
+          await this.wait(300, 'waiting', 'Next target'); // never spin without yielding
           continue;
         }
         const tradeFull = cfg.mode === 'trade' && fut.transferSpace() <= 0;
@@ -3442,7 +3451,7 @@
           if (errors >= SAFETY.maxConsecutiveErrors) return this.halt('errors', `${errors} errors in a row (${res.status})`);
         } else if (bidTurn) {
           errors = 0;
-          if (cfg.liveLog) ui.log(auctionReport({ n: this.stats.searches, name: player && player.name, maxBid: maxBuy, windowSec: cfg.bidWindow, listings: res.listings }), 'muted');
+          if (cfg.liveLog) ui.log(auctionReport({ n: this.stats.searches, name: player && player.name, maxBid: maxBuy, windowSec: cfg.bidWindow, listings: player && player.kind !== 'filter' ? res.listings.filter((l) => !l.defId || l.defId === player.id) : res.listings }), 'muted');
           if (!tradeFull) await this.bidOn(res.listings, player, maxBuy, plan, this.stats.buys - startBuys);
         } else {
           if (cfg.liveLog) {
@@ -3627,7 +3636,9 @@
       const why = new Map(); // reason -> count, for one live-update line
       const note = (r) => why.set(r, (why.get(r) || 0) + 1);
       const seen = this.seenAuctions || (this.seenAuctions = new Map());
-      for (const l of listings.slice().sort((a, b) => (a.expires || 0) - (b.expires || 0))) {
+      // a player search matches every version of the card: bid only on the exact card you added (review fix)
+      const exact = player && player.kind !== 'filter' ? listings.filter((l) => !l.defId || l.defId === player.id) : listings;
+      for (const l of exact.slice().sort((a, b) => (a.expires || 0) - (b.expires || 0))) {
         // remember auctions seen early, to say later what they ended up at (no extra searches)
         const cur = l.currentBid > 0 ? l.currentBid : l.startingBid || 0;
         const was = seen.get(l.tradeId);
@@ -5303,7 +5314,7 @@
       const c = this.snipeList[i];
       if (!c || engine.running) return;
       const players = engine.cfg.players.filter((p) => p.id !== c.id);
-      players.push({ id: c.id, name: c.name, rating: c.rating, avg: c.medianBin, lowest: c.minBin, checkedAt: Date.now() });
+      players.push({ id: c.id, name: c.name, rating: c.rating }); // priced on start like any new player (never hunted at the default max)
       engine.cfg.players = players;
       engine.save();
       ui.renderPlayers(); ui.renderTrade(); ui.renderHot();
@@ -5461,7 +5472,7 @@
               ui.log(`📋 ${want.name} done (${d.n} tonight) — checking it again`, 'ok');
             } else { skip('submitting failed'); break; }
           } finally {
-            cfg.sbcBuyLimit = before.limit; cfg.sbcRepeat = before.repeat;
+            engine.cfg.sbcBuyLimit = before.limit; engine.cfg.sbcRepeat = before.repeat; // engine.cfg may have been replaced meanwhile
           }
         }
       }
@@ -5488,7 +5499,7 @@
       if (!w.confirm(`Start this plan?\n\n${sum.text}${warn}\n\nAny captcha, market limit or logout ends it at once.`)) return;
       if (tooDear.length) ui.log(`📋 Over the plan's budget of ${fmt(room)}, so skipped while the plan runs: ${tooDear.join(', ')}`, 'warn');
       this.state = { startedAt: Date.now(), startCoins: coins, budget: sum.budget, floor: sum.floor, block: 0, blocks: sum.blocks, sbcDone: {}, sbcFailed: [], ended: '',
-        saved: { minCoins: cfg.minCoins, sessionMinutes: cfg.sessionMinutes } };
+        saved: { minCoins: cfg.minCoins, sessionMinutes: cfg.sessionMinutes, sbcBuyLimit: cfg.sbcBuyLimit, sbcRepeat: cfg.sbcRepeat } };
       // the plan's floor and block length only ever tighten your settings; put back at the end
       cfg.minCoins = Math.max(cfg.minCoins || 0, sum.floor);
       cfg.sessionMinutes = Math.min(cfg.planBlockMin, SAFETY.maxSessionMinutes); // one block = one session
@@ -6218,10 +6229,14 @@
           case 'pack-open-all': return packs.open(packs.list.slice());
           case 'sbc-load': return sbc.loadSets();
           case 'sbc-rank': return sbc.rank();
-          case 'plan-start': return plan.active ? plan.cancel() : plan.start();
+          case 'plan-start':
+            if (!plan.active) return plan.start();
+            plan.cancel();
+            if (jobs.current) jobs.cancel(); else if (engine.running) engine.stop('stopped by you');
+            return;
           case 'setup-fix': {
             const it = (this.setupItems || [])[Number(btn.dataset.i)];
-            if (!it || !it.fix || engine.running) return;
+            if (!it || !it.fix || engine.running || plan.active || jobs.current) { if (it && it.fix) this.log('Stop the bot / plan first, then tap the fix', 'warn'); return; }
             if (it.fix.type === 'update') { w.open('https://raw.githubusercontent.com/znxgio/Darkroom/claude/ea-fc-sniping-bot-jdz6vq/fc-sniper/fc-sniper.user.js', '_blank'); return; }
             if (it.fix.type === 'keep') engine.cfg.minCoins = it.fix.value;
             if (it.fix.type === 'bid') engine.cfg.bidSnipe = true;
@@ -6231,7 +6246,7 @@
           }
           case 'advice-fix': {
             const a = (this.adviceItems || [])[Number(btn.dataset.i)];
-            if (!a || !a.fix || engine.running) return;
+            if (!a || !a.fix || engine.running || plan.active || jobs.current) { if (a && a.fix) this.log('Stop the bot / plan first, then apply', 'warn'); return; }
             const f = a.fix;
             if (f.type === 'max') { engine.cfg.players = engine.cfg.players.map((p) => (p.id === f.id ? { ...p, manualMax: f.value } : p)); this.log(`✅ ${f.label}: ${fmt(f.value)}`, 'ok'); }
             if (f.type === 'bid') { engine.cfg.bidSnipe = true; this.log('✅ Auction bidding turned on', 'ok'); }
@@ -6240,18 +6255,21 @@
             engine.save(); this.syncForm(); this.renderPlayers(); this.renderSetup();
             return;
           }
-          case 'goal-cancel': engine.cfg.goal = null; engine.save(); this.renderGoal(); this.log('🎯 Coin goal cancelled', 'muted'); return;
+          case 'goal-cancel':
+            if (engine.running) { this.log('Stop the bot first (■), then cancel the goal', 'warn'); return; }
+            if (engine.cfg.goal && engine.cfg.goal.prevMode) engine.cfg.mode = engine.cfg.goal.prevMode;
+            engine.cfg.goal = null; engine.save(); this.syncForm(); this.renderGoal(); this.log('🎯 Coin goal cancelled', 'muted'); return;
           case 'goal-start': {
             if (engine.running || jobs.current || plan.active || !sbc.short || sbc.short.cost <= freeCoins(engine.cfg, fut.coins(), [])) return;
             const goal = coinGoal(sbc.short.cost, engine.cfg.minCoins, engine.cfg.goalBufferPct);
             this.commit();
-            engine.cfg = { ...engine.cfg, mode: 'trade', goal: { coins: goal, label: sbc.short.name } };
+            engine.cfg = { ...engine.cfg, mode: 'trade', goal: { coins: goal, label: sbc.short.name, prevMode: engine.cfg.mode } };
             engine.save(); this.syncForm(); this.renderGoal();
             this.log(`🎯 Trading toward ${fmt(goal)} for ${sbc.short.name} — it stops by itself when you have it`, 'ok');
             this.showTab('trade');
             return hot.scan(true).then((ok) => {
-              if (ok || engine.cfg.players.length) engine.start();
-              else this.log('No profitable hot cards found right now — try again later or add cards to trade', 'warn');
+              if (ok && !jobs.cancelled && engine.cfg.goal) engine.start();
+              else if (!jobs.cancelled) this.log('No profitable hot cards found right now — the goal stays; try 🎯 again later', 'warn');
             });
           }
           case 'plan-sbc': {
