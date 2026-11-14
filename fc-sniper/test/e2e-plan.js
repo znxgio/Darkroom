@@ -77,8 +77,8 @@ const base = {
   await f.waitForFunction(() => [...document.querySelectorAll('#fcs [data-r=log] div')].some((d) => /Plan ended/.test(d.textContent)), null, { timeout: 60000 });
   const l4 = await log(f);
   check('no budget → plan ends at the coin floor before sniping', l4.some((x) => /Plan ended — coin floor reached/.test(x)) && !l4.some((x) => /📋 Block 1 of/.test(x)), l4.filter((x) => /📋/.test(x)).join(' | '));
-  // 5) SBC ranker + coin goal (2.5.0)
-  const g = await page(b, new Function(`localStorage.setItem('fc-sniper:config', ${JSON.stringify(JSON.stringify({ ...base, sbcBuyLimit: 100, sbcBuyMissing: true, hotAuto: false, minCoins: 119000 } // 1,000 free: the SBC is over both the limit and your coins))});`));
+  // 5) SBC ranker + coin goal (2.5.0) — Keep coins 119,000 leaves 1,000 free, so the SBC is over both the limit and your coins
+  const g = await page(b, new Function(`localStorage.setItem('fc-sniper:config', ${JSON.stringify(JSON.stringify({ ...base, sbcBuyLimit: 100, sbcBuyMissing: true, hotAuto: false, minCoins: 119000 }))});`));
   await g.click('#fcs [data-tab=sbc]');
   await g.click('#fcs [data-a=sbc-rank]');
   await g.waitForFunction(() => [...document.querySelectorAll('#fcs [data-r=log] div')].some((d) => /SBCs ranked/.test(d.textContent)), null, { timeout: 200000 });
