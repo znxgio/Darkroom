@@ -2646,6 +2646,19 @@
   const playerDb = {
     list: null,
     loading: null,
+    /** Player picture the Web App already uses (same EA content server as players.json); '' if not known yet. */
+    portrait(id) {
+      if (!this.pBase) {
+        const urls = (w.performance?.getEntriesByType?.('resource') || []).map((e) => e.name);
+        const u = urls.find((x) => /\/portraits\/[^/?]+\.png/.test(x));
+        if (u) this.pBase = u.replace(/[^/]+\.png(\?.*)?$/, '');
+        else {
+          const m = urls.map((x) => x.match(/^(.*\/web-app\/content\/[^/]+\/\d{4}\/)/)).find(Boolean);
+          if (m) this.pBase = `${m[1]}fut/items/images/mobile/portraits/`;
+        }
+      }
+      return this.pBase ? `${this.pBase}${id}.png` : '';
+    },
     findUrl() {
       const urls = (w.performance?.getEntriesByType?.('resource') || []).map((e) => e.name);
       const direct = urls.find((u) => /\/players(_meta)?\.json(\?|$)/.test(u));
@@ -5483,6 +5496,19 @@
   #fcs .chip .rm{width:26px;height:26px;color:var(--dim);font-size:17px;border-radius:7px}
   #fcs .sugg{position:absolute;left:0;right:0;top:100%;z-index:3;margin-top:4px;background:var(--card2);border:1px solid var(--line);border-radius:10px;max-height:260px;overflow:auto;box-shadow:0 12px 30px rgba(0,0,0,.5)}
   #fcs .sugg:empty{display:none}
+  #fcs .sugg .face{width:30px;height:30px;border-radius:50%;object-fit:cover;background:var(--card);margin-right:9px;flex:none}
+  #fcs .sugg button.who{justify-content:flex-start}#fcs .sugg button.who span{flex:1}
+  #fcs .sugg:has(.vcards){max-height:min(440px,60vh)}
+  #fcs .vcards{display:grid;grid-template-columns:repeat(auto-fill,minmax(108px,1fr));gap:8px;padding:8px}
+  #fcs .sugg button.vcard{display:flex;flex-direction:column;align-items:center;gap:3px;padding:10px 6px 8px;border:1px solid var(--line);border-radius:12px;text-align:center;
+    background:linear-gradient(160deg,#3a3f47,#20252c)}
+  #fcs .sugg button.vcard.rare{background:linear-gradient(160deg,#7a6326,#2e2814);border-color:#a8873a}
+  #fcs .sugg button.vcard.special{background:linear-gradient(160deg,#5b2a86,#1e1430);border-color:#8e5bd1}
+  #fcs .vcard .ovr{font:800 22px/1 -apple-system,system-ui,sans-serif}
+  #fcs .vcard img{width:64px;height:64px;object-fit:contain}
+  #fcs .vcard .ph{width:64px;height:64px;border-radius:50%;background:rgba(255,255,255,.08);display:flex;align-items:center;justify-content:center;font-weight:700}
+  #fcs .vcard .vn{font-size:12px;font-weight:600;line-height:1.2}
+  #fcs .vcard .vp{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
   #fcs .sugg button{display:flex;justify-content:space-between;align-items:center;width:100%;text-align:left;padding:9px 11px;border-bottom:1px solid var(--line)}
   #fcs .sugg button:last-child{border-bottom:0}
   #fcs .sugg button:hover,#fcs .sugg button:focus{background:var(--card)}
@@ -6005,6 +6031,16 @@
       // 2.4.10: the name list only has each player's base card — look on the market for the other versions
       // (Future Stars, TOTW…) and let the user pick the exact card. One normal market search, under the usual limits.
       let versions = null;
+      // pictures load quietly; a missing one falls back to the base card's picture, then disappears
+      const loadPics = () => sugg.querySelectorAll('img[data-src]').forEach((img) => {
+        const alt = img.dataset.alt;
+        img.addEventListener('error', () => {
+          if (alt && img.src !== alt) { img.src = alt; return; }
+          if (img.dataset.ini) { const ph = document.createElement('span'); ph.className = 'ph'; ph.textContent = img.dataset.ini; img.replaceWith(ph); } else img.remove();
+        });
+        img.src = img.dataset.src;
+        img.removeAttribute('data-src');
+      });
       const chooseVersion = async (p) => {
         if (!fut.ready() || engine.running || engine.busy || jobs.current) return add(p);
         input.value = '';
@@ -6021,8 +6057,20 @@
         if (!found.length) { this.log(`${p.name}: no cards listed right now — added the base card (type a card ID to pick another version)`, 'muted'); return add(p); }
         if (found.length === 1 && found[0].defId === p.id) return add(p);
         const rar = Object.fromEntries(fut.rarityOptions().map((o) => [o.v, o.l]));
-        versions = found.map((v) => ({ id: v.defId, name: `${p.name}${v.defId === p.id ? '' : ` (${rar[String(v.rareflag)] || `special ${v.rareflag}`})`}`, rating: v.rating, cheapest: v.cheapest }));
-        sugg.innerHTML = `<div class="msg">Which ${esc(p.name)} card?</div>${versions.map((v, i) => `<button data-ver="${i}"><span>${esc(v.name)}<br><small>${v.cheapest ? `cheapest seen ${fmt(v.cheapest)}` : 'listed'}</small></span><b>${v.rating || ''}</b></button>`).join('')}`;
+        versions = found.map((v) => {
+          const label = rar[String(v.rareflag)] || (v.rareflag > 1 ? 'Special' : v.rareflag ? 'Rare' : 'Common');
+          return { id: v.defId, label, rareflag: v.rareflag, name: `${p.name}${v.defId === p.id ? '' : ` (${label})`}`, rating: v.rating, cheapest: v.cheapest };
+        });
+        const initials = esc(p.name.split(' ').map((x) => x[0]).join('').slice(0, 2).toUpperCase());
+        sugg.innerHTML = `<div class="msg">Which ${esc(p.name)} card? Tap one to hunt it.</div><div class="vcards">${versions.map((v, i) => {
+          const pic = playerDb.portrait(v.id);
+          return `<button class="vcard ${v.rareflag > 1 ? 'special' : v.rareflag ? 'rare' : ''}" data-ver="${i}">
+            <span class="ovr">${v.rating || '?'}</span>
+            ${pic ? `<img alt="" data-src="${esc(pic)}" data-alt="${esc(playerDb.portrait(baseId(v.id)))}" data-ini="${initials}">` : `<span class="ph">${initials}</span>`}
+            <span class="vn">${esc(v.label)}</span>
+            <span class="vp">${v.cheapest ? `from ${fmt(v.cheapest)}` : 'listed'}</span></button>`;
+        }).join('')}</div>`;
+        loadPics();
       };
 
       const add = (p) => {
@@ -6057,8 +6105,9 @@
           if (input.value.trim() !== q) return;
         }
         sugg.innerHTML = results.length
-          ? results.map((p, i) => `<button data-pick="${i}"><span>${esc(p.name)}${p.full && p.full !== p.name ? `<br><small>${esc(p.full)}</small>` : ''}</span><b>${p.rating || ''}</b></button>`).join('')
+          ? results.map((p, i) => `<button class="who" data-pick="${i}">${playerDb.portrait(p.id) ? `<img class="face" alt="" data-src="${esc(playerDb.portrait(p.id))}">` : ''}<span>${esc(p.name)}${p.full && p.full !== p.name ? `<br><small>${esc(p.full)}</small>` : ''}</span><b>${p.rating || ''}</b></button>`).join('')
           : '<div class="msg">No players found</div>';
+        loadPics();
       };
 
       input.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(show, 160); });

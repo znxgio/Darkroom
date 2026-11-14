@@ -28,6 +28,7 @@ async function page(b, mobile) {
     const market = [];
     for (let i = 0; i < 60; i++) market.push({ id: i, def: 231747, bin: 50000 + i * 1000 });
     for (let i = 0; i < 30; i++) market.push({ id: 100 + i, def: 239085, bin: 80000 + i * 1000 });
+    [202, 239, 271, 303].forEach((id, i) => market.push({ id, def: 50331648 + 231747, bin: 120000 + i * 1000, rf: 3, r: 95 })); // a special Mbappé card (ids that land on page 1)
     window.T = { coins: 1000000, calls: [], bought: [], listed: [], snipe: false, failNext: 0, tidy: 0 };
     window.UTSearchCriteriaDTO = function () {}; window.ItemPile = { TRANSFER: 5 };
     window.services = { User: { getUser: () => ({ coins: { amount: T.coins } }) }, Item: {
@@ -36,9 +37,9 @@ async function page(b, mobile) {
         if (T.failNext) { const s = T.failNext; T.failNext = 0; return obs({ success: false, status: s }); }
         let hits = market.slice();
         if (T.snipe) hits.push({ id: 777, def: 231747, bin: 26000 });
-        hits = hits.filter((m) => (!c.maskedDefId || m.def === c.maskedDefId) && (!c.maxBuy || m.bin <= c.maxBuy));
+        hits = hits.filter((m) => (!c.maskedDefId || (m.def & 0xFFFFFF) === c.maskedDefId) && (!c.maxBuy || m.bin <= c.maxBuy)); // EA: base id matches every version
         const items = hits.sort((a, b) => (a.id * 7919) % 101 - (b.id * 7919) % 101).slice(0, 20)
-          .map((m) => ({ definitionId: m.def, rating: 91, _staticData: { name: m.def === 231747 ? 'Mbappé' : 'Haaland' }, _auction: { tradeId: m.id, buyNowPrice: m.bin } }));
+          .map((m) => ({ definitionId: m.def, rating: m.r || 91, rareflag: m.rf ?? 1, _staticData: { name: m.def === 231747 ? 'Mbappé' : 'Haaland' }, _auction: { tradeId: m.id, buyNowPrice: m.bin } }));
         return obs({ success: true, data: { items } });
       },
       bid(item, price) { T.bought.push(price); T.coins -= price; return obs({ success: true }); },
@@ -61,6 +62,11 @@ const idle = (p) => p.waitForFunction(() => !document.querySelector('#fcs [data-
   const p = await page(b, false);
   await p.fill('#fcs [data-r=pq]', 'mbappe');
   await p.click('#fcs .sugg [data-pick]');
+  // 2.4.10: the market shows two Mbappé cards — pick the base (Rare) one
+  await p.waitForSelector('#fcs .sugg [data-ver]', { timeout: 30000 });
+  const vers = await p.$$eval('#fcs .sugg .vcard', (els) => els.map((e) => e.textContent.replace(/\s+/g, ' ').trim()));
+  check('card versions shown after a name pick (special + base)', vers.length === 2 && /95/.test(vers[0]) && /Special/.test(vers[0]) && /91/.test(vers[1]) && /Rare/.test(vers[1]), JSON.stringify(vers));
+  await p.click('#fcs .sugg .vcard:nth-child(2)');
   await p.waitForFunction(() => /avg/.test(document.querySelector('#fcs .chip small')?.textContent || ''), null, { timeout: 60000 });
   await idle(p);
   check('name search + auto price check', (await p.textContent('#fcs .chip .mx')).includes('48,000'), await p.textContent('#fcs .chip'));
@@ -105,6 +111,8 @@ const idle = (p) => p.waitForFunction(() => !document.querySelector('#fcs [data-
   // keep Mbappé on the list for the alert run (Buy each player once ticked him off)
   await p.fill('#fcs [data-r=pq]', 'mbappe');
   await p.press('#fcs [data-r=pq]', 'Enter');
+  await p.waitForSelector('#fcs .sugg .vcard', { timeout: 30000 }); // pick the base card
+  await p.click('#fcs .sugg .vcard:nth-child(2)');
   await p.waitForTimeout(400);
   await p.waitForFunction(() => !document.querySelector('#fcs [data-a=price]').disabled, null, { timeout: 60000 });
   await p.click('#fcs .seg [data-v=alert]');
@@ -151,6 +159,11 @@ const idle = (p) => p.waitForFunction(() => !document.querySelector('#fcs [data-
   await m.waitForSelector('#fcs .sugg [data-pick]');
   await m.screenshot({ path: `${S}/v1-mobile-search.png` });
   await m.tap('#fcs .sugg [data-pick]');
+  await m.waitForSelector('#fcs .sugg .vcard', { timeout: 30000 });
+  await m.screenshot({ path: `${S}/v1-mobile-versions.png` });
+  await m.tap('#fcs .sugg .vcard:nth-child(1)');
+  await m.waitForFunction(() => /Special/.test(document.querySelector('#fcs .chip')?.textContent || ''), null, { timeout: 30000 });
+  check('special card added with its own id (only that card is hunted)', await m.evaluate(() => JSON.parse(localStorage.getItem('fc-sniper:config')).players.some((x) => x.id === 50331648 + 231747)));
   await m.waitForFunction(() => /avg/.test(document.querySelector('#fcs .chip small')?.textContent || ''), null, { timeout: 60000 });
   await m.waitForTimeout(400);
   await m.screenshot({ path: `${S}/v1-mobile-snipe.png` });
