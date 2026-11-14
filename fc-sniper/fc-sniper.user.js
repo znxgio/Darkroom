@@ -262,13 +262,16 @@
     return false;
   }
 
+  /** Shared whole-number formatter (en-US thousands separators) for reports and messages. */
+  const num = (n) => Math.round(n || 0).toLocaleString('en-US');
+
   /**
    * Setup check (2.5.0): what looks off, each with an optional one-tap fix.
    * ctx: { coins, version, latest, targets, reachable, searchesLeft } → [{ level: 'ok'|'warn'|'info', text, fix? }]
    */
   function setupIssues(cfg, ctx) {
     const out = [];
-    const n = (x) => Math.round(x || 0).toLocaleString('en-US');
+    const n = num;
     if (ctx.latest && newerVersion(ctx.latest, ctx.version)) out.push({ level: 'warn', text: `Running ${ctx.version} — ${ctx.latest} is out. Open the install link to update.`, fix: { type: 'update' } });
     else if (ctx.latest) out.push({ level: 'ok', text: `Running ${ctx.version} (latest)` });
     else out.push({ level: 'info', text: `Running ${ctx.version} (couldn't check for updates from here)` });
@@ -328,7 +331,7 @@
 
   /** One-line summary when a session ends. s: engine.stats; o: { minutes, near, bestHour } */
   function sessionReport(s, o = {}) {
-    const n = (x) => Math.round(x || 0).toLocaleString('en-US');
+    const n = num;
     return `📊 Session${o.minutes ? ` (${o.minutes} min)` : ''}: ${n(s.searches)} searches · ${n(s.buys)} bought · ${n(s.missed)} lost to faster buyers`
       + `${o.near ? ` · ${n(o.near)} near misses` : ''} · spent ${n(s.spent)}${s.listed ? ` · ${n(s.listed)} listed · est. profit ${n(s.profit)}` : ''}`
       + `${o.bestHour !== undefined && o.bestHour !== null ? ` · best hour so far: ${o.bestHour}:00` : ''}`;
@@ -366,8 +369,6 @@
    * Live update after a Buy Now search (2.4.8): what came back and how close it was.
    * o: { n, name, max, searchMax, probe, listings: [{ buyNowPrice }], cheapest (price-checked) }
    */
-  const num = (n) => Math.round(n || 0).toLocaleString('en-US');
-
   function searchReport(o) {
     const prices = (o.listings || []).map((l) => l.buyNowPrice).filter((x) => x > 0).sort((a, b) => a - b);
     const under = prices.filter((x) => x <= o.max).length;
