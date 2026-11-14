@@ -4876,9 +4876,24 @@
         const squad = await fut.activeSquad();
         if (!squad) throw new Error("couldn't read your active squad, so nothing was used — try again, or turn off “Never use my active squad”");
         const slots = typeof squad.getPlayers === 'function' ? squad.getPlayers() : squad.getFieldPlayers();
+        const field = (typeof squad.getFieldPlayers === 'function' ? squad.getFieldPlayers() : slots).slice(0, 11).filter((s) => { const it = s && (s.item || s); return it && it.definitionId; });
+        const names = [];
         for (const s of slots) {
           const it = s && (s.item || s);
-          if (it && it.definitionId) { this.guard.itemIds.add(it.id); this.guard.defIds.add(it.definitionId); }
+          if (it && it.definitionId) { this.guard.itemIds.add(it.id); this.guard.defIds.add(it.definitionId); names.push(fut.toPlayer(it).name); }
+        }
+        // 2.5.2 fail closed: a half-loaded squad (names "---", cards that aren't in your club) protects nothing — stop instead
+        const clubIds = new Set(this.raw.map((p) => p.itemId));
+        const notInClub = [...this.guard.itemIds].filter((id) => !clubIds.has(id)).length;
+        const blank = names.filter((n) => /^(-+|#\d+)?$/.test(String(n || '').trim())).length;
+        const problem = field.length < 7 ? `only ${field.length} players in your starting XI were readable`
+          : blank ? `${blank} of your squad's cards haven't loaded yet (names show as “---”)`
+          : notInClub > 2 ? `${notInClub} of your squad's cards didn't match your club`
+          : '';
+        if (problem) {
+          debugLog.push(`squad guard refused: ${problem} · field ${field.length} · guard ${this.guard.itemIds.size} · notInClub ${notInClub} · blank ${blank}`);
+          this.raw = null; // read the club again next time
+          throw new Error(`your squad didn't load fully (${problem}), so nothing was used — open Squads in the Web App, wait a few seconds, then try again`);
         }
       }
       const why = { notPlayer: 0, loanOrEvo: 0, squad: 0, rating: 0, special: 0, tradeable: 0 };

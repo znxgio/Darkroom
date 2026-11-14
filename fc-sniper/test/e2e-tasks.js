@@ -74,6 +74,15 @@ const idle = (p, ms = 150000) => p.waitForFunction(() => !document.querySelector
   const reqText = await p.textContent('#fcs [data-r=sbc]');
   check('requirements shown readable', /Team rating ≥ 84/.test(reqText) && /2× Rare/.test(reqText), reqText.slice(0, 160));
   await idle(p);
+  // 2.5.2: a half-loaded squad (names "---") must stop the SBC — nothing used, nothing submitted
+  const subsBefore0 = await p.evaluate(() => T.submitted.length);
+  await p.evaluate(() => T.squadItems.forEach((it) => { it._realName = it._staticData.name; it._staticData.name = '---'; }));
+  await p.click('#fcs [data-a=sbc-solve][data-i="0"]');
+  await p.waitForFunction(() => /squad didn't load fully/.test(document.querySelector('#fcs [data-r=log]').textContent), null, { timeout: 60000 }).catch(() => {});
+  const halfLog = await log(p);
+  check('half-loaded squad: SBC refuses, nothing used', halfLog.some((l) => /squad didn't load fully/.test(l)) && !(await p.$('#fcs [data-a=sbc-submit]')) && (await p.evaluate(() => T.submitted.length)) === subsBefore0, halfLog.slice(-2).join(' | '));
+  await p.evaluate(() => T.squadItems.forEach((it) => { it._staticData.name = it._realName; }));
+  await idle(p);
   await p.click('#fcs [data-a=sbc-solve][data-i="0"]');
   await p.waitForSelector('#fcs [data-a=sbc-submit]', { timeout: 60000 });
   await idle(p);

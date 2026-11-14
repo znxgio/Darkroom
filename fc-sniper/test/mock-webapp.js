@@ -44,6 +44,7 @@ function installMock() {
   ['GK', 'RB', 'CB', 'CB', 'CB', 'LB', 'RWB', 'LWB', 'CDM', 'CDM', 'CM', 'CAM', 'CAM', 'RM', 'LM', 'RW', 'LW', 'CF', 'CF', 'ST', 'ST']
     .forEach((pos, i) => club.push(mk(600 + i, 83 + (i % 4), { pos: ids[pos], league: 13, nation: 10 + (i % 4), name: `Bench ${pos} ${i}` })));
   window.T = { piles: { club: [], storage: [], transfer: [], discarded: [] }, unassigned: [], submitted: [], searches: [], opened: 0 };
+  window.T.squadItems = squadItems; // tests can make the squad look half-loaded
   const squad = {
     getFieldPlayers: () => squadItems.map((item, index) => ({ index, item, position: { typeName: posList[index] } })),
     getPlayers: () => [...squadItems, ...benchItems].map((item, index) => ({ index, item })),
