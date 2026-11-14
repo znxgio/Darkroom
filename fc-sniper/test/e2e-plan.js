@@ -86,7 +86,7 @@ const base = {
   const firstSet = await g.$eval('#fcs [data-r=sbc] .li', (e) => e.textContent.replace(/\s+/g, ' '));
   check('SBC ranker: summary line and club-solvable SBCs first', lg5.some((x) => /🧩 SBCs ranked: [1-9]\d* likely from your club/.test(x)) && /from your club/.test(firstSet), `${lg5.filter((x) => /ranked/.test(x))[0]} | first: ${firstSet.slice(0, 80)}`);
   // an SBC that needs more buys than allowed → goal card → trade toward it
-  const eliteI = await g.$$eval('#fcs [data-a=sbc-solve]', (bs) => bs.findIndex((x) => /Elite/.test(x.closest('.li') ? x.closest('.li').textContent : '')));
+  const eliteI = await g.$$eval('#fcs [data-a=sbc-solve]', (bs) => bs.findIndex((x) => /Break Away/.test(x.closest('.li') ? x.closest('.li').textContent : '')));
   const btns = await g.$$('#fcs [data-a=sbc-solve]');
   if (eliteI >= 0) await btns[eliteI].click();
   await g.waitForFunction(() => !document.querySelector('#fcs [data-r=goal]').hidden, null, { timeout: 120000 }).catch(() => {});
