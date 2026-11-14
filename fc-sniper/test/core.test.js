@@ -1294,3 +1294,20 @@ test('profitSummary: best 5 / worst 3 split and empty history', () => {
   assert.equal(e.all.sellThrough, null);
   assert.deepEqual(e.best, []);
 });
+
+test('coinGoal: SBC cost + Keep coins + buffer, rounded up to 1,000', () => {
+  assert.equal(c.coinGoal(120000, 0, 12), 135000);
+  assert.equal(c.coinGoal(120000, 0, 0), 120000);
+  assert.equal(c.coinGoal(20000, 5000, 12), 28000);
+  assert.equal(c.coinGoal(120000, 0, undefined), 135000, 'default 12 %');
+});
+
+test('sbcLikely / sbcOrder: club-solvable (repeatable first), then buys, points, manual', () => {
+  const p = (players, extra = {}) => ({ constraints: { players }, unsupported: [], ...extra });
+  assert.equal(c.sbcLikely(p(11), 30), 'club');
+  assert.equal(c.sbcLikely(p(11), 5), 'buys');
+  assert.equal(c.sbcLikely(p(11, { points: true }), 50), 'points');
+  assert.equal(c.sbcLikely(p(11, { unsupported: ['x'] }), 50), 'manual');
+  const sets = [{ n: 'm', likely: 'manual' }, { n: 'b', likely: 'buys' }, { n: 'c', likely: 'club' }, { n: 'cr', likely: 'club', repeatable: true }, { n: 'u' }];
+  assert.deepEqual(sets.sort(c.sbcOrder).map((x) => x.n), ['cr', 'c', 'b', 'm', 'u']);
+});

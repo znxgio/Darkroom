@@ -95,6 +95,9 @@ async function run(b, opts) {
   const auc = (id) => tw.L.searched.filter((x) => x.id === id && x.bid > 0).length;
   check('both players get auction searches', auc(1) >= 1 && auc(2) >= 1, JSON.stringify(tw.L.searched.map((x) => `${x.id}${x.bid ? 'A' : 'B'}`)));
   check('live updates: a line per search and per auction search', tw.log.filter((l) => /^🔍 \d+\./.test(l)).length >= 2 && tw.log.some((l) => /^🔨 \d+\. Auctions/.test(l)), tw.log.filter((l) => /^🔍|^🔨/.test(l)).slice(0, 4).join(' | '));
+  // 3c) coin goal already met → stops at once and says so
+  const gl = await run(b, { prices: { 1: 60000, 2: 30000 }, reserve: false, maxSearches: 6, extra: { goal: { coins: 1000, label: '84+ Upgrade' } } });
+  check('coin goal reached stops the bot and says which SBC', gl.log.some((l) => /Stopped — 🎯 goal reached — [\d,]+ coins; open the SBC tab and tap Solve for 84\+ Upgrade/.test(l)) && gl.cfg.goal === null, gl.log.slice(-3).join(' | '));
   // 4) smart sniping: copies at 17,000 (5.6% under 18,000) — only the 4% arm can buy; most buys are lost races
   const sm = await run(b, { prices: { 2: 18000 }, snipe: { 2: 17000 }, failEvery: 3, reserve: false, autoPrice: true, spendLimit: 0, maxSearches: 40, timeout: 500000,
     players: [{ id: 2, name: 'Second Target', rating: 87 }], extra: { buyOnce: false, maxBuys: 2, smartProbeEvery: 2, discount: 4, smartPrice: true } }); // learner never goes closer than Snipe % under avg

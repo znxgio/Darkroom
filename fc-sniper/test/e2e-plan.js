@@ -77,6 +77,29 @@ const base = {
   await f.waitForFunction(() => [...document.querySelectorAll('#fcs [data-r=log] div')].some((d) => /Plan ended/.test(d.textContent)), null, { timeout: 60000 });
   const l4 = await log(f);
   check('no budget → plan ends at the coin floor before sniping', l4.some((x) => /Plan ended — coin floor reached/.test(x)) && !l4.some((x) => /📋 Block 1 of/.test(x)), l4.filter((x) => /📋/.test(x)).join(' | '));
+  // 5) SBC ranker + coin goal (2.5.0)
+  const g = await page(b, new Function(`localStorage.setItem('fc-sniper:config', ${JSON.stringify(JSON.stringify({ ...base, sbcBuyLimit: 100, sbcBuyMissing: true, hotAuto: false }))});`));
+  await g.click('#fcs [data-tab=sbc]');
+  await g.click('#fcs [data-a=sbc-rank]');
+  await g.waitForFunction(() => [...document.querySelectorAll('#fcs [data-r=log] div')].some((d) => /SBCs ranked/.test(d.textContent)), null, { timeout: 200000 });
+  const lg5 = await log(g);
+  const firstSet = await g.$eval('#fcs [data-r=sbc] .li', (e) => e.textContent.replace(/\s+/g, ' '));
+  check('SBC ranker: summary line and club-solvable SBCs first', lg5.some((x) => /🧩 SBCs ranked: [1-9]\d* likely from your club/.test(x)) && /from your club/.test(firstSet), `${lg5.filter((x) => /ranked/.test(x))[0]} | first: ${firstSet.slice(0, 80)}`);
+  // an SBC that needs more buys than allowed → goal card → trade toward it
+  const eliteI = await g.$$eval('#fcs [data-a=sbc-solve]', (bs) => bs.findIndex((x) => /Elite/.test(x.closest('.li') ? x.closest('.li').textContent : '')));
+  const btns = await g.$$('#fcs [data-a=sbc-solve]');
+  if (eliteI >= 0) await btns[eliteI].click();
+  await g.waitForFunction(() => !document.querySelector('#fcs [data-r=goal]').hidden, null, { timeout: 120000 }).catch(() => {});
+  const goalTxt = await g.$eval('#fcs [data-r=goal]', (e) => (e.hidden ? '' : e.textContent.replace(/\s+/g, ' ')));
+  check('coin goal offered when an SBC needs more than you can spend', /Not enough coins yet/.test(goalTxt) && /Trade toward [\d,]+/.test(goalTxt), goalTxt.slice(0, 160) || `eliteI=${eliteI}`);
+  if (goalTxt) {
+    await g.click('#fcs [data-a=goal-start]');
+    await g.waitForTimeout(1500);
+    const gc = await g.evaluate(() => JSON.parse(localStorage.getItem('fc-sniper:config')));
+    check('trading toward the goal: Trade mode with the goal saved', gc.mode === 'trade' && gc.goal && gc.goal.coins >= 1000, JSON.stringify({ mode: gc.mode, goal: gc.goal }));
+  }
+  check('no page errors (SBC ranker/goal)', !g.errors.length, g.errors.join('; '));
+
   check('no page errors', !q.errors.length && !r.errors.length && !f.errors.length, [...q.errors, ...r.errors, ...f.errors].join('; '));
 
   await b.close();

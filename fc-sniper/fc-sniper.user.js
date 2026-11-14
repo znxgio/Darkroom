@@ -224,6 +224,33 @@
     return `${head} · ${tips.join(' · ')}`;
   }
 
+  /**
+   * SBC ranker (2.5.0): how likely a challenge is to come from your club, from the players that fit its rating/quality
+   * rules (a quick check — the solver still has the final word). Returns 'club' | 'buys' | 'points' | 'manual'.
+   */
+  function sbcLikely(parsed, fitting) {
+    if (!parsed) return 'manual';
+    if (parsed.points) return 'points';
+    if ((parsed.unsupported || []).length) return 'manual';
+    return fitting >= (parsed.constraints.players || 11) ? 'club' : 'buys';
+  }
+
+  /** Order for the SBC list: likely from your club first (repeatables first), then needs buys, points, manual. */
+  function sbcOrder(a, b) {
+    const w = { club: 0, buys: 1, points: 2, manual: 3 };
+    const ra = a.likely ? w[a.likely] : 4; const rb = b.likely ? w[b.likely] : 4;
+    return ra - rb || (!!b.repeatable - !!a.repeatable) || 0;
+  }
+
+  /**
+   * Coin goal for an SBC you can't afford yet (2.5.0): the buys + Keep coins, plus a buffer so it can be done again,
+   * rounded up to 1,000. 120,000 with 12% → 135,000 (rounded up).
+   */
+  function coinGoal(cost, minCoins, bufferPct) {
+    const buf = Math.min(100, Math.max(0, bufferPct ?? 12));
+    return Math.ceil(((cost || 0) + (minCoins || 0)) * (1 + buf / 100) / 1000 - 1e-9) * 1000; // (no float overshoot)
+  }
+
   /** One-line summary when a session ends. s: engine.stats; o: { minutes, near, bestHour } */
   function sessionReport(s, o = {}) {
     const n = (x) => Math.round(x || 0).toLocaleString('en-US');
@@ -2005,7 +2032,9 @@
     planSbcs: [], // [{ id, name }] in order — only these, never others
     planSbcMax: 3, // completions per break
     planSbcCoins: 2000, // max coins of buys per SBC
-    planKeepAlive: true, // one light request every ~10 min in breaks so EA doesn't log you out
+    planKeepAlive: true,
+    goalBufferPct: 12, // 2.5.0: an SBC coin goal aims this % above what it needs, so it can be done again
+    goal: null, // { coins, label } while trading toward an SBC // one light request every ~10 min in breaks so EA doesn't log you out
     sbcBuyMissing: true, // buy cheap fill-ins from the market when your club can't complete an SBC
     sbcUseUnassigned: true, // move Unassigned players to club / SBC storage first so SBCs can use them
     sbcBuyLimit: 20000, // max coins of fill-ins per SBC
@@ -2084,7 +2113,7 @@
     cacheBustBid, jitter, pickTargets, planSellPrice, classifyStatus,
     normalizeName, parsePlayerDb, searchPlayers, cardVersions, playerForIteration, migrateConfig, filterSummary, sniperTargets, LEAGUES,
     findMarketPrice, robustPrice, searchBudget, addPriceSample, prunePrices, priceTrend, trendText, lookupUrl, planMaxBuy, effectiveMaxBuy, withinReach, huntTargets,
-    cardAdvice, sessionReport, bidSkipReason, shortTime, searchReport, auctionReport, planFloor, planBudget, planVerdict, planSummary, robustLow, trendNudge, snipeBase, recordGap, gapStats, smartLevels, gammaSample, betaSample, armPrior, decayArm, upgradeArm, armRate, chooseDiscount, chooseTarget, missWeight, recordArm, deepestArmFor, priceShifted, bestArm, flipPlan, tradeOpts, tradeCap, bidAmount, freeCoins, bidBlock, warCeiling, warSteps, binVsWar, settleSales,
+    sbcLikely, sbcOrder, coinGoal, cardAdvice, sessionReport, bidSkipReason, shortTime, searchReport, auctionReport, planFloor, planBudget, planVerdict, planSummary, robustLow, trendNudge, snipeBase, recordGap, gapStats, smartLevels, gammaSample, betaSample, armPrior, decayArm, upgradeArm, armRate, chooseDiscount, chooseTarget, missWeight, recordArm, deepestArmFor, priceShifted, bestArm, flipPlan, tradeOpts, tradeCap, bidAmount, freeCoins, bidBlock, warCeiling, warSteps, binVsWar, settleSales,
     listSpendable, reserveOk, afterListBuy,
     aggregateListings, hotScore, rankHot, snipeScore, priceBands, provenFlips, flipValue, priceLadder, sbcCostEstimate,
     addHistory, summarizeHistory, profitSummary, isDiscordWebhook, discordPayload,
@@ -3227,6 +3256,16 @@
         if (limit) { await this.finishBids(); return this.stop(limit); }
         const gate = this.gate();
         if (!gate.ok) return this.stop(gate.reason);
+        if (cfg.goal && fut.coins() >= cfg.goal.coins) {
+          const g = cfg.goal;
+          cfg.goal = null; this.save();
+          await this.finishBids();
+          sounds.buy();
+          ui.toast(`🎯 Goal reached: ${fmt(fut.coins())}`, 'ok');
+          notify.discord('info', { title: '🎯 Coin goal reached', text: `${fmt(fut.coins())} coins — open the SBC tab and tap Solve for ${g.label}` });
+          ui.renderGoal();
+          return this.stop(`🎯 goal reached — ${fmt(fut.coins())} coins; open the SBC tab and tap Solve for ${g.label}`);
+        }
         const listMode = cfg.mode === 'buy';
         const spendable = listMode ? listSpendable(cfg, fut.coins()) : fut.coins() - cfg.minCoins;
         if (listMode && cfg.spendLimit > 0 && spendable < MIN_PRICE) { await this.finishBids(); return this.stop(`spend limit reached (${fmt(cfg.listSpent)} of ${fmt(cfg.spendLimit)})`); }
@@ -3341,6 +3380,7 @@
             return `${p.name} ${fmt(mx)} vs cheapest ${fmt(p.lowest)} (${Math.max(0, Math.round((1 - mx / p.lowest) * 100))}% under)${verdict}${g.probes ? ` · near-miss checks ${g.probes}, ${g.near} found${g.near ? ` (avg ${g.avgPct}% under the cheapest)` : ''}` : ''}`;
           });
           if ((this.stats.searches - startSearches) % 100 === 0) this.advice().forEach((l) => ui.log(l, 'muted'));
+          if (cfg.goal) ui.log(`🎯 Goal ${fmt(cfg.goal.coins)} · now ${fmt(fut.coins())} (${Math.min(100, Math.round(fut.coins() / cfg.goal.coins * 100))}%) — ${cfg.goal.label}`, 'muted');
           ui.log(`🔎 Still sniping — ${this.stats.searches - startSearches} searches (${[...beat.per].map(([n, c]) => `${n} ${c}`).join(', ')}) · ${beat.under} listing${beat.under === 1 ? '' : 's'} under your max${gaps.length ? ` · ${gaps.join(' · ')}` : ''}`, 'muted');
         }
 
@@ -4045,6 +4085,41 @@
       });
     },
 
+    /** Rank every SBC by a quick club check (no market searches; one challenge list per SBC, paced). */
+    async rank() {
+      return jobs.run('Ranking SBCs', async () => {
+        if (!this.sets.length) {
+          const r = await fut.sbcSets();
+          jobs.check(r, 'loading SBCs');
+          this.sets = r.sets.filter((x) => !(typeof x.isComplete === 'function' && x.isComplete()));
+        }
+        const club = await this.pool();
+        const counts = { club: 0, buys: 0, points: 0, manual: 0 };
+        for (const [i, set] of this.sets.slice(0, 40).entries()) {
+          engine.setStatus('pricing', `Checking SBCs… ${i + 1}/${Math.min(40, this.sets.length)}`);
+          const r = await fut.challenges(set);
+          jobs.check(r, 'loading challenges');
+          const list = r.list.filter((ch) => !(typeof ch.isCompleted === 'function' && ch.isCompleted()) && ch.status !== 'COMPLETED');
+          const entries = list.map((challenge) => {
+            const reqs = fut.requirements(challenge);
+            const parsed = parseRequirements(reqs, fut.requiredPlayers(challenge));
+            parsed.points = reqs.some((x) => x.key === 'ACADEMY_PLAYER_SLOTTING');
+            const k = parsed.constraints;
+            const fitting = club.filter((p) => p.rating >= (k.minOvr || 0) && p.rating <= (k.maxOvr || 99) && qualityOf(p.rating) >= (k.minQuality || 0) && qualityOf(p.rating) <= (k.maxQuality || 9)).length;
+            return { challenge, reqs, parsed, likely: sbcLikely(parsed, fitting) };
+          });
+          this.open.set(set.id, entries);
+          const best = entries.map((e) => e.likely).sort((a, b) => sbcOrder({ likely: a }, { likely: b }))[0];
+          set.likely = best || 'manual';
+          counts[set.likely]++;
+          await jobs.pause(700, 1400);
+        }
+        this.sets.sort(sbcOrder);
+        ui.renderSbc();
+        ui.log(`🧩 SBCs ranked: ${counts.club} likely from your club · ${counts.buys} need buys · ${counts.points} points · ${counts.manual} manual (a quick check — Solve has the final word)`, 'ok');
+      });
+    },
+
     raw: null, // club + storage players, read once per session
     guard: null, // { itemIds, defIds } of your whole active squad
 
@@ -4459,7 +4534,11 @@
           if (solution) {
             buys = solution.players.filter((p) => p.market);
             const total = buys.reduce((a, p) => a + p.price, 0);
-            if (total > (cfg.sbcBuyLimit || 0)) { ui.log(`Cheapest solution needs ${fmt(total)} of buys — over your limit of ${fmt(cfg.sbcBuyLimit)}`, 'warn'); solution = null; buys = []; }
+            if (total > (cfg.sbcBuyLimit || 0)) {
+              ui.log(`Cheapest solution needs ${fmt(total)} of buys — over your limit of ${fmt(cfg.sbcBuyLimit)}`, 'warn');
+              this.short = { name: set.name, cost: total, overLimit: true };
+              solution = null; buys = [];
+            }
           }
         }
         if (!solution) {
@@ -4474,6 +4553,8 @@
         const buyTotal = buys.reduce((a, p) => a + p.price, 0);
         this.points = null;
         this.plan = { set, entry, solution, slots, buys, buyTotal };
+        // more buys than free coins → offer to trade toward it
+        this.short = buyTotal > freeCoins(cfg, fut.coins(), []) ? { name: set.name, cost: buyTotal } : null;
         ui.log(`Solution: ${solution.players.length} players · rating ${solution.rating || '—'}${parsed.constraints.needsSearch ? ` · chemistry ${solution.chem ?? '—'}` : ''}${buys.length ? ` · buy ${buys.length} for ${fmt(buyTotal)}` : ''} — review it, then submit`, 'ok');
         ui.renderSbc();
       });
@@ -5430,6 +5511,7 @@
     ],
     trade: [
       ['undercut', 'List % under market avg', 'number'],
+      ['goalBufferPct', 'SBC coin goal: aim this % above the cost', 'number'],
       ['minProfit', 'Min profit per card (after tax)', 'number'],
       ['minProfitPct', 'Min profit % of market avg', 'number'],
       ['listDuration', 'List for', 'select', DURATIONS],
@@ -5871,9 +5953,11 @@
               <p class="note">New items go to your club, untradeable duplicates to SBC storage, tradeable duplicates to your transfer list. Specials are never quick-sold.</p></div>
           </section>
           <section class="pane" data-pane="sbc">
+            <div class="card" data-r="goal" hidden></div>
             <div class="card plan" data-r="plan" hidden></div>
             <div class="card"><h4>Squad Building Challenges</h4><div data-r="sbc"><p class="empty">Load SBCs to see which ones can be solved from your club.</p></div>
-              <div class="two"><button class="btn blue" data-a="sbc-load">Load SBCs</button><button class="btn" data-a="refresh-sbc">↻ Refresh SBCs</button></div></div>
+              <div class="two"><button class="btn blue" data-a="sbc-load">Load SBCs</button><button class="btn" data-a="refresh-sbc">↻ Refresh SBCs</button></div>
+              <button class="btn blue" data-a="sbc-rank">🧩 Rank SBCs (from your club first)</button></div>
             <div class="card">${FIELDS.sbc.map(fieldHtml).join('')}
               <p class="note">Never uses your active squad (starters, subs, reserves), loans, evolutions, specials or tradeables unless you allow them, or anyone above your max rating — and checks every player again right before sending. Cheapest fodder first: SBC storage and duplicates, then untradeables. When your club can’t complete one, it adds the cheapest market fill-ins (never cards you own) and shows the cost before buying. Chemistry, league/nation/club and “from league X” requirements are solved with players in the right positions. 💎 points SBCs (a points bar instead of a squad): Estimate shows what your spare cards cover and what the rest would cost, then hands them in 20 at a time.</p></div>
           </section>
@@ -6069,7 +6153,22 @@
           }
           case 'pack-open-all': return packs.open(packs.list.slice());
           case 'sbc-load': return sbc.loadSets();
+          case 'sbc-rank': return sbc.rank();
           case 'plan-start': return plan.active ? plan.cancel() : plan.start();
+          case 'goal-cancel': engine.cfg.goal = null; engine.save(); this.renderGoal(); this.log('🎯 Coin goal cancelled', 'muted'); return;
+          case 'goal-start': {
+            if (engine.running || jobs.current || plan.active || !sbc.short) return;
+            const goal = coinGoal(sbc.short.cost, engine.cfg.minCoins, engine.cfg.goalBufferPct);
+            this.commit();
+            engine.cfg = { ...engine.cfg, mode: 'trade', goal: { coins: goal, label: sbc.short.name } };
+            engine.save(); this.syncForm(); this.renderGoal();
+            this.log(`🎯 Trading toward ${fmt(goal)} for ${sbc.short.name} — it stops by itself when you have it`, 'ok');
+            this.showTab('trade');
+            return hot.scan(true).then((ok) => {
+              if (ok || engine.cfg.players.length) engine.start();
+              else this.log('No profitable hot cards found right now — try again later or add cards to trade', 'warn');
+            });
+          }
           case 'plan-sbc': {
             const set = sbc.sets[Number(btn.dataset.i)];
             if (!set || plan.active) return;
@@ -6547,7 +6646,8 @@
       const box = this.q('[data-r=sbc]');
       box.innerHTML = sbc.sets.length ? `<div class="list">${sbc.sets.slice(0, 80).map((set, i) => {
         const loaded = sbc.open.get(set.id);
-        const rep = set.repeatable || set.timesCompleted ? `<span class="tag">${set.timesCompleted || 0} done</span>` : '';
+        const rep = (set.repeatable || set.timesCompleted ? `<span class="tag">${set.timesCompleted || 0} done</span>` : '')
+          + ({ club: '<span class="tag ok">✅ from your club</span>', buys: '<span class="tag no">needs buys</span>', points: '<span class="tag">💎 points</span>', manual: '<span class="tag">manual</span>' }[set.likely] || '');
         const sub = loaded ? `<div class="sub">${loaded.length ? loaded.map((e, j) => {
           const ok = !e.parsed.unsupported.length && !e.parsed.points;
           const tagHtml = e.parsed.points ? '<span class="tag">💎 points</span>' : ok ? '<span class="tag ok">auto</span>' : '<span class="tag no">manual</span>';
@@ -6559,6 +6659,7 @@
           ${loaded ? '' : `<button class="mini" data-a="sbc-set" data-i="${i}">View</button>`}<button class="mini" data-a="plan-sbc" data-i="${i}">${(engine.cfg.planSbcs || []).some((x) => String(x.id) === String(set.id)) ? '✓ Plan' : '＋ Plan'}</button></div>${sub}`;
       }).join('')}</div>` : '<p class="empty">Load SBCs to see which ones can be solved from your club.</p>';
 
+      this.renderGoal();
       const plan = this.q('[data-r=plan]');
       const p = sbc.plan;
       const pt = sbc.points;
@@ -6769,6 +6870,27 @@
           <a class="mini" href="${lookupUrl(o.name)}" target="_blank" rel="noopener" title="Look up on FUT.GG">🔎</a>
           ${o.source === 'club' ? '<span class="tag ok">owned</span>' : o.source === 'sbc' ? '<span class="tag">SBC</span>' : `<button class="mini go2" data-a="snipe-opt" data-s="${si}" data-o="${oi}">Snipe</button>`}</div>`).join('')}</div>`
           : `<p class="empty">${r.done ? 'No better option found within budget' : 'Looking…'}</p>`}</div>`).join('');
+    },
+
+    /** SBC coin goal: offer when an SBC needs more coins than you have; progress while trading toward it. */
+    renderGoal() {
+      const box = this.q('[data-r=goal]');
+      if (!box) return;
+      const cfg = engine.cfg;
+      const coins = fut.ready() ? fut.coins() : 0;
+      if (cfg.goal) {
+        const pct = Math.min(100, Math.round(coins / cfg.goal.coins * 100));
+        box.hidden = false;
+        box.innerHTML = `<h4>🎯 Coin goal — ${esc(cfg.goal.label)}</h4><p class="note">Goal ${fmt(cfg.goal.coins)} · now ${fmt(coins)} (${pct}%). Trade mode flips hot cards until you have it, then stops and tells you.</p>
+          <div class="bar"><div><i style="width:${pct}%"></i></div></div><button class="btn red" data-a="goal-cancel">Cancel the goal</button>`;
+        return;
+      }
+      const sh = sbc.short;
+      if (!sh) { box.hidden = true; box.innerHTML = ''; return; }
+      const goal = coinGoal(sh.cost, cfg.minCoins, cfg.goalBufferPct);
+      box.hidden = false;
+      box.innerHTML = `<h4>🎯 Not enough coins yet</h4><p class="note">${esc(sh.name)} needs about ${fmt(sh.cost)} of buys${sh.overLimit ? ` (over your SBC buy limit of ${fmt(cfg.sbcBuyLimit)})` : ''}; you have ${fmt(coins)}. Trade toward ${fmt(goal)} (${cfg.goalBufferPct ?? 12}% extra so you can do it again).</p>
+        <button class="btn blue" data-a="goal-start">🎯 Trade toward ${fmt(goal)}</button>`;
     },
 
     renderPlan() {
