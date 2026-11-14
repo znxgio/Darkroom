@@ -199,6 +199,39 @@
    * What to bid on an auction about to end, or 0 to skip it.
    * l: { expires (seconds left), currentBid, startingBid, buyNowPrice, bidState }
    */
+  /**
+   * Plain advice for one card from what the bot saw (2.5.0). It only suggests — your settings never change by themselves.
+   * o: { name, bin (Buy Now searches), hits, pct (your max, % under the cheapest), probes, near, nearPct (avg % under the cheapest
+   *      of listings just above your max), ends (auction prices near the end, % under the cheapest), bidding }
+   */
+  function cardAdvice(o) {
+    if (!o || (o.bin || 0) < 60) return '';
+    const head = `💡 ${o.name}: ${o.hits || 0} bought in ${o.bin} searches at ${o.pct}% under`;
+    if (o.hits > 0) return `${head} — it's landing; keep going`;
+    const tips = [];
+    if (o.near >= 3 && o.nearPct !== null && o.nearPct !== undefined && o.nearPct < o.pct - 0.5) {
+      tips.push(`listings come in around ${Math.max(0, o.nearPct)}% under the cheapest — a Snipe % near ${Math.max(1, Math.round(o.nearPct))} would catch some (smaller saving each)`);
+    } else if ((o.probes || 0) >= 10 && !o.near) {
+      tips.push(`nothing came within 4% above your max in ${o.probes} checks — mistakes this deep are rare on this card; a cheaper or less popular card snipes better`);
+    }
+    const e = o.ends || [];
+    if (e.length >= 3) {
+      const avg = Math.round(e.reduce((a, x) => a + x, 0) / e.length * 10) / 10;
+      if (avg >= o.pct) tips.push(`auctions end ~${avg}% under the cheapest${o.bidding ? '' : ' — turning on auction bidding may land one'}`);
+      else tips.push(`auctions end ~${avg}% under the cheapest, above your max too`);
+    }
+    if (!tips.length) tips.push('no buys yet — give it more searches, or try a cheaper card');
+    return `${head} · ${tips.join(' · ')}`;
+  }
+
+  /** One-line summary when a session ends. s: engine.stats; o: { minutes, near, bestHour } */
+  function sessionReport(s, o = {}) {
+    const n = (x) => Math.round(x || 0).toLocaleString('en-US');
+    return `📊 Session${o.minutes ? ` (${o.minutes} min)` : ''}: ${n(s.searches)} searches · ${n(s.buys)} bought · ${n(s.missed)} lost to faster buyers`
+      + `${o.near ? ` · ${n(o.near)} near misses` : ''} · spent ${n(s.spent)}${s.listed ? ` · ${n(s.listed)} listed · est. profit ${n(s.profit)}` : ''}`
+      + `${o.bestHour !== undefined && o.bestHour !== null ? ` · best hour so far: ${o.bestHour}:00` : ''}`;
+  }
+
   /** Why bidAmount() won't bid on an auction ('' = it would). */
   function bidSkipReason(l, maxBid, windowSec = 30) {
     if (!l || !(l.expires > 0)) return 'ended';
@@ -1972,7 +2005,7 @@
     cacheBustBid, jitter, pickTargets, planSellPrice, classifyStatus,
     normalizeName, parsePlayerDb, searchPlayers, cardVersions, playerForIteration, migrateConfig, filterSummary, sniperTargets, LEAGUES,
     findMarketPrice, robustPrice, searchBudget, addPriceSample, prunePrices, priceTrend, trendText, lookupUrl, planMaxBuy, effectiveMaxBuy, withinReach, huntTargets,
-    bidSkipReason, shortTime, searchReport, auctionReport, planFloor, planBudget, planVerdict, planSummary, robustLow, trendNudge, snipeBase, recordGap, gapStats, smartLevels, gammaSample, betaSample, armPrior, decayArm, upgradeArm, armRate, chooseDiscount, chooseTarget, missWeight, recordArm, deepestArmFor, priceShifted, bestArm, flipPlan, tradeOpts, tradeCap, bidAmount, freeCoins, bidBlock, warCeiling, warSteps, binVsWar, settleSales,
+    cardAdvice, sessionReport, bidSkipReason, shortTime, searchReport, auctionReport, planFloor, planBudget, planVerdict, planSummary, robustLow, trendNudge, snipeBase, recordGap, gapStats, smartLevels, gammaSample, betaSample, armPrior, decayArm, upgradeArm, armRate, chooseDiscount, chooseTarget, missWeight, recordArm, deepestArmFor, priceShifted, bestArm, flipPlan, tradeOpts, tradeCap, bidAmount, freeCoins, bidBlock, warCeiling, warSteps, binVsWar, settleSales,
     listSpendable, reserveOk, afterListBuy,
     aggregateListings, hotScore, rankHot, priceBands, provenFlips, flipValue, priceLadder, sbcCostEstimate,
     addHistory, summarizeHistory, isDiscordWebhook, discordPayload,
@@ -2871,6 +2904,39 @@
       ui.log(`Stopped — ${reason}`, 'warn');
       ui.setRunning(false);
       if (/limit|verification|blocked|errors|logged out|coins/i.test(reason)) notify.discord('stop', { reason });
+      // 2.5.0: a short report of the session, with advice per card
+      try {
+        if (this.stats && this.stats.searches > 0) {
+          const lines = this.report();
+          lines.forEach((l, i) => ui.log(l, i ? 'muted' : 'ok'));
+          notify.discord('info', { title: '📊 Session report', text: lines.join('\n').replace(/[📊💡] /g, '') });
+        }
+      } catch (e) { debugLog.push(`report: ${errText(e)}`); }
+    },
+
+    /** Session summary + one advice line per card with enough data. */
+    report() {
+      const cfg = this.cfg;
+      const minutes = this.session ? Math.round((Date.now() - this.session.startedAt) / 60e3) : 0;
+      const hrs = Object.entries(learn.data.hours || {}).filter(([, h]) => h.n >= 10).map(([h, x]) => [Number(h), x.good / x.n]).sort((a, b) => b[1] - a[1]);
+      const lines = [sessionReport(this.stats, { minutes, near: this.nearCount || 0, bestHour: hrs.length && hrs[0][1] > 0 ? hrs[0][0] : null })];
+      return lines.concat(this.advice());
+    },
+
+    /** Advice lines for the cards hunted this session (only with ≥ 60 Buy Now searches). */
+    advice() {
+      const cfg = this.cfg;
+      const out = [];
+      for (const p of sniperTargets(cfg).filter((x) => x.kind !== 'filter')) {
+        const ps = this.pstats && this.pstats.get(`${p.kind || 'p'}:${p.id}`);
+        const ref = p.floor || p.lowest;
+        if (!ps || !ref) continue;
+        const g = gapStats((learn.data.targets[learn.key(p)] || {}).gaps);
+        const line = cardAdvice({ name: p.name, bin: ps.bin, hits: ps.hits, pct: Math.max(0, Math.round((1 - effectiveMaxBuy(p, cfg) / ref) * 100)),
+          probes: g.probes, near: g.near, nearPct: g.avgPct, ends: ps.ends, bidding: !!cfg.bidSnipe });
+        if (line) out.push(line);
+      }
+      return out;
     },
 
     /** Sleep that wakes early when stopped, and shows a countdown. */
@@ -3068,6 +3134,7 @@
       this.turns = new Map();
       this.dry = new Map();
       this.pstats = new Map();
+      this.nearCount = 0;
       this.idleSaid = false;
       this.nextUpkeep = cfg.mode === 'trade' ? Date.now() : Date.now() + cfg.upkeepMinutes * 60e3;
       // Bids restored after a reload: collect them as soon as they have ended.
@@ -3194,6 +3261,7 @@
             const verdict = ps ? ` · ${p.name}: Buy Now ${ps.hits}/${ps.bin} at ≤ ${fmt(mx)}${ps.ends.length ? ` · auctions near the end ~${Math.round(ps.ends.reduce((a, x) => a + x, 0) / ps.ends.length * 10) / 10}% under the cheapest (${ps.ends.length})` : ''}` : '';
             return `${p.name} ${fmt(mx)} vs cheapest ${fmt(p.lowest)} (${Math.max(0, Math.round((1 - mx / p.lowest) * 100))}% under)${verdict}${g.probes ? ` · near-miss checks ${g.probes}, ${g.near} found${g.near ? ` (avg ${g.avgPct}% under the cheapest)` : ''}` : ''}`;
           });
+          if ((this.stats.searches - startSearches) % 100 === 0) this.advice().forEach((l) => ui.log(l, 'muted'));
           ui.log(`🔎 Still sniping — ${this.stats.searches - startSearches} searches (${[...beat.per].map(([n, c]) => `${n} ${c}`).join(', ')}) · ${beat.under} listing${beat.under === 1 ? '' : 's'} under your max${gaps.length ? ` · ${gaps.join(' · ')}` : ''}`, 'muted');
         }
 
@@ -3230,7 +3298,7 @@
           if (probe) {
             outcome.probe = true;
             const above = mine.filter((l) => l.buyNowPrice > maxBuy && l.buyNowPrice <= searchMax).map((l) => l.buyNowPrice);
-            if (above.length) { outcome.near = 1; outcome.nearPrice = Math.min(...above); }
+            if (above.length) { outcome.near = 1; outcome.nearPrice = Math.min(...above); this.nearCount = (this.nearCount || 0) + 1; }
           }
           for (const t of targets) {
             if (!this.running) break;

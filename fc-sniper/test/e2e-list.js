@@ -85,6 +85,7 @@ async function run(b, opts) {
   check('out-of-reach player flagged', o.log.some((l) => /⏭️ Top Target: out of reach/.test(l)), o.log.filter((l) => /Top Target/.test(l)).join(' | '));
   check('out-of-reach player never sniped (searches go to the affordable one)', !o.L.searched.some((x) => x.id === 1 && x.max && x.max < 1e6) && o.L.searched.filter((x) => x.id === 2).length >= 20, JSON.stringify(o.L.searched.slice(-3)));
   check('"still sniping" summary every 25 searches', o.log.some((l) => /🔎 Still sniping — 25 searches \(Second Target 25\) · 0 listings under your max · Second Target 16,000 vs cheapest 18,000 \(11% under\)/.test(l)), o.log.filter((l) => /🔎/.test(l)).join(' | '));
+  check('session report when the session ends', o.log.some((l) => /^📊 Session \(\d+ min\): \d+ searches · 0 bought/.test(l)), o.log.filter((l) => /📊/.test(l))[0] || o.log.slice(-2).join(' | '));
   const om = o.learn && o.learn.targets && o.learn.targets['p:2'];
   check('default: max measured from the cheapest listing, said in the log', o.log.some((l) => /Second Target: cheapest 18,000 · market 18,000 · \d+ listed · trend: not enough history yet → max 16,000 \(10% under the cheapest\)/.test(l)), o.log.filter((l) => /Second Target: /.test(l))[0]);
   check('default: learner only picks targets (searches recorded at your Snipe %, no deeper levels)', om && Object.keys(om.arms).join() === '10' && Array.isArray(om.gaps) && om.gaps.length >= 1, om && JSON.stringify({ arms: Object.keys(om.arms), gaps: (om.gaps || []).length }));

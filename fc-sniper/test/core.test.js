@@ -1216,3 +1216,18 @@ test('cardVersions: the different cards of one player from market listings', () 
   ], 269404);
   assert.deepEqual(v.map((x) => [x.defId, x.cheapest, x.count]), [[FS, 48750, 2], [269404, 1500, 1]]);
 });
+
+test('cardAdvice: plain suggestions from what the bot saw; never with too little data', () => {
+  assert.equal(c.cardAdvice({ name: 'Salma', bin: 40, hits: 0, pct: 4 }), '');
+  assert.match(c.cardAdvice({ name: 'Salma', bin: 120, hits: 2, pct: 4 }), /2 bought in 120 searches at 4% under — it's landing/);
+  assert.match(c.cardAdvice({ name: 'Salma', bin: 300, hits: 0, pct: 4, probes: 30, near: 6, nearPct: 1.2 }), /listings come in around 1.2% under the cheapest — a Snipe % near 1/);
+  assert.match(c.cardAdvice({ name: 'Salma', bin: 300, hits: 0, pct: 4, probes: 30, near: 0 }), /nothing came within 4% above your max in 30 checks — .*cheaper or less popular card/);
+  assert.match(c.cardAdvice({ name: 'Salma', bin: 300, hits: 0, pct: 4, ends: [5, 6, 4], bidding: false }), /auctions end ~5% under the cheapest — turning on auction bidding may land one/);
+  assert.match(c.cardAdvice({ name: 'Salma', bin: 300, hits: 0, pct: 4, ends: [2, 3, 1], bidding: true }), /auctions end ~2% under the cheapest, above your max too/);
+});
+
+test('sessionReport: one line', () => {
+  assert.equal(c.sessionReport({ searches: 412, buys: 1, missed: 3, spent: 17000, listed: 1, profit: 900 }, { minutes: 38, near: 5, bestHour: 21 }),
+    '📊 Session (38 min): 412 searches · 1 bought · 3 lost to faster buyers · 5 near misses · spent 17,000 · 1 listed · est. profit 900 · best hour so far: 21:00');
+  assert.equal(c.sessionReport({ searches: 10, buys: 0, missed: 0, spent: 0, listed: 0, profit: 0 }), '📊 Session: 10 searches · 0 bought · 0 lost to faster buyers · spent 0');
+});
