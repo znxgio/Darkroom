@@ -278,6 +278,12 @@ Newest learnings go at the end of each section. Dates are when the note was writ
   and split searches between Buy Now and auctions by what lands. Never chase outbids or bid at/above Buy Now.
 - Other ideas offered: lock players, exact-card sniping, objectives claim, Discord daily summary, profit chart.
 
+### Overnight 2026-11-14 (2.5.0 final round)
+- Fable review fixes applied: cfg mutated in place (Object.assign) so a running loop never holds a stale copy; a buy whose answer timed out but whose coins dropped counts as bought; won auctions booked once (saved `fc-sniper:booked`), wins the bot never bid on just go to the club; on the watchlist a closed auction we don't lead is LOST (isSold can mean "closed"); auction searches use a low cache-bust minBuy (150–500) so cheap auctions show; 💎 points buys never go under Keep coins; 🎯 goal start reverts the mode when the hot scan finds nothing.
+- findMarketPrice returns `card` (one listing); priceCheck reads rating/stats off it when the player has none. Watch: don't reuse the name `sample` there (it's the median-sample option).
+- Analyst is rule-based on purpose (user: "not a bot that spews nonsense"): analystAnswer(q, ctx) in core, unit-tested; `.ask` card is exempt from the locked-tap toast so it works while the bot runs (club read still needs ■).
+- Helpers merged: status strip/locked toasts/job bar overlay; market overlay (`mktView`, pass-through wrapper on searchTransferMarket, skipped when fut.ownSearch) + M meta badges. Both only tested at desktop width.
+
 ## 8. Debate protocol (user's design, 2026-11-12)
 Use when Opus is unsure about an idea or design. Relay it with background subagents + SendMessage (agent teams don't run here).
 - **Side A** and **Side B** (Sonnet, medium effort): argue opposite positions (e.g. aggressive vs cautious). Max ~250 words, top 2 changes.
