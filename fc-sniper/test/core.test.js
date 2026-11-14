@@ -1429,3 +1429,48 @@ test('sbcPaths: club-only vs club + buys, cheapest by coins + value of your card
   assert.equal(c.sbcPaths(null, null, 0).best, '');
   assert.equal(c.sbcPaths(null, { players: [{ rating: 85, market: true, price: 5000 }] }, 1000).short, 4000);
 });
+
+// ---- 🧠 Analyst ----
+{
+  const mk = (id, name, rating, positions, stats, extra = {}) => ({ id, name, rating, positions, stats, nationId: 14, leagueId: 13, teamId: 1, ...extra });
+  const S = (pac, sho, pas, dri, def, phy) => ({ pac, sho, pas, dri, def, phy });
+  const xi = [
+    ['GK', mk(1, 'Jordan Pickford', 84, ['GK'], null)],
+    ['RB', mk(2, 'Reece James', 84, ['RB'], S(80, 70, 80, 80, 82, 80))],
+    ['CB', mk(3, 'John Stones', 85, ['CB'], S(70, 60, 75, 75, 85, 78))],
+    ['CB', mk(4, 'Marc Guéhi', 83, ['CB'], S(72, 40, 65, 68, 84, 80))],
+    ['LB', mk(5, 'Luke Shaw', 82, ['LB'], S(78, 60, 78, 78, 80, 78))],
+    ['CDM', mk(6, 'Declan Rice', 87, ['CDM', 'CM'], S(75, 70, 82, 80, 85, 85))],
+    ['CM', mk(7, 'Jude Bellingham', 90, ['CM', 'CAM'], S(80, 85, 85, 88, 75, 85))],
+    ['CM', mk(8, 'Kobbie Mainoo', 78, ['CM'], S(70, 65, 75, 78, 70, 70))],
+    ['RW', mk(9, 'Bukayo Saka', 88, ['RW'], S(86, 82, 84, 88, 50, 70))],
+    ['LW', mk(10, 'Phil Foden', 87, ['LW', 'CAM'], S(82, 84, 86, 90, 50, 62))],
+    ['ST', mk(11, 'Harry Kane', 90, ['ST'], S(70, 93, 85, 83, 50, 82))],
+  ].map(([position, player]) => ({ position, player }));
+  const club = [mk(20, 'Cole Palmer', 88, ['CM', 'CAM', 'RW'], S(78, 86, 88, 89, 50, 66)), mk(21, 'Joe Gomez', 79, ['CB'], S(78, 40, 60, 65, 80, 78))];
+  const ctx = { squad: xi, club, summary: { rating: 86, chem: 30, eachChem: [3, 3, 3, 3, 3, 3, 3, 1, 3, 3, 3], formation: '4-3-3' }, priceOf: (p) => (p.id === 9 ? 120000 : 0) };
+
+  test('analyst: names found by surname, accents ignored', () => {
+    assert.deepEqual(c.namedPlayers('compare guehi vs stones', xi.map((x) => x.player)).map((p) => p.id), [4, 3]);
+    assert.equal(c.namedCoins('best cb under 50k'), 50000);
+    assert.equal(c.namedCoins('1.2m'), 1200000);
+    assert.equal(c.namedPos('who is the best striker'), 'ST');
+  });
+  test('analyst: replace X uses the club and needs it first', () => {
+    assert.equal(c.analystAnswer('what should replace Mainoo?', { ...ctx, club: null }).needs, 'club');
+    const a = c.analystAnswer('what should replace Mainoo?', ctx);
+    assert.match(a.title, /Mainoo/);
+    assert.ok(a.lines.some((l) => /Cole Palmer/.test(l)), a.lines.join('\n'));
+  });
+  test('analyst: compare, team, price, best, help', () => {
+    const cmp = c.analystAnswer('Rice vs Bellingham', ctx);
+    assert.match(cmp.title, /Rice vs Jude Bellingham|Declan Rice vs Jude Bellingham/);
+    const t = c.analystAnswer("how's my team?", ctx);
+    assert.ok(t.lines.some((l) => /Weakest spots/.test(l)) && t.lines.some((l) => /Low chemistry: CM Kobbie Mainoo/.test(l)), t.lines.join('\n'));
+    assert.match(c.analystAnswer('price of Saka', ctx).lines[0], /120,000/);
+    assert.match(c.analystAnswer('best CB I own', ctx).lines[0], /Stones/);
+    assert.match(c.analystAnswer('tell me a joke', ctx).title, /I can answer/);
+    assert.match(c.analystAnswer('anything', { squad: [] }).title, /team first/);
+    assert.match(c.analystPrompt('who?', ctx), /ST Harry Kane 90/);
+  });
+}

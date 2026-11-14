@@ -1845,6 +1845,165 @@
     return { options, best: best.key, short: Math.max(0, best.buy - Math.max(0, freeCoins || 0)) };
   }
 
+  // ---- 🧠 Analyst (2.5.0): answers questions about YOUR team from the bot's own data (rule-based, no AI, no guessing) ----
+
+  const POS_WORDS = {
+    striker: 'ST', st: 'ST', cf: 'CF', forward: 'ST', winger: 'RW', rw: 'RW', lw: 'LW', rm: 'RM', lm: 'LM',
+    cam: 'CAM', cm: 'CM', midfielder: 'CM', cdm: 'CDM', dm: 'CDM', cb: 'CB', 'centre back': 'CB', 'center back': 'CB',
+    defender: 'CB', rb: 'RB', lb: 'LB', fullback: 'RB', 'full back': 'RB', gk: 'GK', keeper: 'GK', goalkeeper: 'GK',
+  };
+  const normTxt = (x) => String(x || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+
+  /** Players named in a question (full name or surname, whole words), longest names first, each base player once. */
+  function namedPlayers(q, list) {
+    const t = ` ${normTxt(q).replace(/[^a-z0-9]+/g, ' ')} `;
+    const hits = [];
+    for (const p of list) {
+      if (!p || !p.name || /^#/.test(p.name)) continue;
+      const full = normTxt(p.name).replace(/[^a-z0-9]+/g, ' ').trim();
+      const sur = full.split(' ').pop();
+      const at = t.indexOf(` ${full} `) >= 0 ? t.indexOf(` ${full} `) : (sur.length >= 3 ? t.indexOf(` ${sur} `) : -1);
+      if (at >= 0) hits.push({ p, at, len: full.length });
+    }
+    const seen = new Set();
+    return hits.sort((a, b) => a.at - b.at || b.len - a.len).filter((h) => { const k = baseId(h.p.id ?? 0) || h.p.name; if (seen.has(k)) return false; seen.add(k); return true; }).map((h) => h.p);
+  }
+
+  /** A position named in a question ("best striker", "my CB"), or ''. */
+  function namedPos(q) {
+    const t = ` ${normTxt(q).replace(/[^a-z ]+/g, ' ')} `;
+    for (const [w, pos] of Object.entries(POS_WORDS).sort((a, b) => b[0].length - a[0].length)) if (t.includes(` ${w} `) || t.includes(` ${w}s `)) return pos;
+    return '';
+  }
+
+  /** A coin amount in a question ("under 50k", "1.2m", "30000"), or 0. */
+  function namedCoins(q) {
+    const m = normTxt(q).match(/(\d+(?:[.,]\d+)?)\s*(k|m)?\b/);
+    if (!m) return 0;
+    const n = Number(m[1].replace(',', '.'));
+    return Math.round(m[2] === 'm' ? n * 1e6 : m[2] === 'k' ? n * 1e3 : n);
+  }
+
+  /**
+   * Answers one question. ctx: { squad: [{ position, player }], club: [players] | null (null = not read yet),
+   * priceOf(p) → coins or 0 }. Returns { title, lines: [text], needs: 'club'|'' } — `needs` asks the caller to read
+   * the club (no market searches) and ask again. Every answer comes from your squad/club/price data; when the bot
+   * doesn't know, it says so instead of making something up.
+   */
+  function analystAnswer(q, ctx) {
+    const squad = (ctx.squad || []).filter((x) => x && x.player);
+    const club = ctx.club;
+    const num = (n) => Math.round(n || 0).toLocaleString('en-US');
+    const priceOf = ctx.priceOf || (() => 0);
+    const t = normTxt(q);
+    if (!squad.length) return { title: 'I need your team first', lines: ['Tap ↻ Update my team (one quick read, no market searches), then ask again.'], needs: '' };
+    const pool = [...squad.map((x) => x.player), ...(club || [])];
+    const named = namedPlayers(q, pool);
+    const slotOf = (p) => squad.find((x) => baseId(x.player.id) === baseId(p.id));
+    const bestPosOf = (p) => (slotOf(p) ? slotOf(p).position : (p.positions || [])[0] || '');
+    const who = (p, pos) => `${p.name} ${p.rating || '?'}${pos ? ` (${pos})` : ''}`;
+    const pick = (p, pos) => (proPick(p, pos) ? ' 🏆' : '');
+    const inXI = new Set(squad.map((x) => baseId(x.player.id)));
+
+    // compare A and B
+    if (named.length >= 2 && /\b(vs|versus|compare|or|better)\b/.test(t)) {
+      const [a, b] = named;
+      const pos = namedPos(q) || bestPosOf(a) || bestPosOf(b);
+      const c = comparePlayers(a, b, pos);
+      const diffs = c.rows.filter((r) => r.better && typeof r.a === 'number' && typeof r.b === 'number' && r.label !== 'Meta score')
+        .map((r) => ({ ...r, d: Math.abs(r.a - r.b) })).sort((x, y) => y.d - x.d).slice(0, 3);
+      const win = c.winner === 'a' ? a : c.winner === 'b' ? b : null;
+      return {
+        title: `${a.name} vs ${b.name} at ${pos}`,
+        lines: [
+          win ? `${win.name} is better at ${pos}: meta score ${c.winner === 'a' ? c.a.total : c.b.total} vs ${c.winner === 'a' ? c.b.total : c.a.total}.` : `Too close to call at ${pos} (meta score ${c.a.total} vs ${c.b.total}) — pick on chemistry or feel.`,
+          ...diffs.map((r) => `${r.label}: ${r.a} vs ${r.b} (${r.better === 'a' ? a.name : b.name} +${r.d})`),
+          ...(!a.stats || !b.stats ? ['(Stats aren’t known for one of them yet, so this leans on rating.)'] : []),
+        ],
+        needs: '',
+      };
+    }
+
+    // what should replace X / upgrade X
+    const xiNamed = named.filter((p) => slotOf(p));
+    const askPrice = /\b(price|worth|cost|value|sell)\b/.test(t);
+    if (xiNamed.length && !askPrice && (/\b(replace|upgrade|instead|sub|swap|bench|drop|better than)\b/.test(t) || named.length === 1)) {
+      if (!club) return { title: 'Reading your club…', lines: [], needs: 'club' };
+      const p = xiNamed[0];
+      const idx = (ctx.squad || []).findIndex((x) => x && x.player && baseId(x.player.id) === baseId(p.id));
+      const pos = ctx.squad[idx].position;
+      const max = namedCoins(q);
+      const opts = rankUpgrades(ctx.squad, idx, club.filter((c) => !inXI.has(baseId(c.id))), { by: 'meta', budget: max || 100000 }).slice(0, 3);
+      const cur = metaScore(p, pos);
+      const lines = [`${who(p, pos)} scores ${cur} at ${pos}${pick(p, pos)}.`];
+      if (opts.length) {
+        lines.push('From your own club (free):');
+        opts.forEach((o) => lines.push(`• ${who(o)} — score ${metaScore(o, pos)} (+${o.playerGain})${o.chemGain ? `, chemistry ${o.chemGain > 0 ? '+' : ''}${o.chemGain}` : ''}${o.why && o.why.length ? ` · ${o.why.slice(0, 2).join('; ')}` : ''}${pick(o, pos)}`));
+      } else lines.push(`Nobody in your club beats him at ${pos}. Find upgrades checks the market${max ? ` (set the upgrade budget to ${num(max)})` : ''} — it costs a few searches.`);
+      return { title: `Replacing ${p.name}`, lines, needs: '' };
+    }
+
+    // best POS (in my club / under N)
+    const pos = namedPos(q);
+    if (pos && /\b(best|who|top|should play|play)\b/.test(t)) {
+      if (!club) return { title: 'Reading your club…', lines: [], needs: 'club' };
+      const max = namedCoins(q);
+      const list = pool.filter((p) => (p.positions || []).includes(pos)).filter((p, i, a) => a.findIndex((x) => baseId(x.id) === baseId(p.id)) === i)
+        .map((p) => ({ p, s: metaScore(p, pos) })).sort((a, b) => b.s - a.s).slice(0, 4);
+      if (!list.length) return { title: `Best ${pos}`, lines: [`You don’t own anyone who plays ${pos}.`], needs: '' };
+      return {
+        title: `Best ${pos} you own`,
+        lines: [...list.map(({ p, s }) => `• ${who(p)} — score ${s}${inXI.has(baseId(p.id)) ? ' · in your XI' : ''}${pick(p, pos)}`),
+          ...(max ? [`Market players under ${num(max)}: Find upgrades with that budget checks them (a few searches).`] : [])],
+        needs: '',
+      };
+    }
+
+    // price of X
+    if (named.length && /\b(price|worth|cost|value|sell)\b/.test(t)) {
+      const p = named[0];
+      const v = priceOf(p);
+      return { title: `${p.name}’s price`, lines: [v ? `Last seen around ${num(v)} coins (from the bot’s own price checks).` : `The bot hasn’t priced ${p.name} yet — add him on the Snipe tab and tap ↻ Fresh prices.`], needs: '' };
+    }
+
+    // how's my team / weakest spots
+    if (/\b(team|squad|weak|weakest|improve|rate)\b/.test(t)) {
+      const rows = (ctx.squad || []).map((x, i) => x && x.player && { i, pos: x.position, p: x.player, s: metaScore(x.player, x.position) }).filter(Boolean).sort((a, b) => a.s - b.s);
+      const sum = ctx.summary || {};
+      const lowChem = (sum.eachChem || []).map((c, i) => ({ c, x: ctx.squad[i] })).filter((o) => o.x && o.x.player && o.c < 2);
+      return {
+        title: 'Your team',
+        lines: [
+          `Rating ${sum.rating ?? '?'} · chemistry ${sum.chem ?? '?'}/33${sum.formation ? ` · ${sum.formation}` : ''}.`,
+          `Weakest spots: ${rows.slice(0, 3).map((r) => `${r.pos} ${r.p.name} (${r.s})`).join(', ')}.`,
+          ...(lowChem.length ? [`Low chemistry: ${lowChem.map((o) => `${o.x.position} ${o.x.player.name} (${o.c})`).join(', ')}.`] : []),
+          `Ask “what should replace ${rows[0].p.name.split(' ').pop()}?” for options.`,
+        ],
+        needs: '',
+      };
+    }
+
+    // one player who isn't in the XI: a short profile
+    if (named.length === 1) {
+      const p = named[0];
+      const ps = (p.positions || []).slice(0, 3);
+      return { title: p.name, lines: [`${who(p)} · plays ${ps.join('/') || '?'}`, ...ps.map((x) => `At ${x}: meta score ${metaScore(p, x)}${pick(p, x)}`), 'Not in your XI. Ask “compare him vs <your player>” to see if he should be.'], needs: '' };
+    }
+    return {
+      title: 'I can answer these',
+      lines: ['• what should replace <player>?', '• compare <player> vs <player>', '• best striker / CB / CDM I own', '• how’s my team? / weakest spots', '• price of <player>',
+        'For anything else, tap 📋 Copy for Claude — it copies your team and question to paste into a Claude chat.'],
+      needs: '',
+    };
+  }
+
+  /** Text to paste into a Claude chat: your team (and the question) in plain words. */
+  function analystPrompt(q, ctx) {
+    const sum = ctx.summary || {};
+    const xi = (ctx.squad || []).filter((x) => x && x.player).map((x) => `${x.position} ${x.player.name} ${x.player.rating}${x.player.stats ? ` (PAC ${x.player.stats.pac} SHO ${x.player.stats.sho} PAS ${x.player.stats.pas} DRI ${x.player.stats.dri} DEF ${x.player.stats.def} PHY ${x.player.stats.phy})` : ''}`);
+    return `My EA FC 27 Ultimate Team: ${sum.formation || 'formation ?'}, rating ${sum.rating ?? '?'}, chemistry ${sum.chem ?? '?'}/33.\nXI:\n${xi.join('\n')}\n\nQuestion: ${q || ''}`;
+  }
+
   /** Solver cost of one coin spent on a market fill-in, relative to your own fodder's value. */
   const COIN_WEIGHT = 50;
 
@@ -2453,7 +2612,7 @@
     cacheBustBid, jitter, pickTargets, planSellPrice, classifyStatus,
     personalRecords, normalizeName, parsePlayerDb, searchPlayers, cardVersions, playerForIteration, migrateConfig, filterSummary, sniperTargets, LEAGUES,
     findMarketPrice, robustPrice, searchBudget, addPriceSample, prunePrices, priceTrend, trendText, lookupUrl, planMaxBuy, effectiveMaxBuy, withinReach, huntTargets,
-    fallingGuardPct, marketHint, newerVersion, setupIssues, adviceFix, sbcPaths, sbcLikely, sbcOrder, coinGoal, cardAdvice, sessionReport, bidSkipReason, proPick, scoreParts, comparePlayers, evoPicks, metaPlayStyles, upgradeWhy, readPlayStyles, cardFieldsProbe, shortTime, searchReport, auctionReport, planFloor, planBudget, planVerdict, planSummary, robustLow, trendNudge, snipeBase, recordGap, gapStats, smartLevels, gammaSample, betaSample, armPrior, decayArm, upgradeArm, armRate, chooseDiscount, chooseTarget, missWeight, recordArm, deepestArmFor, priceShifted, bestArm, flipPlan, tradeOpts, tradeCap, bidAmount, freeCoins, bidBlock, warCeiling, warSteps, binVsWar, settleSales,
+    fallingGuardPct, marketHint, newerVersion, setupIssues, adviceFix, sbcPaths, analystAnswer, analystPrompt, namedPlayers, namedCoins, namedPos, sbcLikely, sbcOrder, coinGoal, cardAdvice, sessionReport, bidSkipReason, proPick, scoreParts, comparePlayers, evoPicks, metaPlayStyles, upgradeWhy, readPlayStyles, cardFieldsProbe, shortTime, searchReport, auctionReport, planFloor, planBudget, planVerdict, planSummary, robustLow, trendNudge, snipeBase, recordGap, gapStats, smartLevels, gammaSample, betaSample, armPrior, decayArm, upgradeArm, armRate, chooseDiscount, chooseTarget, missWeight, recordArm, deepestArmFor, priceShifted, bestArm, flipPlan, tradeOpts, tradeCap, bidAmount, freeCoins, bidBlock, warCeiling, warSteps, binVsWar, settleSales,
     listSpendable, reserveOk, afterListBuy,
     aggregateListings, hotScore, rankHot, snipeScore, priceBands, provenFlips, flipValue, priceLadder, sbcCostEstimate,
     addHistory, summarizeHistory, profitSummary, isDiscordWebhook, discordPayload,
@@ -5298,6 +5457,29 @@
       });
     },
 
+    /** 🧠 Analyst: answer a question from your squad/club data (reads the club once, no market searches). */
+    async ask(q) {
+      const priceOf = (p) => { const c = prices.data[String(p.id)]; return (p.price || 0) || (c && c.s && c.s.length ? c.s[c.s.length - 1][1] : 0); };
+      const answer = () => analystAnswer(q, { squad: this.squad, summary: this.summary, club: this.clubCache && Date.now() - this.clubCache.at < 20 * 60e3 ? this.clubCache.list : null, priceOf });
+      const busy = engine.running || engine.busy || jobs.current;
+      if (!this.squad) {
+        if (busy) { this.answer = { q, title: 'Busy', lines: ['Tap ■ first — I need to read your team once.'] }; return ui.renderAsk(); }
+        await this.updateTeam(false);
+      }
+      let a = answer();
+      if (a.needs === 'club') {
+        if (busy) a = { title: 'Busy', lines: ['That needs your club (one read, no market searches) — tap ■ first, then ask again.'] };
+        else {
+          this.answer = { q, title: 'Reading your club…', lines: [] }; ui.renderAsk();
+          await jobs.run('Reading your club', async () => { const { club } = await this.ownedCards(this.squad || []); this.clubCache = { at: Date.now(), list: club }; });
+          a = answer();
+          if (a.needs === 'club') a = { title: 'Couldn’t read your club', lines: ['Open the Club once in the Web App, then ask again.'] };
+        }
+      }
+      this.answer = { q, ...a };
+      ui.renderAsk();
+    },
+
     /** The team saved by the last update (shown right away after a reload). */
     savedTeam() { return store.get(KEYS.team, null); },
 
@@ -6523,6 +6705,9 @@
               <div class="two"><button class="btn blue" data-a="team-update">↻ Update my team</button><button class="btn" data-a="analyse">Find upgrades</button></div>
               <button class="btn" data-a="refresh-squad">Clear squad data</button>
               <p class="note">“Update my team” reads your squad in seconds. “Find upgrades” is the slower part: it checks the market and SBCs for your 3 weakest spots.</p></div>
+            <div class="card ask"><h4>🧠 Ask the analyst</h4>
+              <div class="two"><input type="text" data-r="ask-q" placeholder="e.g. what should replace Saka?" enterkeyhint="send"><button class="btn blue" data-a="ask">Ask</button></div>
+              <div data-r="ask"><p class="empty">Answers from your own squad, club and the bot’s price checks — no guessing. Try “how’s my team?”, “compare Rice vs Bellingham”, “best CB I own”.</p></div></div>
             <div class="card"><h4>⚖️ Compare</h4><div data-r="cmp"><p class="empty">Compares every spot in your XI with the best card you own for it — stats for the position, meta PlayStyles, and whether pros run him. Tap a row to see them side by side.</p></div>
               <button class="btn blue" data-a="compare-team">⚖️ Compare my team</button></div>
             <div data-r="upg"></div>
@@ -6615,11 +6800,14 @@
 
     bind() {
       const root = this.root;
+      root.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && e.target.matches && e.target.matches('[data-r=ask-q]') && e.target.value.trim()) { e.preventDefault(); upgrades.ask(e.target.value.trim()); }
+      });
       // locked (bot / plan / side task running): tapping a dimmed control explains why instead of failing silently
       root.addEventListener('click', (e) => {
         if (!root.classList.contains('locked')) return;
         const t = e.target;
-        if (!t.closest || !t.closest('.body') || t.closest('[data-pane=log]')) return;
+        if (!t.closest || !t.closest('.body') || t.closest('[data-pane=log]') || t.closest('.ask')) return;
         const hit = t.closest('.row, .chip, .frow, .fed, .pqw, input, select, button:disabled, [data-a=filter-new], [data-a=filter-starters], [data-fon], [data-fedit], [data-fmax], [data-up], [data-down], [data-rm], [data-max]');
         if (!hit) return;
         e.preventDefault(); e.stopImmediatePropagation();
@@ -6667,6 +6855,18 @@
             if (engine.running || jobs.current) { this.log('Stop the running task first (■)', 'warn'); return; }
             return upgrades.compareTeam();
           case 'compare-open': { this.cmpOpen = this.cmpOpen === Number(btn.dataset.i) ? -1 : Number(btn.dataset.i); return this.renderCompare(); }
+          case 'ask': {
+            const q = (this.q('[data-r=ask-q]').value || '').trim();
+            if (!q) return this.toast('Type a question first', 'alert');
+            return upgrades.ask(q);
+          }
+          case 'ask-copy': {
+            const txt = analystPrompt(upgrades.answer && upgrades.answer.q, { squad: upgrades.squad, summary: upgrades.summary });
+            const box = this.q('[data-r=ask-copy]');
+            if (box) { box.hidden = false; box.value = txt; box.select(); }
+            try { navigator.clipboard.writeText(txt).then(() => this.toast('Copied — paste it into a Claude chat', 'ok'), () => {}); } catch { /* the box below has it */ }
+            return;
+          }
           case 'team-update':
             if (engine.running || jobs.current) { this.log('Stop the running task first (■)', 'warn'); return; }
             return upgrades.updateTeam(false);
@@ -7534,6 +7734,14 @@
     },
 
     /** ⚖️ Compare: one row per spot; tap to open the side-by-side table with the score breakdown. */
+    renderAsk() {
+      const box = this.q('[data-r=ask]');
+      const a = upgrades.answer;
+      if (!box || !a) return;
+      box.innerHTML = `<p class="note">“${esc(a.q)}”</p><h4>${esc(a.title)}</h4>${a.lines.map((l) => `<p class="${/^•/.test(l) ? 'li-t' : ''}">${esc(l)}</p>`).join('')}
+        <button class="mini" data-a="ask-copy">📋 Copy for Claude</button><textarea data-r="ask-copy" rows="4" readonly hidden></textarea>`;
+    },
+
     renderCompare() {
       const box = this.q('[data-r=cmp]');
       if (!box || !upgrades.compare) return;
