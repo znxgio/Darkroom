@@ -88,7 +88,7 @@ const idle = (p, ms = 150000) => p.waitForFunction(() => !document.querySelector
   await idle(p);
   await p.screenshot({ path: `${S}/t-sbc-plan.png` });
   const note = await p.textContent('#fcs [data-r=plan] .note');
-  check('solution shows safety summary', /13 protected/.test(note) && /no specials/.test(note) && /≤ 86/.test(note), note);
+  check('solution shows safety summary', /15 protected/ /* 11 starters + 2 bench + 2 in another saved squad */.test(note) && /no specials/.test(note) && /≤ 86/.test(note), note);
   await p.click('#fcs [data-a=sbc-submit]');
   await idle(p);
   const sub = await p.evaluate(() => T.submitted);
