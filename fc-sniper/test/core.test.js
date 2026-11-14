@@ -1350,3 +1350,20 @@ test('readPlayStyles: PlayStyles and PlayStyles+ from the field shapes EA has us
   assert.deepEqual(c.readPlayStyles({}), { styles: [], accelerate: '' });
   assert.match(c.cardFieldsProbe({ playStyles: [1], rating: 80 }), /playStyles=\[1\]/);
 });
+
+test('meta v2: PlayStyles add a modest bonus; reasons say what an upgrade brings', () => {
+  const st = (o) => ({ rating: 86, stats: { pac: 90, sho: 86, pas: 75, dri: 85, def: 35, phy: 78 }, skillMoves: 4, weakFoot: 4, playStyles: [], ...o });
+  const plain = st({});
+  const meta = st({ playStyles: [{ name: 'Finesse Shot', plus: true }, { name: 'Rapid', plus: false }] });
+  assert.ok(c.metaScore(meta, 'ST') > c.metaScore(plain, 'ST'));
+  assert.ok(c.metaScore(meta, 'ST') - c.metaScore(plain, 'ST') <= 4, 'capped');
+  assert.deepEqual(c.metaPlayStyles(meta, 'ST').map((x) => x.name + (x.plus ? '+' : '')), ['Finesse Shot+', 'Rapid']);
+  const why = c.upgradeWhy(plain, st({ stats: { pac: 97, sho: 86, pas: 75, dri: 85, def: 35, phy: 78 }, playStyles: [{ name: 'Low Driven Shot', plus: true }] }), 'ST', 1);
+  assert.deepEqual(why, ['meta PlayStyles: Low Driven Shot+', '+7 pace', 'chem +1']);
+});
+
+test('evoPicks: starting XI first; bench only to fill up', () => {
+  const m = (name, rating, group) => ({ evo: { name: 'E' }, player: { name, rating }, group });
+  assert.deepEqual(c.evoPicks([m('Sub', 88, 'bench'), m('A', 84, 'xi'), m('B', 86, 'xi'), m('C', 80, 'xi')], 6).map((x) => x.player.name), ['B', 'A', 'C']);
+  assert.deepEqual(c.evoPicks([m('Sub', 88, 'bench'), m('A', 84, 'xi')], 6).map((x) => x.player.name), ['A', 'Sub']);
+});

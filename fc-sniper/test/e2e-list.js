@@ -53,7 +53,7 @@ async function run(b, opts) {
   await p.waitForSelector('#fcs');
   if (opts.screenshot) await p.screenshot({ path: opts.screenshot });
   await p.click('#fcs [data-a=toggle]');
-  await p.waitForFunction(() => !document.querySelector('#fcs [data-a=toggle]').classList.contains('on') && window.L.searched.length > 0, null, { timeout: opts.timeout || 120000 });
+  await p.waitForFunction((noSearch) => !document.querySelector('#fcs [data-a=toggle]').classList.contains('on') && (noSearch ? [...document.querySelectorAll('#fcs [data-r=log] div')].some((d) => /Stopped/.test(d.textContent)) : window.L.searched.length > 0), opts.noSearch, { timeout: opts.timeout || 120000 });
   const out = {
     L: await p.evaluate(() => window.L),
     cfg: await p.evaluate(() => JSON.parse(localStorage.getItem('fc-sniper:config'))),
@@ -96,7 +96,7 @@ async function run(b, opts) {
   check('both players get auction searches', auc(1) >= 1 && auc(2) >= 1, JSON.stringify(tw.L.searched.map((x) => `${x.id}${x.bid ? 'A' : 'B'}`)));
   check('live updates: a line per search and per auction search', tw.log.filter((l) => /^🔍 \d+\./.test(l)).length >= 2 && tw.log.some((l) => /^🔨 \d+\. Auctions/.test(l)), tw.log.filter((l) => /^🔍|^🔨/.test(l)).slice(0, 4).join(' | '));
   // 3c) coin goal already met → stops at once and says so
-  const gl = await run(b, { prices: { 1: 60000, 2: 30000 }, reserve: false, maxSearches: 6, extra: { goal: { coins: 1000, label: '84+ Upgrade' } } });
+  const gl = await run(b, { prices: { 1: 60000, 2: 30000 }, reserve: false, maxSearches: 6, noSearch: true, extra: { goal: { coins: 1000, label: '84+ Upgrade' } } }); // stops before its first search
   check('coin goal reached stops the bot and says which SBC', gl.log.some((l) => /Stopped — 🎯 goal reached — [\d,]+ coins; open the SBC tab and tap Solve for 84\+ Upgrade/.test(l)) && gl.cfg.goal === null, gl.log.slice(-3).join(' | '));
   // 4) smart sniping: copies at 17,000 (5.6% under 18,000) — only the 4% arm can buy; most buys are lost races
   const sm = await run(b, { prices: { 2: 18000 }, snipe: { 2: 17000 }, failEvery: 3, reserve: false, autoPrice: true, spendLimit: 0, maxSearches: 40, timeout: 500000,

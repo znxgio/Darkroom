@@ -1377,7 +1377,7 @@
         // Better player matters most, then team rating, then chemistry; owned players are free.
         const price = c.source === 'club' ? 0 : (c.price || 0);
         const score = ratingGain * 10 + playerGain * 3 + chemGain * 3 - price / Math.max(1000, opts.budget || 100000) * 4;
-        return { ...c, ratingAfter, chemAfter, ratingGain, chemGain, playerGain, score };
+        return { ...c, ratingAfter, chemAfter, ratingGain, chemGain, playerGain, score, why: upgradeWhy(cur, c, pos, chemGain) };
       })
       // An upgrade is a better player, or the same level with more chemistry.
       .filter((c) => (c.playerGain > 0 || (c.chemGain > 0 && c.playerGain >= 0 && c.ratingGain >= 0))
@@ -1386,6 +1386,39 @@
   }
 
   // ---- Positions, formations & best lineup -------------------------------------------
+
+  /**
+   * Evolutions your own cards can use right now (2.5.0): `matches` are [{ evo, player, group: 'xi'|'bench' }] where every
+   * pairing already passed EA's own meetsRequirements check. Starting XI first; subs/reserves only to fill up to `max`.
+   */
+  function evoPicks(matches, max = 6) {
+    const xi = matches.filter((m) => m.group === 'xi');
+    const bench = matches.filter((m) => m.group !== 'xi');
+    const byGain = (a, b) => (b.player.rating || 0) - (a.player.rating || 0);
+    const out = xi.sort(byGain).slice(0, max);
+    return out.length >= Math.min(3, max) ? out : out.concat(bench.sort(byGain).slice(0, max - out.length));
+  }
+
+  /**
+   * Why a candidate is better (or not) than the current player in a position: meta PlayStyles gained, the biggest
+   * changes in the stats that matter there, chemistry. Returns short phrases, most important first.
+   */
+  function upgradeWhy(cur, cand, pos, chemGain = 0) {
+    const out = [];
+    const have = new Set(metaPlayStyles(cur, pos).map((x) => x.name + (x.plus ? '+' : '')));
+    const gained = metaPlayStyles(cand, pos).filter((x) => !have.has(x.name + (x.plus ? '+' : ''))).sort((a, b) => b.value - a.value);
+    if (gained.length) out.push(`meta PlayStyles: ${gained.slice(0, 3).map((x) => x.name + (x.plus ? '+' : '')).join(', ')}`);
+    const w = META_WEIGHTS[pos];
+    if (w && cur && cur.stats && cand && cand.stats) {
+      const keys = ['pac', 'sho', 'pas', 'dri', 'def', 'phy'];
+      const label = { pac: 'pace', sho: 'shooting', pas: 'passing', dri: 'dribbling', def: 'defending', phy: 'physical' };
+      const diffs = keys.map((k, i) => ({ k, d: (cand.stats[k] || 0) - (cur.stats[k] || 0), w: w[i] })).filter((x) => x.w >= 0.1 && Math.abs(x.d) >= 3)
+        .sort((a, b) => Math.abs(b.d) * b.w - Math.abs(a.d) * a.w).slice(0, 2);
+      for (const x of diffs) out.push(`${x.d > 0 ? '+' : ''}${x.d} ${label[x.k]}`);
+    }
+    if (chemGain) out.push(`chem ${chemGain > 0 ? '+' : ''}${chemGain}`);
+    return out;
+  }
 
   /** The base player behind any version of a card (specials add a prefix above 24 bits). */
   function baseId(defId) {
@@ -1440,16 +1473,41 @@
    * (pace and dribbling up front, defending and physical at the back).
    * Weights per position: [PAC, SHO, PAS, DRI, DEF, PHY].
    */
-  const META_WEIGHTS = {
-    ST: [0.30, 0.30, 0.05, 0.20, 0, 0.15], CF: [0.25, 0.25, 0.15, 0.30, 0, 0.05],
-    RW: [0.35, 0.15, 0.15, 0.30, 0, 0.05], LW: [0.35, 0.15, 0.15, 0.30, 0, 0.05],
-    RM: [0.35, 0.10, 0.20, 0.30, 0, 0.05], LM: [0.35, 0.10, 0.20, 0.30, 0, 0.05],
-    CAM: [0.15, 0.20, 0.30, 0.30, 0, 0.05], CM: [0.10, 0.05, 0.30, 0.25, 0.15, 0.15],
-    CDM: [0.15, 0, 0.20, 0.05, 0.30, 0.30],
-    RB: [0.35, 0, 0.15, 0.05, 0.30, 0.15], LB: [0.35, 0, 0.15, 0.05, 0.30, 0.15],
-    RWB: [0.35, 0, 0.15, 0.15, 0.20, 0.15], LWB: [0.35, 0, 0.15, 0.15, 0.20, 0.15],
-    CB: [0.30, 0, 0.05, 0, 0.40, 0.25],
+  // FC 27 meta (2.5.0, researched 2026-11-14 from RealSport101 25 Sep / 16 Oct, FIFPlay, Dexerto, games.gg 6 Nov, fut.gg 29 Jul).
+  // Face-stat weights [PAC, SHO, PAS, DRI, DEF, PHY] are priors from what guides say matters per position (no source gives
+  // numbers). FC 27 made raw stats matter more than PlayStyles, so PlayStyle bonuses are kept modest.
+  const META_GROUP = { ST: 'ST', CF: 'ST', RW: 'WING', LW: 'WING', RM: 'WING', LM: 'WING', CAM: 'CAM', CM: 'CM', CDM: 'CDM',
+    RB: 'FB', LB: 'FB', RWB: 'FB', LWB: 'FB', CB: 'CB', GK: 'GK' };
+  const META_GROUP_WEIGHTS = {
+    ST: [0.25, 0.40, 0.05, 0.15, 0, 0.15], WING: [0.30, 0.20, 0.10, 0.30, 0, 0.10], CAM: [0.12, 0.20, 0.28, 0.28, 0, 0.12],
+    CM: [0.10, 0.08, 0.32, 0.25, 0.12, 0.13], CDM: [0.08, 0.02, 0.25, 0.15, 0.30, 0.20], FB: [0.30, 0, 0.12, 0.13, 0.30, 0.15],
+    CB: [0.20, 0, 0.05, 0.05, 0.40, 0.30],
   };
+  const META_WEIGHTS = Object.fromEntries(Object.entries(META_GROUP).filter(([, g]) => META_GROUP_WEIGHTS[g]).map(([pos, g]) => [pos, META_GROUP_WEIGHTS[g]]));
+  /** Meta PlayStyles per position group: [name, weight 0–1, PS+ especially wanted]. */
+  const META_PS = {
+    ST: [['Finesse Shot', 0.9, true], ['Low Driven Shot', 0.8, true], ['Quick Step', 0.6], ['Rapid', 0.6], ['First Touch', 0.5], ['Precision Header', 0.4], ['Power Shot', 0.3], ['Technical', 0.3]],
+    WING: [['Finesse Shot', 0.8, true], ['Rapid', 0.8, true], ['Technical', 0.6], ['Quick Step', 0.6], ['First Touch', 0.5], ['Incisive Pass', 0.4], ['Low Driven Shot', 0.4], ['Whipped Pass', 0.4], ['Trickster', 0.3]],
+    CAM: [['Finesse Shot', 0.8, true], ['Technical', 0.8, true], ['Incisive Pass', 0.7, true], ['First Touch', 0.5], ['Tiki Taka', 0.5], ['Low Driven Shot', 0.4], ['Quick Step', 0.4]],
+    CM: [['Incisive Pass', 0.9, true], ['Pinged Pass', 0.8, true], ['Tiki Taka', 0.5], ['Technical', 0.5], ['Relentless', 0.5], ['Intercept', 0.4], ['Press Proven', 0.4], ['Long Ball Pass', 0.3]],
+    CDM: [['Intercept', 0.9, true], ['Pinged Pass', 0.8, true], ['Anticipate', 0.6], ['Bruiser', 0.5], ['Press Proven', 0.4], ['Tiki Taka', 0.4], ['Incisive Pass', 0.4], ['Long Ball Pass', 0.4]],
+    FB: [['Quick Step', 0.9, true], ['Bruiser', 0.7, true], ['Intercept', 0.6], ['Relentless', 0.5], ['Jockey', 0.5], ['Whipped Pass', 0.5], ['Anticipate', 0.4], ['Rapid', 0.4]],
+    CB: [['Bruiser', 0.9, true], ['Intercept', 0.9, true], ['Anticipate', 0.6], ['Aerial Fortress', 0.5], ['Quick Step', 0.5], ['Jockey', 0.5], ['Block', 0.4]],
+    GK: [['Far Reach', 0.9, true], ['Footwork', 0.8, true], ['Deflector', 0.5], ['Rush Out', 0.5], ['Cross Claimer', 0.3]],
+  };
+
+  /** The meta PlayStyles a player has for a position: [{ name, plus, value }] (value already weighted). */
+  function metaPlayStyles(p, pos) {
+    const list = META_PS[META_GROUP[pos] || pos];
+    if (!list || !p || !(p.playStyles || []).length) return [];
+    const norm = (x) => String(x || '').toLowerCase().replace(/\+$/, '').replace(/[^a-z]/g, '');
+    const out = [];
+    for (const [name, w, plusWanted] of list) {
+      const hit = p.playStyles.find((x) => norm(x.name) === norm(name));
+      if (hit) out.push({ name, plus: !!hit.plus, value: w * (hit.plus ? (plusWanted ? 2.2 : 1.6) : 1) });
+    }
+    return out;
+  }
   const ATTACKING = new Set(['ST', 'CF', 'RW', 'LW', 'RM', 'LM', 'CAM']);
 
   /**
@@ -1468,8 +1526,10 @@
       if (p.skillMoves >= 4) score += 1;
       if (p.weakFoot >= 4) score += 1;
     } else if (pos === 'CM' && p.weakFoot >= 4) score += 0.5;
+    // meta PlayStyles (2.5.0): a modest bonus — FC 27 rewards raw stats more than PlayStyles; at most +4
+    const ps = Math.min(4, metaPlayStyles(p, pos).reduce((a, x) => a + x.value, 0) * 1.2);
     // keep the card's overall in the picture so a 70-rated speedster doesn't win on pace alone
-    return Math.round((score * 0.7 + (p.rating || 0) * 0.3) * 10) / 10;
+    return Math.round((score * 0.7 + (p.rating || 0) * 0.3 + ps) * 10) / 10;
   }
 
   /**
@@ -2115,6 +2175,7 @@
     planSbcMax: 3, // completions per break
     planSbcCoins: 2000, // max coins of buys per SBC
     planKeepAlive: true,
+    upgradeEvos: true, // 2.5.0: "Find upgrades" also lists evolutions your squad's cards can start now
     goalBufferPct: 12, // 2.5.0: an SBC coin goal aims this % above what it needs, so it can be done again
     goal: null, // { coins, label } while trading toward an SBC // one light request every ~10 min in breaks so EA doesn't log you out
     sbcBuyMissing: true, // buy cheap fill-ins from the market when your club can't complete an SBC
@@ -2195,7 +2256,7 @@
     cacheBustBid, jitter, pickTargets, planSellPrice, classifyStatus,
     normalizeName, parsePlayerDb, searchPlayers, cardVersions, playerForIteration, migrateConfig, filterSummary, sniperTargets, LEAGUES,
     findMarketPrice, robustPrice, searchBudget, addPriceSample, prunePrices, priceTrend, trendText, lookupUrl, planMaxBuy, effectiveMaxBuy, withinReach, huntTargets,
-    newerVersion, setupIssues, adviceFix, sbcLikely, sbcOrder, coinGoal, cardAdvice, sessionReport, bidSkipReason, readPlayStyles, cardFieldsProbe, shortTime, searchReport, auctionReport, planFloor, planBudget, planVerdict, planSummary, robustLow, trendNudge, snipeBase, recordGap, gapStats, smartLevels, gammaSample, betaSample, armPrior, decayArm, upgradeArm, armRate, chooseDiscount, chooseTarget, missWeight, recordArm, deepestArmFor, priceShifted, bestArm, flipPlan, tradeOpts, tradeCap, bidAmount, freeCoins, bidBlock, warCeiling, warSteps, binVsWar, settleSales,
+    newerVersion, setupIssues, adviceFix, sbcLikely, sbcOrder, coinGoal, cardAdvice, sessionReport, bidSkipReason, evoPicks, metaPlayStyles, upgradeWhy, readPlayStyles, cardFieldsProbe, shortTime, searchReport, auctionReport, planFloor, planBudget, planVerdict, planSummary, robustLow, trendNudge, snipeBase, recordGap, gapStats, smartLevels, gammaSample, betaSample, armPrior, decayArm, upgradeArm, armRate, chooseDiscount, chooseTarget, missWeight, recordArm, deepestArmFor, priceShifted, bestArm, flipPlan, tradeOpts, tradeCap, bidAmount, freeCoins, bidBlock, warCeiling, warSteps, binVsWar, settleSales,
     listSpendable, reserveOk, afterListBuy,
     aggregateListings, hotScore, rankHot, snipeScore, priceBands, provenFlips, flipValue, priceLadder, sbcCostEstimate,
     addHistory, summarizeHistory, profitSummary, isDiscordWebhook, discordPayload,
@@ -4937,6 +4998,7 @@
     savedTeam() { return store.get(KEYS.team, null); },
 
     async analyse() {
+      this.evoTeam = null;
       await jobs.run('Finding upgrades', async () => {
         const { slots, order, by } = await this.readSquad();
         this.results = order.slice(0, 3).map((i) => ({ slotIndex: i, position: slots[i].position, current: slots[i].player, options: [] }));
@@ -4963,7 +5025,40 @@
           ui.renderUpgrades();
         }
         ui.log(`Team: rating ${this.summary.rating}, chemistry ${this.summary.chem}/33 — suggestions for your ${this.results.length} weakest spots`, 'ok');
+        if (engine.cfg.upgradeEvos !== false) await this.teamEvos();
       });
+    },
+
+    /**
+     * Evolutions your squad's cards can start right now — only ones EA says the card qualifies for (meetsRequirements),
+     * starting XI first, then subs/reserves. One preview per pick (what the card becomes). No market searches.
+     */
+    async teamEvos() {
+      engine.setStatus('pricing', 'Checking evolutions for your squad…');
+      const r = await fut.evolutions();
+      if (!r.ok) { this.evoTeam = { error: String(r.status) }; ui.renderUpgrades(); return; }
+      const sq = await fut.activeSquad();
+      const all = sq ? (typeof sq.getPlayers === 'function' ? sq.getPlayers() : sq.getFieldPlayers()) : [];
+      const xiIds = new Set((this.squad || []).map((x) => x.player && x.player.item && x.player.item.id).filter(Boolean));
+      const items = all.map((x) => x && (x.item || x)).filter((it) => it && it.definitionId && !it.academy);
+      const matches = [];
+      for (const slot of r.slots) {
+        for (const it of items) {
+          let ok = false;
+          try { ok = typeof slot.meetsRequirements === 'function' && slot.meetsRequirements(it); } catch { ok = false; }
+          if (ok) matches.push({ evo: { slot, name: fut.evoName(slot), cost: fut.evoCost(slot) }, player: { ...fut.toPlayer(it), item: it }, group: xiIds.has(it.id) ? 'xi' : 'bench' });
+        }
+      }
+      const picks = evoPicks(matches, 6);
+      for (const m of picks.slice(0, 4)) {
+        try { m.after = await fut.evoPreview(m.evo.slot, m.player.item); } catch { m.after = null; }
+        await jobs.pause(800, 1500);
+      }
+      this.evoTeam = { picks, total: matches.length, evos: r.slots.length };
+      if (!r.slots.some((sl) => typeof sl.meetsRequirements === 'function')) debugLog.push(`evo slot keys (no meetsRequirements): ${Object.keys(r.slots[0] || {}).join(',')}`);
+      else if (r.slots[0]) debugLog.push(`evo requirement fields: ${Object.keys(r.slots[0]).filter((k) => /req|elig|max|min|pos|rating|rare|league|nation|club/i.test(k)).join(',')}`);
+      ui.renderUpgrades();
+      ui.log(picks.length ? `🧬 Evolutions your squad can use now: ${picks.map((m) => `${m.player.name} → ${m.evo.name}`).join(' · ')}` : `🧬 None of the ${r.slots.length} evolutions fit your squad's cards right now`, picks.length ? 'ok' : 'muted');
     },
 
     /** Players you can get from SBCs right now (ones you don't own). Cached for 30 min. */
@@ -7035,6 +7130,17 @@
       try { box.scrollIntoView({ block: 'nearest' }); ta.focus(); ta.select(); ta.setSelectionRange(0, 1e9); } catch { /* ignore */ }
     },
 
+    /** Evolutions your squad can use now (from Find upgrades). */
+    evoTeamHtml() {
+      const e = upgrades.evoTeam;
+      if (!e) return '';
+      if (e.error) return `<div class="card"><h4 class="title">🧬 Evolutions</h4><p class="empty">Couldn't load evolutions (${esc(e.error)})</p></div>`;
+      if (!e.picks.length) return `<div class="card"><h4 class="title">🧬 Evolutions</h4><p class="empty">None of the ${e.evos} evolutions fit your squad's cards right now.</p></div>`;
+      return `<div class="card"><h4 class="title">🧬 Evolutions your squad can use now</h4><div class="list">${e.picks.map((m) => `<div class="li"><span class="t"><b>${esc(m.player.name)} ${m.player.rating}${m.group === 'xi' ? '' : ' <span class="tag">bench</span>'}</b>
+        <small>${esc(m.evo.name)}${m.evo.cost ? ` · ${esc(String(m.evo.cost))}` : ''}${m.after && m.after.rating ? ` · becomes <span class="up">${m.after.rating}</span>` : ''}</small></span></div>`).join('')}</div>
+        <p class="note">Only evolutions EA says the card qualifies for. Start them in the Web App (Evolutions).</p></div>`;
+    },
+
     renderUpgrades() {
       const saved = upgrades.savedTeam();
       const s = upgrades.summary || (saved && saved.summary);
@@ -7049,10 +7155,11 @@
         ${r.options.length ? `<div class="list">${r.options.map((o, oi) => `<div class="li">
           <span class="t"><b>${esc(o.name)} ${o.rating}</b><small>${o.source === 'club' ? 'You own this card' : o.source === 'sbc' ? `SBC “${esc(o.setName)}” · ≈ ${fmt(o.price)} coins` : `${fmt(o.price)} coins`} ·
             team <span class="${o.ratingGain > 0 ? 'up' : ''}">${o.ratingGain > 0 ? '+' : ''}${o.ratingGain}</span> ·
-            chem <span class="${o.chemGain > 0 ? 'up' : o.chemGain < 0 ? 'down' : ''}">${o.chemGain > 0 ? '+' : ''}${o.chemGain}</span></small></span>
+            chem <span class="${o.chemGain > 0 ? 'up' : o.chemGain < 0 ? 'down' : ''}">${o.chemGain > 0 ? '+' : ''}${o.chemGain}</span>${o.why && o.why.length ? `<br>${esc(o.why.join(' · '))}` : ''}</small></span>
           <a class="mini" href="${lookupUrl(o.name)}" target="_blank" rel="noopener" title="Look up on FUT.GG">🔎</a>
           ${o.source === 'club' ? '<span class="tag ok">owned</span>' : o.source === 'sbc' ? '<span class="tag">SBC</span>' : `<button class="mini go2" data-a="snipe-opt" data-s="${si}" data-o="${oi}">Snipe</button>`}</div>`).join('')}</div>`
-          : `<p class="empty">${r.done ? 'No better option found within budget' : 'Looking…'}</p>`}</div>`).join('');
+          : `<p class="empty">${r.done ? (r.current && metaPlayStyles(r.current, r.position).length ? `Keep ${esc(r.current.name)} — already has ${esc(metaPlayStyles(r.current, r.position).map((x) => x.name + (x.plus ? '+' : '')).join(', '))}; nothing better within budget` : 'No better option found within budget') : 'Looking…'}</p>`}</div>`).join('')
+        + this.evoTeamHtml();
     },
 
     /** Setup check + advice with one-tap fixes (2.5.0). Checks for an update once per load (if the page allows it). */
