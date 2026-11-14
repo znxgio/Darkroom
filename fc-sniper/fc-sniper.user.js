@@ -5742,10 +5742,14 @@
   #fcs.mob .two .btn{font-size:13px;padding:12px 4px}#fcs.mob .chip{padding:9px 6px 9px 12px}#fcs.mob .chip .rm{width:34px;height:34px}
   #fcs.mob .sugg button{padding:13px 12px}#fcs.mob .log{font-size:12px}
   /* collapsed on a phone: a small handle on the right edge, drag it up or down */
-  #fcs.mob.min.lft{right:auto!important;left:6px!important}
+  #fcs.mob.min.lft{right:auto!important;left:12px!important}
   #fcs.mob.min{left:auto!important;right:6px!important;top:var(--fcs-top,58%)!important;bottom:auto;width:auto;
     border:1px solid var(--line);border-radius:16px;padding-bottom:0;box-shadow:0 8px 24px rgba(0,0,0,.5)}
-  #fcs.mob.min .hd{padding:6px;gap:6px;cursor:grab}
+  #fcs.mob.min .hd{padding:6px 6px 6px 16px;gap:6px;cursor:grab;position:relative}
+  #fcs.mob.min .hd::after{content:"";position:absolute;left:6px;top:50%;width:4px;height:18px;margin-top:-9px;border-radius:2px;
+    background:repeating-linear-gradient(to bottom,var(--muted) 0 2px,transparent 2px 5px);opacity:.7} /* grip: drag from anywhere */
+  #fcs svg{pointer-events:none}
+  #fcs .last{min-height:2.8em}
   #fcs.mob.min .hd::before,#fcs.mob.min .brand b,#fcs.mob.min .coins,#fcs.mob.min .pill{display:none}
   #fcs.mob.min .brand{flex:none}
   @media (max-width:375px){
@@ -5943,7 +5947,7 @@
         }
         switch (btn.dataset.a) {
           case 'toggle': return engine.toggle();
-          case 'fold': return root.classList.toggle('min');
+          case 'fold': root.classList.toggle('min'); return this.placeHandle();
           case 'price': return engine.checkPricesNow();
           case 'filter-new': if (!engine.running) this.editFilter(-1); return;
           case 'filter-starters': if (!engine.running) this.addStarterFilters(); return;
@@ -6134,27 +6138,52 @@
       this.makeDraggable(this.q('.hd'));
     },
 
-    /** Phone: drag the collapsed handle up/down, and across to snap it to the left or right edge. */
-    dragHandle(e) {
-      e.preventDefault();
-      const startTop = this.root.getBoundingClientRect().top;
+    /**
+     * Phone: drag the collapsed handle up/down, and across to snap it to the left or right edge (2.5.0: from anywhere
+     * on the handle, buttons included). Under 8 px of movement it's a tap (the button works as usual); a real drag
+     * swallows the click that follows, so a wobble on ▶ never starts the bot.
+     */
+    dragHandle(e, handle) {
+      const id = e.pointerId; const root = this.root;
+      const startTop = root.getBoundingClientRect().top;
       const sx = e.clientX; const sy = e.clientY;
-      const h = this.root.offsetHeight;
-      let top = startTop; let x = sx;
+      const h = root.offsetHeight;
+      let top = startTop; let x = sx; let dragging = false;
       const move = (ev) => {
-        top = Math.min(w.innerHeight - h - 8, Math.max(8, startTop + ev.clientY - sy));
+        if (ev.pointerId !== id) return;
+        if (!dragging) {
+          if (Math.hypot(ev.clientX - sx, ev.clientY - sy) < 8) return; // still a tap
+          dragging = true;
+          try { handle.setPointerCapture(id); } catch { /* older Safari */ }
+        }
+        top = Math.min(this.viewH() - h - 8, Math.max(8, startTop + ev.clientY - sy));
         x = ev.clientX;
-        this.root.style.setProperty('--fcs-top', `${top}px`);
-        this.root.style.transform = `translateX(${Math.round(ev.clientX - sx)}px)`;
+        root.style.setProperty('--fcs-top', `${top}px`);
+        root.style.transform = `translateX(${Math.round(ev.clientX - sx)}px)`;
       };
-      const up = () => {
-        removeEventListener('pointermove', move); removeEventListener('pointerup', up);
-        this.root.style.transform = '';
-        const left = Math.abs(x - sx) > 30 ? x < w.innerWidth / 2 : this.root.classList.contains('lft');
-        this.root.classList.toggle('lft', left);
+      const end = (ev) => {
+        if (ev.pointerId !== id) return;
+        removeEventListener('pointermove', move); removeEventListener('pointerup', end); removeEventListener('pointercancel', end);
+        root.style.transform = '';
+        if (!dragging) return;
+        this.dragEndAt = Date.now();
+        const left = Math.abs(x - sx) > 30 ? x < w.innerWidth / 2 : root.classList.contains('lft');
+        root.classList.toggle('lft', left);
         store.set(KEYS.ui, { ...store.get(KEYS.ui, {}), handleTop: Math.round(top), handleLeft: left });
       };
-      addEventListener('pointermove', move); addEventListener('pointerup', up);
+      addEventListener('pointermove', move); addEventListener('pointerup', end); addEventListener('pointercancel', end);
+    },
+
+    /** Visible height (Safari's toolbar changes it). */
+    viewH() { return (w.visualViewport && w.visualViewport.height) || w.innerHeight; },
+
+    /** Keep the collapsed handle on screen after a reload, a rotation or Safari's toolbar showing. */
+    placeHandle() {
+      const u = store.get(KEYS.ui, {});
+      if (u.handleTop == null || !this.root) return;
+      const h = this.root.classList.contains('min') ? this.root.offsetHeight || 50 : 50;
+      const top = Math.min(this.viewH() - h - 8, Math.max(8, u.handleTop));
+      this.root.style.setProperty('--fcs-top', `${Math.round(top)}px`);
     },
 
     showTab(tab) {
@@ -6936,13 +6965,18 @@
     },
 
     makeDraggable(handle) {
-      const saved = store.get(KEYS.ui, {}).handleTop;
-      if (saved) this.root.style.setProperty('--fcs-top', `${saved}px`);
+      this.placeHandle();
+      w.addEventListener('resize', () => this.placeHandle());
+      if (w.visualViewport) w.visualViewport.addEventListener('resize', () => this.placeHandle());
       if (store.get(KEYS.ui, {}).handleLeft) this.root.classList.add('lft');
+      // the click that ends a drag is swallowed (capture phase, before the panel's own click handlers)
+      this.root.addEventListener('click', (e) => {
+        if (Date.now() - (this.dragEndAt || 0) < 350) { e.preventDefault(); e.stopImmediatePropagation(); }
+      }, true);
       handle.addEventListener('pointerdown', (e) => {
-        if (e.target.closest('button')) return;
         const cls = this.root.classList;
-        if (cls.contains('mob') && cls.contains('min')) return this.dragHandle(e);
+        if (cls.contains('mob') && cls.contains('min')) return this.dragHandle(e, handle); // whole handle, buttons included
+        if (e.target.closest('button')) return;
         if (cls.contains('mob')) return;
         const r = this.root.getBoundingClientRect();
         const sx = e.clientX; const sy = e.clientY;
@@ -6951,8 +6985,8 @@
           this.root.style.top = `${Math.max(0, r.top + ev.clientY - sy)}px`;
           this.root.style.right = 'auto';
         };
-        const up = () => { removeEventListener('pointermove', move); removeEventListener('pointerup', up); };
-        addEventListener('pointermove', move); addEventListener('pointerup', up);
+        const up = () => { removeEventListener('pointermove', move); removeEventListener('pointerup', up); removeEventListener('pointercancel', up); };
+        addEventListener('pointermove', move); addEventListener('pointerup', up); addEventListener('pointercancel', up);
       });
     },
   };

@@ -143,18 +143,38 @@ const idle = (p) => p.waitForFunction(() => !document.querySelector('#fcs [data-
   // ---------- mobile look
   const m = await page(b, true);
   await m.screenshot({ path: `${S}/v1-mobile-min.png` });
-  // collapsed handle: drag across → snaps to the left edge, remembered
-  const side = await m.evaluate(async () => {
-    const hd = document.querySelector('#fcs .hd'); const r = hd.getBoundingClientRect();
-    const at = (type, x, y, el) => el.dispatchEvent(new PointerEvent(type, { bubbles: true, clientX: x, clientY: y, pointerId: 1 }));
-    at('pointerdown', r.left + 4, r.top + r.height / 2, hd);
-    at('pointermove', 40, r.top + r.height / 2 - 60, window);
-    at('pointerup', 40, r.top + r.height / 2 - 60, window);
-    await new Promise((res) => setTimeout(res, 100));
+  // collapsed handle (2.5.0): real touch input — drag from anywhere (▶ included), a small wobble is a tap that's
+  // swallowed when it turns into a drag, and the handle stays on screen
+  const cdp = await m.context().newCDPSession(m);
+  const touch = async (pts) => {
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: pts[0][0], y: pts[0][1] }] });
+    for (const [x, y] of pts.slice(1)) { await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x, y }] }); await m.waitForTimeout(16); }
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    await m.waitForTimeout(250);
+  };
+  const center = (sel) => m.evaluate((q) => { const r = document.querySelector(q).getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; }, sel);
+  const startLog = () => log(m).then((l) => l.filter((x) => /Add a player or turn on a search filter first/.test(x)).length);
+  const n0 = await startLog();
+  const [gx, gy] = await center('#fcs [data-a=toggle]');
+  await touch([[gx, gy], [gx - 3, gy - 4], [gx - 6, gy - 8]]); // ~10 px wobble that started on ▶
+  const wob = { started: (await startLog()) > n0, min: await m.evaluate(() => document.querySelector('#fcs').classList.contains('min')) };
+  check('a 10 px drag that starts on ▶ does not press ▶', !wob.started && wob.min, JSON.stringify(wob));
+  const [hx, hy] = await center('#fcs [data-a=toggle]');
+  await touch([[hx, hy], [hx - 20, hy - 20], [hx - 120, hy - 60], [40, hy - 80]]); // a real drag from ▶ to the left
+  const side = await m.evaluate(() => {
     const box = document.querySelector('#fcs').getBoundingClientRect();
     return { lft: document.querySelector('#fcs').classList.contains('lft'), left: Math.round(box.left), saved: JSON.parse(localStorage.getItem('fc-sniper:ui') || '{}').handleLeft };
   });
-  check('phone handle drags across and snaps to the left edge', side.lft && side.left < 20 && side.saved === true, JSON.stringify(side));
+  check('phone handle drags from ▶ and snaps to the left edge, remembered', side.lft && side.left < 20 && side.saved === true && (await startLog()) === n0, JSON.stringify(side));
+  // a saved position below the screen (rotation / Safari toolbar) is pulled back on screen
+  const kept = await m.evaluate(async () => {
+    localStorage.setItem('fc-sniper:ui', JSON.stringify({ ...JSON.parse(localStorage.getItem('fc-sniper:ui') || '{}'), handleTop: 5000 }));
+    window.dispatchEvent(new Event('resize'));
+    await new Promise((r) => setTimeout(r, 50));
+    const b = document.querySelector('#fcs').getBoundingClientRect();
+    return { top: Math.round(b.top), bottom: Math.round(b.bottom), vh: window.innerHeight };
+  });
+  check('handle stays on screen when its saved spot is off screen', kept.bottom <= kept.vh && kept.top >= 0, JSON.stringify(kept));
   await m.tap('#fcs [data-a=fold]');
   await m.fill('#fcs [data-r=pq]', 'mbap');
   await m.waitForSelector('#fcs .sugg [data-pick]');
