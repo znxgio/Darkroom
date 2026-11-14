@@ -100,6 +100,9 @@ Newest learnings go at the end of each section. Dates are when the note was writ
 - Enjoys experiments with the model team (Opus/Fable/Sonnet) and wants Claude to observe and write down what it learned.
 - Has asked for things Claude declined: "undetectable" modes, overnight running, human-like browsing to avoid flags.
   Explain once, keep safety limits, move on — they accept it.
+- 2026-11-14 night: user (asleep) gave full authority — "all options depend on you and your debates with my human side;
+  don't ask for perms". Decide judgment calls via a debate incl. the user-proxy voice. Still fixed: no detection evasion,
+  safety caps and spend limits stay. Hard stop 06:50 Pacific (14:50 UTC) until the user says continue.
 - STANDING RULE (user, 2026-11-14): ONE combined push per round of requests — don't push each small release separately;
   fold new asks into the release in progress.
 - STANDING RULE (user, 2026-11-12): for anything bigger than a tweak, split the work across agents from the start —
