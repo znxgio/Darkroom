@@ -275,3 +275,8 @@ Use when Opus is unsure about an idea or design. Relay it with background subage
 - Rounds: 1) openings, 2) rebuttals with the others' points, 3) observer's closing view. Opus decides.
 - Then: confident → build and push. Still a judgment call for the user (money risk, account-visible behavior) → ask.
 - The user's real-app knowledge beats model memory (e.g. the auction timer extension the referee got wrong).
+- **User proxy** (user's request, 2026-11-14): when the user is away, add a "You" voice (Sonnet) briefed from §1 and the
+  standing rules — wants buys that land / coins, lots of live updates, premium-bot features, simple phone UI, one push per
+  round; pushes back on limits that feel stricter than EA's; accepts no-disguise, safety caps, suggestions-not-auto-changes
+  for money. Talks short and casual ("just pick the best and go"). It argues the user's side but can't override safety rules,
+  and real judgment calls (money risk, account-visible behaviour) still wait for the user.
