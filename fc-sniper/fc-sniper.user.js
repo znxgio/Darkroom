@@ -2186,7 +2186,7 @@
 
   // ---- Storage ----------------------------------------------------------------
 
-  const KEYS = { cfg: 'fc-sniper:config', safety: 'fc-sniper:safety', history: 'fc-sniper:history', ui: 'fc-sniper:ui', log: 'fc-sniper:log', learn: 'fc-sniper:learn', debug: 'fc-sniper:debug', prices: 'fc-sniper:prices', bids: 'fc-sniper:bids', plan: 'fc-sniper:plan' };
+  const KEYS = { cfg: 'fc-sniper:config', safety: 'fc-sniper:safety', history: 'fc-sniper:history', ui: 'fc-sniper:ui', log: 'fc-sniper:log', learn: 'fc-sniper:learn', debug: 'fc-sniper:debug', prices: 'fc-sniper:prices', bids: 'fc-sniper:bids', plan: 'fc-sniper:plan', team: 'fc-sniper:team' };
   const store = {
     get(key, fallback) {
       try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : fallback; } catch { return fallback; }
@@ -4867,8 +4867,34 @@
       return { club, ownedBase };
     },
 
+    /**
+     * 2.5.0: read your active squad only (one request, no market searches) and save it, so the Squad tab and the SBC
+     * tools know your team without the slow "find upgrades" pass. Runs by itself when the panel loads.
+     */
+    async updateTeam(auto) {
+      if (engine.running || engine.busy || jobs.current || !fut.ready()) return false;
+      this.updating = true;
+      try {
+        await this.readSquad();
+        store.set(KEYS.team, { at: Date.now(), summary: this.summary, squad: (this.squad || []).map((x) => ({ position: x.position, name: x.player && x.player.name, rating: x.player && x.player.rating })) });
+        ui.renderUpgrades();
+        ui.log(`👥 ${auto ? 'Team read' : 'Team updated'}: rating ${this.summary.rating}, chemistry ${this.summary.chem}/33${this.summary.formation ? ` · ${this.summary.formation}` : ''}`, 'muted');
+        return true;
+      } catch (e) {
+        if (!auto) ui.log(`Couldn't read your squad (${errText(e)}) — open Squads in the Web App once, then tap ↻ Update my team`, 'warn');
+        else debugLog.push(`auto team read: ${errText(e)}`); // quiet on launch; the button says why
+        return false;
+      } finally {
+        this.updating = false;
+        if (!engine.running && !jobs.current) engine.setStatus('idle', 'Idle');
+      }
+    },
+
+    /** The team saved by the last update (shown right away after a reload). */
+    savedTeam() { return store.get(KEYS.team, null); },
+
     async analyse() {
-      await jobs.run('Analysing your team', async () => {
+      await jobs.run('Finding upgrades', async () => {
         const { slots, order, by } = await this.readSquad();
         this.results = order.slice(0, 3).map((i) => ({ slotIndex: i, position: slots[i].position, current: slots[i].player, options: [] }));
         ui.renderUpgrades();
@@ -6010,8 +6036,10 @@
               <p class="note">League IDs: 13 Premier League, 53 LaLiga, 19 Bundesliga, 31 Serie A, 16 Ligue 1.</p></div>
           </section>
           <section class="pane" data-pane="squad">
-            <div class="card"><h4>Your team</h4><div data-r="team"><p class="empty">Reads your active squad and finds the best upgrades for your weakest spots.</p></div>
-              <div class="two"><button class="btn blue" data-a="analyse">Analyse my team</button><button class="btn" data-a="refresh-squad">↻ Refresh</button></div></div>
+            <div class="card"><h4>Your team</h4><div data-r="team"><p class="empty">Your squad is read automatically when the panel opens (no market searches).</p></div>
+              <div class="two"><button class="btn blue" data-a="team-update">↻ Update my team</button><button class="btn" data-a="analyse">Find upgrades</button></div>
+              <button class="btn" data-a="refresh-squad">Clear squad data</button>
+              <p class="note">“Update my team” reads your squad in seconds. “Find upgrades” is the slower part: it checks the market and SBCs for your 3 weakest spots.</p></div>
             <div data-r="upg"></div>
             <div class="card"><h4>Formation coach</h4><div data-r="forms"><p class="empty">Builds the best XI from your own club for each formation, with what public guides call meta marked 📰.</p></div>
               <button class="btn blue" data-a="forms">Compare formations</button>
@@ -6080,6 +6108,8 @@
       this.showTab(this.tab);
       this.renderPlayers(); this.renderStats(); this.renderHistory(); this.renderStatus(); this.renderTrade();
       plan.recover(); this.renderPlan();
+      this.renderUpgrades();
+      setTimeout(() => { upgrades.updateTeam(true); }, 4000); // 2.5.0: read the squad by itself (one request, no market)
       setInterval(() => this.tick(), 500);
 
       // previous log, so it survives reloads
@@ -6131,6 +6161,9 @@
           case 'evo-preview': return evos.preview(Number(btn.dataset.i));
           case 'evo-open': this.evoOpen = this.evoOpen === Number(btn.dataset.i) ? -1 : Number(btn.dataset.i); return this.renderEvos();
           case 'analyse': return upgrades.analyse();
+          case 'team-update':
+            if (engine.running || jobs.current) { this.log('Stop the running task first (■)', 'warn'); return; }
+            return upgrades.updateTeam(false);
           case 'autofill': this.commit(); return upgrades.autofill();
           case 'spend-reset':
             engine.cfg.listSpent = 0; engine.save(); this.renderPlayers();
@@ -6960,9 +6993,13 @@
     },
 
     renderUpgrades() {
-      const s = upgrades.summary;
+      const saved = upgrades.savedTeam();
+      const s = upgrades.summary || (saved && saved.summary);
       if (s) {
-        this.q('[data-r=team]').innerHTML = `<div class="kpi"><div><b>${s.rating}</b>Rating</div><div><b>${s.chem}/33</b>Chemistry</div><div><b>${esc(s.formation || '—')}</b>Formation</div></div>`;
+        const age = saved && saved.at ? Math.round((Date.now() - saved.at) / 60e3) : null;
+        const when = upgrades.summary && age !== null && age < 2 ? 'just now' : age !== null ? (age < 60 ? `${age} min ago` : age < 1440 ? `${Math.round(age / 60)} h ago` : `${Math.round(age / 1440)} d ago`) : '';
+        this.q('[data-r=team]').innerHTML = `<div class="kpi"><div><b>${s.rating}</b>Rating</div><div><b>${s.chem}/33</b>Chemistry</div><div><b>${esc(s.formation || '—')}</b>Formation</div></div>`
+          + `${when ? `<p class="note" style="margin:6px 0 0">Read ${when}${upgrades.updating ? ' · updating…' : ''}</p>` : ''}`;
       }
       this.q('[data-r=upg]').innerHTML = upgrades.results.map((r, si) => `
         <div class="card"><h4 class="title">${esc(r.position)} — now ${r.current ? `${esc(r.current.name)} ${r.current.rating}` : 'empty'}</h4>

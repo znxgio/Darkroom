@@ -100,6 +100,15 @@ const base = {
   }
   check('no page errors (SBC ranker/goal)', !g.errors.length, g.errors.join('; '));
 
+  // 6) 2.5.0: the squad is read by itself a few seconds after the panel opens (no market searches), and saved
+  const t = await page(b, new Function(`localStorage.setItem('fc-sniper:config', ${JSON.stringify(JSON.stringify(base))}); window.__mkt = 0; const o = services.Item.searchTransferMarket; services.Item.searchTransferMarket = function (c) { window.__mkt++; return o.call(this, c); };`));
+  await t.waitForFunction(() => [...document.querySelectorAll('#fcs [data-r=log] div')].some((d) => /👥 Team read: rating \d+, chemistry \d+\/33/.test(d.textContent)), null, { timeout: 30000 }).catch(() => {});
+  await t.click('#fcs [data-tab=squad]');
+  const team = await t.$eval('#fcs [data-r=team]', (e) => e.textContent.replace(/\s+/g, ' '));
+  const tm = await t.evaluate(() => ({ saved: !!JSON.parse(localStorage.getItem('fc-sniper:team') || 'null'), mkt: window.__mkt }));
+  check('team read automatically on launch, saved, no market searches', /Rating/.test(team) && /Read just now/.test(team) && tm.saved && tm.mkt === 0, `${team.slice(0, 90)} · ${JSON.stringify(tm)}`);
+  check('no page errors (team)', !t.errors.length, t.errors.join('; '));
+
   check('no page errors', !q.errors.length && !r.errors.length && !f.errors.length, [...q.errors, ...r.errors, ...f.errors].join('; '));
 
   await b.close();
