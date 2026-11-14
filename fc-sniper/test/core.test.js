@@ -1474,3 +1474,14 @@ test('sbcPaths: club-only vs club + buys, cheapest by coins + value of your card
     assert.match(c.analystPrompt('who?', ctx), /ST Harry Kane 90/);
   });
 }
+test('overlayView: most common card, cheapest Buy Now, usual price', () => {
+  const { overlayView } = require('../fc-sniper.user.js');
+  const mk = (id, price) => ({ id, name: 'X' + id, rating: 90, price, positions: ['ST'], stats: { pac: 90, sho: 88, pas: 80, dri: 89, def: 40, phy: 78 } });
+  assert.equal(overlayView([], [], 0), null);
+  const v = overlayView([mk(1, 5000), mk(1, 4000), mk(2, 100), mk(1, 0)], [[1, 6000], [2, 5000], [3, 7000]], 0);
+  assert.equal(v.id, 1); assert.equal(v.cheapest, 4000); assert.equal(v.ref, 6000); assert.equal(v.refKind, 'median');
+  assert.equal(v.under, true); assert.equal(v.pct, -33); assert.equal(v.bestPos, 'ST'); assert.ok(v.meta > 0);
+  const w = overlayView([mk(1, 5000)], [], 4000);
+  assert.equal(w.refKind, 'list price'); assert.equal(w.under, false);
+  assert.equal(overlayView([mk(1, 0)], [], 0).cheapest, 0);
+});

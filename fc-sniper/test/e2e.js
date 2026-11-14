@@ -39,7 +39,7 @@ async function page(b, mobile) {
         if (T.snipe) hits.push({ id: 777, def: 231747, bin: 26000 });
         hits = hits.filter((m) => (!c.maskedDefId || (m.def & 0xFFFFFF) === c.maskedDefId) && (!c.maxBuy || m.bin <= c.maxBuy)); // EA: base id matches every version
         const items = hits.sort((a, b) => (a.id * 7919) % 101 - (b.id * 7919) % 101).slice(0, 20)
-          .map((m) => ({ definitionId: m.def, rating: m.r || 91, rareflag: m.rf ?? 1, _staticData: { name: m.def === 231747 ? 'Mbappé' : 'Haaland' }, _auction: { tradeId: m.id, buyNowPrice: m.bin } }));
+          .map((m) => ({ definitionId: m.def, rating: m.r || 91, rareflag: m.rf ?? 1, preferredPosition: 'ST', attributes: [90, 88, 80, 89, 40, 78], _staticData: { name: m.def === 231747 ? 'Mbappé' : 'Haaland' }, _auction: { tradeId: m.id, buyNowPrice: m.bin } }));
         return obs({ success: true, data: { items } });
       },
       bid(item, price) { T.bought.push(price); T.coins -= price; return obs({ success: true }); },
@@ -78,6 +78,14 @@ const idle = (p) => p.waitForFunction(() => !document.querySelector('#fcs [data-
   p.nextPrompt = '70,000';
   await p.click('#fcs .chip:nth-child(2) .mx');
   check('manual max buy via tap', (await p.textContent('#fcs .chip:nth-child(2) .mx')).includes('70,000'));
+  // market overlay: a user search shows the card, the bot's own searches do not
+  check('M badge on a priced chip', /M \d+/.test(await p.textContent('#fcs .chip')), await p.textContent('#fcs .chip'));
+  await p.evaluate(() => { const c = new window.UTSearchCriteriaDTO(); c.maskedDefId = 231747; window.services.Item.searchTransferMarket(c).observe(window, () => {}); });
+  await p.waitForSelector('#fcs-ovl.show', { timeout: 3000 }).catch(() => {});
+  const ovl = await p.evaluate(() => (document.getElementById('fcs-ovl') || {}).textContent || '');
+  check('overlay on a user search', /cheapest Buy Now/.test(ovl) && /Mbapp/.test(ovl), ovl);
+  await p.click('#fcs-ovl [data-x]');
+  check('overlay dismiss', await p.evaluate(() => !document.getElementById('fcs-ovl').classList.contains('show')));
   // selling: market avg + relist, discord webhook
   await p.click('#fcs [data-tab=settings]');
   await p.selectOption('#fcs [data-k=sellMode]', 'market');
@@ -94,6 +102,7 @@ const idle = (p) => p.waitForFunction(() => !document.querySelector('#fcs [data-
   await p.evaluate(() => { T.snipe = true; T.calls.length = 0; });
   await p.click('#fcs [data-a=toggle]');
   await idle(p);
+  check('no overlay for bot searches', await p.evaluate(() => !document.getElementById('fcs-ovl').classList.contains('show')));
   const t = await p.evaluate(() => T);
   check('relist/clear on start', t.tidy === 2);
   check('bought the 26k snipe', t.bought.join() === '26000', `bought ${t.bought}`);

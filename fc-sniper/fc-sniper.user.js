@@ -1682,6 +1682,39 @@
   }
 
   /**
+   * The bot's view of a Transfer Market result the user searched by hand (read-only).
+   * players: toPlayer()-like cards with `price` (Buy Now, 0 = auction only); samples: stored price samples
+   * [[time, lowest, listed]…] for the most common card; listPrice: the priority-list average/floor if any.
+   * Returns null when there is nothing to show.
+   */
+  function overlayView(players, samples, listPrice) {
+    const ps = (players || []).filter((p) => p && p.id);
+    if (!ps.length) return null;
+    const count = new Map();
+    for (const p of ps) count.set(p.id, (count.get(p.id) || 0) + 1);
+    let id = null; let best = 0;
+    for (const [k, n] of count) if (n > best) { best = n; id = k; }
+    const cards = ps.filter((p) => p.id === id);
+    const bins = cards.map((p) => p.price).filter((x) => x > 0);
+    const cheapest = bins.length ? Math.min(...bins) : 0;
+    const vals = (samples || []).filter((x) => x && x[1] > 0).map((x) => x[1]).sort((a, b) => a - b);
+    let ref = 0; let refKind = '';
+    if (vals.length >= 3) { ref = vals[Math.floor(vals.length / 2)]; refKind = 'median'; }
+    else if (listPrice > 0) { ref = listPrice; refKind = 'list price'; }
+    const withStats = cards.find((p) => p.stats) || cards[0];
+    let bestPos = ''; let meta = 0;
+    for (const pos of (withStats.positions || [])) {
+      const m = metaScore(withStats, pos);
+      if (m > meta) { meta = m; bestPos = pos; }
+    }
+    return {
+      id, name: withStats.name, rating: withStats.rating, copies: cards.length, cheapest, ref, refKind,
+      pct: cheapest && ref ? Math.round((cheapest - ref) / ref * 100) : null,
+      under: !!(cheapest && ref && cheapest < ref), history: vals.length, bestPos, meta,
+    };
+  }
+
+  /**
    * Face stats, skill moves and weak foot from a Web App item, whatever the
    * field names are in this version. Returns { stats|null, skillMoves, weakFoot }.
    */
@@ -2446,6 +2479,7 @@
     bidWindow: 45, // seconds left on an auction before bidding (2.4.8: 45 — searches are 4–8 s apart, so 30 gave each auction about one look)
     dryTurns: 40, // 2.4.9: after this many Buy Now searches with nothing on a player, try auctions only for a while (0 = off; needs bidding on)
     dryAuctionSearches: 60, // … for this many of that player's searches
+    overlay: true, // 2.5.1: a small card with the bot's view of your own Transfer Market searches (read-only)
     liveLog: true, // 2.4.8: one line per search — what came back and why it did or didn't buy/bid
     maxActiveBids: 5,
     bidWars: 1, // bid wars at once (1–3): counter-bid when outbid in the last seconds
@@ -2617,7 +2651,7 @@
     aggregateListings, hotScore, rankHot, snipeScore, priceBands, provenFlips, flipValue, priceLadder, sbcCostEstimate,
     addHistory, summarizeHistory, profitSummary, isDiscordWebhook, discordPayload,
     squadRating, squadChemistry, topValues, rankUpgrades,
-    POS_NAMES, normPos, baseId, FORMATIONS, META_NOTES, squadRatingExact, lineupScore, bestLineup, metaScore, readStats,
+    POS_NAMES, normPos, baseId, FORMATIONS, META_NOTES, squadRatingExact, lineupScore, bestLineup, metaScore, overlayView, readStats,
     fodderValue, playerCost, qualityOf, COIN_WEIGHT, parseRequirements, solveSbc, sortItem, sbcCheck, solveSbcSearch, matchesReq, marketLevel, planPoints,
     SAFETY, clampConfig, dayKey, usageFor, lockoutFor, formatDuration, canStart,
   };
@@ -2729,6 +2763,7 @@
       try { res = await observe(w.services.Item.searchTransferMarket(criteria, page)); } finally { fut.ownSearch--; }
       jobs.lastMarketAt = Date.now();
       if (!res.success) return { ok: false, status: res.status, listings: [] };
+      try { mktView.learn((res.data && res.data.items) || []); } catch { /* badges only */ }
       return { ok: true, listings: ((res.data && res.data.items) || []).map(fut.listing) };
     },
     listing(item) {
@@ -3384,6 +3419,95 @@
         ui.log(`Discord notification blocked (${errText(e)})`, 'warn');
         return false;
       }
+    },
+  };
+
+  /**
+   * Read-only market overlay for the user's OWN Transfer Market searches, plus a memory of card stats seen
+   * (for the M badges). A passthrough wrapper on searchTransferMarket: the original is called untouched and
+   * its observable is returned as is; only a tap on the response (run after the Web App's own callback,
+   * in a later tick) reads the result. No extra requests, no retries, every failure is swallowed.
+   */
+  const mktView = {
+    known: {}, // definitionId -> { stats, positions, skillMoves, weakFoot } (this page load only)
+    timer: 0,
+    learn(items) {
+      for (const it of items || []) {
+        if (!it || !it.definitionId || this.known[it.definitionId]) continue;
+        const st = readStats(it);
+        if (!st.stats) continue;
+        const p = fut.toPlayer(it);
+        this.known[it.definitionId] = { stats: p.stats, positions: p.positions, skillMoves: p.skillMoves, weakFoot: p.weakFoot };
+      }
+    },
+    /** M badge number for a priority-list player, or 0 when its stats aren't known. */
+    badge(p) {
+      const k = (p.stats && p) || this.known[p.id] || this.known[baseId(p.id)];
+      if (!k || !k.stats) return 0;
+      let best = 0;
+      for (const pos of (k.positions || [])) best = Math.max(best, metaScore({ rating: p.rating, ...k }, pos));
+      return Math.round(best);
+    },
+    install() {
+      const svc = w.services && w.services.Item;
+      if (!svc || typeof svc.searchTransferMarket !== 'function' || svc.searchTransferMarket.__fcsOverlay) return false;
+      const orig = svc.searchTransferMarket;
+      const wrapped = function () {
+        const own = fut.ownSearch;
+        const obs = orig.apply(this, arguments);
+        try {
+          if (!own && engine.cfg.overlay && obs && typeof obs.observe === 'function' && !obs.__fcsTap) {
+            const o = obs.observe;
+            obs.__fcsTap = true;
+            obs.observe = function () {
+              const args = Array.prototype.slice.call(arguments);
+              const cb = args[1];
+              if (typeof cb === 'function') {
+                args[1] = function (sender, response) {
+                  try { return cb.apply(this, arguments); } finally {
+                    setTimeout(() => { try { mktView.show(response); } catch { /* silent */ } }, 0);
+                  }
+                };
+              }
+              return o.apply(this, args);
+            };
+          }
+        } catch { /* never affect the Web App */ }
+        return obs;
+      };
+      wrapped.__fcsOverlay = true;
+      svc.searchTransferMarket = wrapped;
+      return true;
+    },
+    show(response) {
+      const r = response || {};
+      if (!r.success) return;
+      const items = (r.response ?? r.data ?? {}).items || [];
+      if (!items.length) return;
+      this.learn(items);
+      const players = items.filter((it) => !it.type || it.type === 'player' || (typeof it.isPlayer === 'function' && it.isPlayer())).map((it) => fut.toPlayer(it));
+      const mine = (id) => (engine.cfg.players || []).find((p) => p.id === id || baseId(p.id) === baseId(id));
+      const top = (() => { const c = new Map(); players.forEach((p) => c.set(p.id, (c.get(p.id) || 0) + 1)); let id = null; let n = 0; c.forEach((v, k) => { if (v > n) { n = v; id = k; } }); return id; })();
+      const listed = top != null ? mine(top) : null;
+      const v = overlayView(players, top != null && prices.data[String(top)] ? prices.data[String(top)].s : [], listed ? (listed.avg || listed.lowest || 0) : 0);
+      if (!v) return;
+      let el = document.getElementById('fcs-ovl');
+      if (!el) {
+        el = document.createElement('div'); el.id = 'fcs-ovl'; el.setAttribute('role', 'status');
+        el.addEventListener('click', (e) => { if (e.target.closest('[data-x]')) { el.classList.remove('show'); clearTimeout(this.timer); } });
+        document.body.appendChild(el);
+      }
+      const verdict = !v.cheapest ? 'no Buy Now in these results'
+        : v.ref ? (v.under ? `<b class="g">${Math.abs(v.pct)}% under</b> the usual ${fmt(v.ref)} (${v.refKind})` : `${v.pct >= 0 ? v.pct : 0}% ${v.pct > 0 ? 'over' : 'at'} the usual ${fmt(v.ref)} (${v.refKind})`)
+        : 'no usual price yet';
+      const tr = prices.trend(v.id);
+      const hist = tr.n ? esc(trendText(tr)) : 'no history yet';
+      el.innerHTML = `<button data-x aria-label="Dismiss">×</button><b>🔎 ${esc(v.name)}${v.rating ? ` ${v.rating}` : ''}</b>`
+        + `<div>${v.cheapest ? `cheapest Buy Now <b>${fmt(v.cheapest)}</b>` : 'cheapest Buy Now: none'} · ${verdict}</div>`
+        + `<small>${hist}${v.bestPos ? ` · meta ${v.meta} as ${esc(v.bestPos)}` : ''}</small>`;
+      el.classList.add('show');
+      clearTimeout(this.timer);
+      this.timer = setTimeout(() => el.classList.remove('show'), 12000);
     },
   };
 
@@ -6217,6 +6341,7 @@
       ['spendLimit', 'Spend limit (0 = all but Keep coins)', 'number'],
       ['buyOnce', 'Buy each player once', 'toggle'],
       ['reserveForHigher', 'Keep coins for players higher up', 'toggle'],
+      ['overlay', 'Market overlay on my own searches', 'toggle'],
     ],
     mode: [
       ['mode', 'Mode', 'seg', OPT([['buy', 'Buy'], ['trade', 'Trade'], ['alert', 'Alert']])],
@@ -6474,6 +6599,10 @@
   #fcs .two .btn{margin-top:8px;font-size:12px;padding:9px 4px}
   #fcs .spend{margin:8px 0 2px;color:var(--muted);font-size:12px;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
   #fcs .spend b{color:var(--text)}
+  #fcs-ovl{position:fixed;left:8px;bottom:calc(env(safe-area-inset-bottom, 0px) + 84px);max-width:min(300px,calc(100vw - 16px));z-index:2147483000;padding:9px 30px 9px 11px;border-radius:12px;background:rgba(20,26,34,.94);color:#fff;font:12px/1.35 system-ui,-apple-system,sans-serif;box-shadow:0 4px 18px rgba(0,0,0,.4);opacity:0;visibility:hidden;transition:opacity .2s}
+  #fcs-ovl.show{opacity:1;visibility:visible}#fcs-ovl b.g{color:#3ddc84}#fcs-ovl small{display:block;color:#aab;margin-top:2px}
+  #fcs-ovl button{position:absolute;top:2px;right:4px;background:none;border:0;color:#fff;font-size:20px;line-height:1;padding:4px 7px}
+  #fcs .chip .mb{font-size:10px;font-weight:700;color:var(--dim);border:1px solid currentColor;border-radius:6px;padding:0 4px;margin-left:4px;white-space:nowrap}
   #fcs .chip .ovr{font-weight:800;color:var(--green);font-size:12px;min-width:22px}
   #fcs .chip .nm{flex:1;min-width:0;font-weight:600;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;line-height:1.25}
   #fcs .chip .nm small{display:block;font-weight:400;color:var(--dim);font-size:11px}
@@ -6779,6 +6908,7 @@
       root.classList.toggle('orange', engine.cfg.theme === 'orange');
       this.bind();
       this.mountPicker();
+      try { mktView.install(); } catch { /* optional */ }
       this.showTab(this.tab);
       this.renderPlayers(); this.renderStats(); this.renderHistory(); this.renderStatus(); this.renderTrade();
       plan.recover(); this.renderPlan();
@@ -7433,7 +7563,7 @@
         const sub = `${tr.n && !tr.thin ? `${esc(trendText(tr).split(' · seen')[0])} · ` : ''}${p.outOfReach && !p.manualMax ? '⏭️ out of reach · ' : ''}${p.hot ? '🔥 ' : ''}${p.autofill ? `🧩 ${esc(p.autofill)} · ` : ''}${p.manualMax ? (p.autofill && p.lowest ? `cheapest ${fmt(p.lowest)}` : 'your max') : p.avg ? `avg ${fmt(p.avg)}` : p.checkedAt ? 'none listed' : 'not priced yet'}`;
         return `<div class="chip">
           <div class="top"><span class="num">${i + 1}</span><span class="ovr">${p.rating || ''}</span>
-            <span class="nm">${esc(p.name)}<small>${sub}</small></span>
+            <span class="nm">${esc(p.name)}<small>${sub}</small></span>${(() => { const m = mktView.badge(p); return m ? `<span class="mb" title="Meta score at its best position">M ${m}</span>` : ''; })()}
             <button class="rm" data-rm="${p.id}" aria-label="Remove ${esc(p.name)}">×</button></div>
           <div class="bot"><span class="ord"><button data-up="${i}" aria-label="Move up" ${i === 0 ? 'disabled class="edge"' : ''}>↑</button><button data-down="${i}" aria-label="Move down" ${i === cfg.players.length - 1 ? 'disabled class="edge"' : ''}>↓</button></span>
             <button class="mx${p.manualMax ? ' manual' : ''}${unpriced ? ' none' : ''}" data-max="${p.id}">${unpriced ? '—' : `≤ ${fmt(max)}`}</button></div></div>`;
