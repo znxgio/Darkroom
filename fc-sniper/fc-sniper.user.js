@@ -159,7 +159,7 @@
   /**
    * Price to relist a bought card at. Returns 0 when selling is off.
    *   profit — the lowest price that still clears Min profit after tax
-   *   market — the player's price-checked average (never below the profit floor)
+   *   market — the player's price-checked market price (median of the 5 cheapest) (never below the profit floor)
    *   fixed  — your Sell price
    */
   function planSellPrice(buyPrice, cfg, player) {
@@ -211,7 +211,7 @@
   // ---- Trading (resell) & bidding ------------------------------------------------
 
   /**
-   * Resale plan for a card: list `undercut`% under the market average so it
+   * Resale plan for a card: list `undercut`% under the market price so it
    * sells, and only buy low enough to keep `minProfit` after EA's 5% tax.
    * Returns { sell, maxBuy, profit } or null when no profitable buy price exists.
    */
@@ -399,7 +399,7 @@
 
   /**
    * Highest price a bid war may go to: a little above your normal max
-   * (`bidWarStretchPct`), but never above the market average − 3% (Buy mode)
+   * (`bidWarStretchPct`), but never above the market price − 3% (Buy mode)
    * or the price that still leaves your min profit after tax (Trade mode),
    * and always under the card's Buy Now. 0 = no room.
    * w: { maxBid, avg, buyNow, mode, plan }
@@ -815,7 +815,7 @@
 
   // ---- Smart sniping: learns which discount and which target pay off ----------------
 
-  /** Discount levels (% under the average) the learner can pick from. */
+  /** Discount levels (% under the market price) the learner can pick from. */
   function smartLevels(minPct = 4, maxPct = 14) {
     const lo = Math.max(1, Math.min(30, Math.round(minPct)));
     const hi = Math.max(lo, Math.min(40, Math.round(maxPct)));
@@ -985,7 +985,7 @@
     return ok.length ? ok[ok.length - 1] : undefined;
   }
 
-  /** Halve a target's evidence when its average price moved more than 15% since it was learned. */
+  /** Halve a target's evidence when its market price moved more than 15% since it was learned. */
   function priceShifted(refAvg, avg) {
     return refAvg > 0 && avg > 0 && Math.abs(avg - refAvg) / refAvg > 0.15;
   }
@@ -1054,7 +1054,7 @@
    * search(maxBuy) -> Promise<{ ok, status, listings: [{ tradeId, buyNowPrice, defId }] }>
    * Only listings whose defId === opts.defId count (the exact card, not its
    * special versions). Returns { ok, lowest, avg, count, steps } where avg is
-   * the average of the `sample` cheapest Buy Now prices, rounded to a valid price.
+   * the median of the `sample` cheapest Buy Now prices (see robustPrice), rounded to a valid price.
    */
   async function findMarketPrice(search, opts) {
     const { defId, maxSteps = 6, sample = 5 } = opts;
@@ -1183,7 +1183,7 @@
   }
 
   /**
-   * Max buy for a player: `discountPct` under the market average, but never
+   * Max buy for a player: `discountPct` under the market price, but never
    * more than the coins you can spend. Returns { maxBuy, cappedByCoins }.
    */
   // ---- Session plan (2.4.7, debate) ------------------------------------------------
@@ -2220,7 +2220,7 @@
     maxBuy: 1000, // used when a player has no price
     maxBuysPerSearch: 1,
     smartSnipe: true, // learn the best discount and target from hits, lost races and near misses
-    smartMinPct: 4, // smart sniping never goes closer than this % under the average
+    smartMinPct: 4, // smart sniping never goes closer than this % under the market price
     smartMaxPct: 14, // … nor deeper than this
     smartPrice: false, // 2.4.6: let the learner set the discount too (off: it only picks which card to search)
     smartProbeEvery: 10, // 1 in N searches looks a bit above your max to spot near misses (never buys above it)
@@ -2246,8 +2246,8 @@
     binIdealPct: 20, // a Buy Now this far under avg always wins (even next to a war)
     warKeepPct: 10, // a war whose next bid is this far under avg beats an ordinary Buy Now
     // trading (resell)
-    undercut: 3, // list this % under the market average so it sells
-    minProfitPct: 4, // and make at least this % of the market average (as well as Min profit)
+    undercut: 3, // list this % under the market price so it sells
+    minProfitPct: 4, // and make at least this % of the market price (as well as Min profit)
     hotSearches: 14, // market searches per hot-card scan (plus price checks)
     hotLeagues: '13,53,19,31,16', // leagues to scan for hot cards (Premier League, LaLiga, Bundesliga, Serie A, Ligue 1)
     hotPick: 3, // how many hot cards to trade
@@ -3587,7 +3587,7 @@
         this.idleSaid = false;
         const pick = learn.pick(affordable, cfg, i);
         const player = pick.player;
-        // Prices drift — refresh a player's (or filter's) average during long sessions.
+        // Prices drift — refresh a player's (or filter's) market price during long sessions.
         if (player && cfg.autoPrice && !player.manualMax && Date.now() - (player.checkedAt || 0) > cfg.repriceMinutes * 60e3) {
           const ok = await this.priceCheck([player]);
           this.save(); ui.renderPlayers(); ui.renderTrade();
