@@ -2348,6 +2348,31 @@
    * -> { today, week, all (each { bought, spent, sold, received, net, tiedUp, sellThrough, avgHours }),
    *      days: [{ key, net, sold }] (7, oldest first), cards: [...], best: top 5, worst: bottom 3 }
    */
+  /**
+   * 🏆 Personal records (2.5.0, for fun): best flip, fastest sale, most-flipped card, biggest day. Pure; from your history.
+   * Returns { bestFlip, fastest, mostFlipped, bestDay } (each null when there's no data yet).
+   */
+  function personalRecords(history) {
+    const sold = (history || []).filter((e) => e && e.price > 0 && Number(e.soldFor) > 0);
+    if (!sold.length) return { bestFlip: null, fastest: null, mostFlipped: null, bestDay: null };
+    const net = (e) => afterTax(e.soldFor) - e.price;
+    const bestFlip = sold.reduce((a, e) => (!a || net(e) > net(a) ? e : a), null);
+    const timed = sold.filter((e) => e.soldAt && e.at && e.soldAt >= e.at);
+    const fastest = timed.reduce((a, e) => (!a || e.soldAt - e.at < a.soldAt - a.at ? e : a), null);
+    const counts = new Map();
+    for (const e of sold) { const k = e.id ?? e.name; const c = counts.get(k) || { name: e.name, n: 0, net: 0 }; c.n++; c.net += net(e); counts.set(k, c); }
+    const mostFlipped = [...counts.values()].sort((a, b) => b.n - a.n || b.net - a.net)[0];
+    const days = new Map();
+    for (const e of sold) { const k = dayKey(e.soldAt || e.at); days.set(k, (days.get(k) || 0) + net(e)); }
+    const bestDay = [...days.entries()].sort((a, b) => b[1] - a[1])[0];
+    return {
+      bestFlip: { name: bestFlip.name, net: net(bestFlip), price: bestFlip.price, soldFor: bestFlip.soldFor },
+      fastest: fastest ? { name: fastest.name, minutes: Math.max(1, Math.round((fastest.soldAt - fastest.at) / 60e3)) } : null,
+      mostFlipped: mostFlipped && mostFlipped.n > 1 ? mostFlipped : null,
+      bestDay: bestDay ? { day: bestDay[0], net: bestDay[1] } : null,
+    };
+  }
+
   function profitSummary(history, now) {
     const L = (history || []).filter((e) => e && Number(e.price) > 0);
     const t = new Date(now);
@@ -2402,7 +2427,7 @@
     EA_TAX, MIN_PRICE, MAX_PRICE, DEFAULT_CONFIG,
     priceStep, roundPrice, nextPrice, prevPrice, afterTax, profit, breakEvenSell,
     cacheBustBid, jitter, pickTargets, planSellPrice, classifyStatus,
-    normalizeName, parsePlayerDb, searchPlayers, cardVersions, playerForIteration, migrateConfig, filterSummary, sniperTargets, LEAGUES,
+    personalRecords, normalizeName, parsePlayerDb, searchPlayers, cardVersions, playerForIteration, migrateConfig, filterSummary, sniperTargets, LEAGUES,
     findMarketPrice, robustPrice, searchBudget, addPriceSample, prunePrices, priceTrend, trendText, lookupUrl, planMaxBuy, effectiveMaxBuy, withinReach, huntTargets,
     fallingGuardPct, marketHint, newerVersion, setupIssues, adviceFix, sbcLikely, sbcOrder, coinGoal, cardAdvice, sessionReport, bidSkipReason, proPick, scoreParts, comparePlayers, evoPicks, metaPlayStyles, upgradeWhy, readPlayStyles, cardFieldsProbe, shortTime, searchReport, auctionReport, planFloor, planBudget, planVerdict, planSummary, robustLow, trendNudge, snipeBase, recordGap, gapStats, smartLevels, gammaSample, betaSample, armPrior, decayArm, upgradeArm, armRate, chooseDiscount, chooseTarget, missWeight, recordArm, deepestArmFor, priceShifted, bestArm, flipPlan, tradeOpts, tradeCap, bidAmount, freeCoins, bidBlock, warCeiling, warSteps, binVsWar, settleSales,
     listSpendable, reserveOk, afterListBuy,
@@ -7545,7 +7570,21 @@
         <p class="note">Tied up in unsold listings: <b>${fmt(ps.all.tiedUp)}</b>${ps.all.sellThrough != null ? ` · sell-through ${ps.all.sellThrough}%` : ''}${ps.all.avgHours != null ? ` · avg ${ps.all.avgHours}h to sell` : ''} · received ${fmt(ps.all.received)} after tax</p>
         <div class="pbars">${bars}</div>
         ${ps.best.length ? `<h5>Best cards</h5><div class="hist">${ps.best.map(row).join('')}</div>` : '<p class="empty">No sales yet</p>'}
-        ${ps.worst.length ? `<h5>Worst cards</h5><div class="hist">${ps.worst.map(row).join('')}</div>` : ''}`;
+        ${ps.worst.length ? `<h5>Worst cards</h5><div class="hist">${ps.worst.map(row).join('')}</div>` : ''}
+        ${this.recordsHtml()}`;
+    },
+
+    /** 🏆 Personal records under the profit card. */
+    recordsHtml() {
+      const r = personalRecords(engine.history);
+      if (!r.bestFlip) return '';
+      const items = [
+        `🥇 Best flip: <b>${esc(r.bestFlip.name)}</b> +${fmt(r.bestFlip.net)} (${fmt(r.bestFlip.price)} → ${fmt(r.bestFlip.soldFor)})`,
+        r.fastest ? `⚡ Fastest sale: <b>${esc(r.fastest.name)}</b> in ${r.fastest.minutes < 60 ? `${r.fastest.minutes} min` : `${Math.round(r.fastest.minutes / 60)} h`}` : '',
+        r.mostFlipped ? `🔁 Favourite flip: <b>${esc(r.mostFlipped.name)}</b> ×${r.mostFlipped.n} (+${fmt(r.mostFlipped.net)})` : '',
+        r.bestDay ? `📅 Best day: ${esc(r.bestDay.day)} +${fmt(r.bestDay.net)}` : '',
+      ].filter(Boolean);
+      return `<h5>🏆 Personal records</h5><div class="note" style="line-height:1.7">${items.join('<br>')}</div>`;
     },
 
     renderHistory() {

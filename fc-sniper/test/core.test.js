@@ -1402,3 +1402,18 @@ test('proPick: a surname-only card is not matched to a longer list name', () => 
   assert.equal(c.proPick({ name: 'García' }, 'GK'), false);
   assert.equal(c.proPick({ name: 'Joan García' }, 'GK'), true);
 });
+
+test('personalRecords: best flip, fastest sale, favourite flip, best day', () => {
+  assert.equal(c.personalRecords([]).bestFlip, null);
+  const t0 = new Date('2026-11-10T12:00:00').getTime();
+  const h = [
+    { id: 1, name: 'A', price: 10000, soldFor: 13000, at: t0, soldAt: t0 + 3600e3 },
+    { id: 1, name: 'A', price: 10000, soldFor: 12000, at: t0, soldAt: t0 + 600e3 },
+    { id: 2, name: 'B', price: 50000, soldFor: 60000, at: t0, soldAt: t0 + 7200e3 },
+  ];
+  const r = c.personalRecords(h);
+  assert.equal(r.bestFlip.name, 'B');
+  assert.equal(r.fastest.minutes, 10);
+  assert.deepEqual([r.mostFlipped.name, r.mostFlipped.n], ['A', 2]);
+  assert.ok(r.bestDay.net > 0);
+});
