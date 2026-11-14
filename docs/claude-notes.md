@@ -78,6 +78,16 @@ Newest learnings go at the end of each section. Dates are when the note was writ
   auction end prices), snipe-friendly cards from the hot scan (snipeScore: spread & deep listings; helper in worktree).
   User then said: don't make multiple pushes — combine (2.4.10 folded into 2.5.0).
 
+- 2026-11-14 (user away/asleep, 2.5.0 assembled): safety review (big-brother-max, relaunched after the first one died)
+  found 4 High bugs — bidOn bid on other versions (maskedDefId=baseId), addSnipe hunted at default max, plan Stop
+  didn't stop the block, gate could spin (skipped target counted affordable) — + 4 Medium; all fixed with tests.
+  User asked: auto-read team on launch + rename Analyse → "Update my team" (Analyse was slow/flaky because it did
+  squad+club+SBC sets+SBC costing+market searches under safety pacing) → split into updateTeam (one request) and
+  "Find upgrades". Meta v2: META_GROUP_WEIGHTS + META_PS from research (scratchpad meta-fc27.md; weights are priors —
+  no source gives numbers; fut.gg says several PlayStyles were nerfed). PlayStyle field names are a GUESS
+  (readPlayStyles) — the card-fields probe (debugLog "card fields (…)" / "playstyles read for n/11") will tell; evo
+  requirement fields logged too ("evo requirement fields: …") for the next step: market cards with good evos.
+
 ## 1. How the user works and talks
 - Short, casual messages, often typed on a phone while busy (once while driving). Expect typos; read for intent.
 - Thinks out loud and expects Claude to fill in the details, pick the best option and say why, not list everything.
