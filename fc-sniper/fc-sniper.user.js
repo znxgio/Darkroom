@@ -1911,10 +1911,12 @@
 
   /** A coin amount in a question ("under 50k", "1.2m", "30000"), or 0. */
   function namedCoins(q) {
-    const m = normTxt(q).match(/(\d+(?:[.,]\d+)?)\s*(k|m)?\b/);
-    if (!m) return 0;
-    const n = Number(m[1].replace(',', '.'));
-    return Math.round(m[2] === 'm' ? n * 1e6 : m[2] === 'k' ? n * 1e3 : n);
+    for (const m of normTxt(q).matchAll(/(\d+(?:[.,]\d+)?)\s*(k|m)?\b/g)) {
+      const n = Number(m[1].replace(',', '.'));
+      const v = Math.round(m[2] === 'm' ? n * 1e6 : m[2] === 'k' ? n * 1e3 : n);
+      if (v >= 1000) return v; // "84 rated" is a rating, not a budget
+    }
+    return 0;
   }
 
   /**

@@ -1454,6 +1454,8 @@ test('sbcPaths: club-only vs club + buys, cheapest by coins + value of your card
     assert.deepEqual(c.namedPlayers('compare guehi vs stones', xi.map((x) => x.player)).map((p) => p.id), [4, 3]);
     assert.equal(c.namedCoins('best cb under 50k'), 50000);
     assert.equal(c.namedCoins('1.2m'), 1200000);
+    assert.equal(c.namedCoins('my 84 rated cb under 30k'), 30000);
+    assert.equal(c.namedCoins('replace my 84 rated cb'), 0);
     assert.equal(c.namedPos('who is the best striker'), 'ST');
   });
   test('analyst: replace X uses the club and needs it first', () => {

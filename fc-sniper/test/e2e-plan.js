@@ -107,7 +107,11 @@ const base = {
     await g.click('#fcs [data-a=goal-start]');
     await g.waitForTimeout(1500);
     const gc = await g.evaluate(() => JSON.parse(localStorage.getItem('fc-sniper:config')));
-    check('trading toward the goal: Trade mode with the goal saved', gc.mode === 'trade' && gc.goal && gc.goal.coins >= 1000, JSON.stringify({ mode: gc.mode, goal: gc.goal }));
+    const glog = await g.$eval('#fcs [data-r=log]', (e) => e.textContent).catch(() => '');
+    // 2.5.0: when the hot scan finds no profitable card, the goal isn't started and your mode is put back (review fix F)
+    const started = gc.mode === 'trade' && gc.goal && gc.goal.coins >= 1000;
+    const reverted = gc.mode === 'buy' && !gc.goal && /goal not started \(your mode is back\)/.test(glog);
+    check('trading toward the goal: started, or honestly not started with your mode back', started || reverted, JSON.stringify({ mode: gc.mode, goal: gc.goal, reverted }));
   }
   check('no page errors (SBC ranker/goal)', !g.errors.length, g.errors.join('; '));
 
