@@ -1577,7 +1577,7 @@
   /** Read-only: the field names on a card that look like PlayStyles, roles or AcceleRATE (for the card-fields probe). */
   function cardFieldsProbe(item) {
     if (!item) return 'no card';
-    const rx = /play|style|trait|role|accel|chem|icon/i;
+    const rx = /play|style|trait|role|accel|chem|icon|attr|stat|sprint|agil|stamina|strength|compos|finish|vision|tackl|intercept|bio/i;
     const own = Object.keys(item).filter((k) => rx.test(k)).map((k) => `${k}=${JSON.stringify(item[k]).slice(0, 80)}`);
     const sd = item._staticData ? Object.keys(item._staticData).filter((k) => rx.test(k)).map((k) => `sd.${k}=${JSON.stringify(item._staticData[k]).slice(0, 80)}`) : [];
     const fns = [];
