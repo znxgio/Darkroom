@@ -592,7 +592,7 @@ test('snipeScore: tight markets score 0, wide ones get a suggested Snipe %', () 
 
 test('readStats handles different Web App field shapes', () => {
   assert.deepEqual(c.readStats({ attributes: [95, 88, 80, 92, 40, 78], skillMoves: 5, weakFoot: 4 }),
-    { stats: { pac: 95, sho: 88, pas: 80, dri: 92, def: 40, phy: 78 }, skillMoves: 5, weakFoot: 4 });
+    { stats: { pac: 95, sho: 88, pas: 80, dri: 92, def: 40, phy: 78 }, skillMoves: 5, weakFoot: 4, playStyles: [], accelerate: '' });
   assert.deepEqual(c.readStats({ _attributes: [{ value: 70 }, { value: 60 }, { value: 65 }, { value: 68 }, { value: 80 }, { value: 85 }] }).stats,
     { pac: 70, sho: 60, pas: 65, dri: 68, def: 80, phy: 85 });
   assert.equal(c.readStats({ rating: 80 }).stats, null);
@@ -1341,4 +1341,12 @@ test('huntTargets: while trading toward a coin goal only hot cards are traded (n
   const cfg = { ...c.DEFAULT_CONFIG, mode: 'trade', goal: { coins: 100000, label: 'x' }, players: [{ id: 1, name: 'Mine' }, { id: 2, name: 'Hot', hot: true }], filters: [] };
   assert.deepEqual(c.huntTargets(cfg).map((p) => p.id), [2]);
   assert.deepEqual(c.huntTargets({ ...cfg, goal: null }).map((p) => p.id).sort(), [1, 2]);
+});
+
+test('readPlayStyles: PlayStyles and PlayStyles+ from the field shapes EA has used', () => {
+  assert.deepEqual(c.readPlayStyles({ playStyles: [{ id: 3, name: 'Finesse Shot' }], playStylesPlus: [{ id: 7, name: 'Rapid' }], accelerateType: 'EXPLOSIVE' }),
+    { styles: [{ id: 3, name: 'Finesse Shot', plus: false }, { id: 7, name: 'Rapid', plus: true }], accelerate: 'EXPLOSIVE' });
+  assert.deepEqual(c.readPlayStyles({ _staticData: { traits: ['Tiki Taka'] } }).styles, [{ id: 'Tiki Taka', name: 'Tiki Taka', plus: false }]);
+  assert.deepEqual(c.readPlayStyles({}), { styles: [], accelerate: '' });
+  assert.match(c.cardFieldsProbe({ playStyles: [1], rating: 80 }), /playStyles=\[1\]/);
 });

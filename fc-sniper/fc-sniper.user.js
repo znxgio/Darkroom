@@ -1484,11 +1484,47 @@
       if (v.some((x) => x > 0)) stats = { pac: v[0], sho: v[1], pas: v[2], dri: v[3], def: v[4], phy: v[5] };
     }
     const num = (...xs) => { for (const x of xs) if (x !== undefined && x !== null && !Number.isNaN(Number(x))) return Number(x); return 0; };
+    const ps = readPlayStyles(item);
     return {
       stats,
       skillMoves: num(item.skillMoves, item._skillMoves, item.skillmoves),
       weakFoot: num(item.weakFoot, item._weakFoot, item.weakFootAbilityTypeCode, item.weakfoot),
+      playStyles: ps.styles, // [{ id, name, plus }] — best guess at EA's field names until the probe confirms them
+      accelerate: ps.accelerate,
     };
+  }
+
+  /**
+   * PlayStyles / PlayStyles+ and AcceleRATE from a Web App item, trying the field names EA has used (2.5.0, best guess —
+   * the read-only "card fields" probe on the Squad tab records the real ones). Returns { styles, accelerate }.
+   */
+  function readPlayStyles(item) {
+    const sd = (item && item._staticData) || {};
+    const call = (o, f) => { try { return o && typeof o[f] === 'function' ? o[f]() : undefined; } catch { return undefined; } };
+    const pick = (...xs) => xs.find((x) => Array.isArray(x) && x.length);
+    const plain = pick(item && item.playStyles, item && item._playStyles, item && item.playstyles, call(item, 'getPlayStyles'), sd.playStyles, sd.playstyles, item && item.traits, sd.traits) || [];
+    const plus = pick(item && item.playStylesPlus, item && item._playStylesPlus, item && item.iconTraits, call(item, 'getPlayStylesPlus'), sd.playStylesPlus, sd.iconTraits) || [];
+    const norm = (x, isPlus) => {
+      if (x === null || x === undefined) return null;
+      if (typeof x === 'object') return { id: x.id ?? x.value ?? x.type ?? null, name: String(x.name ?? x.label ?? x.id ?? ''), plus: isPlus || !!(x.plus || x.isPlus || x.level === 2) };
+      return { id: x, name: String(x), plus: isPlus };
+    };
+    const styles = [...plain.map((x) => norm(x, false)), ...plus.map((x) => norm(x, true))].filter(Boolean);
+    const acc = item && (item.accelerateType ?? item._accelerateType ?? item.accelerate ?? sd.accelerateType ?? call(item, 'getAccelerateType'));
+    return { styles, accelerate: acc === undefined || acc === null ? '' : String(acc) };
+  }
+
+  /** Read-only: the field names on a card that look like PlayStyles, roles or AcceleRATE (for the card-fields probe). */
+  function cardFieldsProbe(item) {
+    if (!item) return 'no card';
+    const rx = /play|style|trait|role|accel|chem|icon/i;
+    const own = Object.keys(item).filter((k) => rx.test(k)).map((k) => `${k}=${JSON.stringify(item[k]).slice(0, 80)}`);
+    const sd = item._staticData ? Object.keys(item._staticData).filter((k) => rx.test(k)).map((k) => `sd.${k}=${JSON.stringify(item._staticData[k]).slice(0, 80)}`) : [];
+    const fns = [];
+    for (let o = Object.getPrototypeOf(item), d = 0; o && o !== Object.prototype && d < 4; o = Object.getPrototypeOf(o), d++) {
+      for (const k of Object.getOwnPropertyNames(o)) if (rx.test(k) && typeof item[k] === 'function') fns.push(`${k}()`);
+    }
+    return [...own, ...sd, ...new Set(fns)].join(' · ').slice(0, 900) || 'nothing that looks like PlayStyles';
   }
 
   /** Squad rating with decimals (no rounding) — smooth enough to optimise against. */
@@ -2159,7 +2195,7 @@
     cacheBustBid, jitter, pickTargets, planSellPrice, classifyStatus,
     normalizeName, parsePlayerDb, searchPlayers, cardVersions, playerForIteration, migrateConfig, filterSummary, sniperTargets, LEAGUES,
     findMarketPrice, robustPrice, searchBudget, addPriceSample, prunePrices, priceTrend, trendText, lookupUrl, planMaxBuy, effectiveMaxBuy, withinReach, huntTargets,
-    newerVersion, setupIssues, adviceFix, sbcLikely, sbcOrder, coinGoal, cardAdvice, sessionReport, bidSkipReason, shortTime, searchReport, auctionReport, planFloor, planBudget, planVerdict, planSummary, robustLow, trendNudge, snipeBase, recordGap, gapStats, smartLevels, gammaSample, betaSample, armPrior, decayArm, upgradeArm, armRate, chooseDiscount, chooseTarget, missWeight, recordArm, deepestArmFor, priceShifted, bestArm, flipPlan, tradeOpts, tradeCap, bidAmount, freeCoins, bidBlock, warCeiling, warSteps, binVsWar, settleSales,
+    newerVersion, setupIssues, adviceFix, sbcLikely, sbcOrder, coinGoal, cardAdvice, sessionReport, bidSkipReason, readPlayStyles, cardFieldsProbe, shortTime, searchReport, auctionReport, planFloor, planBudget, planVerdict, planSummary, robustLow, trendNudge, snipeBase, recordGap, gapStats, smartLevels, gammaSample, betaSample, armPrior, decayArm, upgradeArm, armRate, chooseDiscount, chooseTarget, missWeight, recordArm, deepestArmFor, priceShifted, bestArm, flipPlan, tradeOpts, tradeCap, bidAmount, freeCoins, bidBlock, warCeiling, warSteps, binVsWar, settleSales,
     listSpendable, reserveOk, afterListBuy,
     aggregateListings, hotScore, rankHot, snipeScore, priceBands, provenFlips, flipValue, priceLadder, sbcCostEstimate,
     addHistory, summarizeHistory, profitSummary, isDiscordWebhook, discordPayload,
@@ -4876,6 +4912,13 @@
       this.updating = true;
       try {
         await this.readSquad();
+        if (!this.probed) {
+          this.probed = true;
+          const first = (this.squad || []).find((x) => x.player && x.player.item);
+          if (first) debugLog.push(`card fields (${first.player.name}): ${cardFieldsProbe(first.player.item)}`);
+          const ps = (this.squad || []).map((x) => x.player && x.player.playStyles && x.player.playStyles.length).filter(Boolean).length;
+          debugLog.push(`playstyles read for ${ps}/11 squad players`);
+        }
         store.set(KEYS.team, { at: Date.now(), summary: this.summary, squad: (this.squad || []).map((x) => ({ position: x.position, name: x.player && x.player.name, rating: x.player && x.player.rating })) });
         ui.renderUpgrades();
         ui.log(`👥 ${auto ? 'Team read' : 'Team updated'}: rating ${this.summary.rating}, chemistry ${this.summary.chem}/33${this.summary.formation ? ` · ${this.summary.formation}` : ''}`, 'muted');
