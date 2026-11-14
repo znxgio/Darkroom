@@ -1182,10 +1182,6 @@
     return roundPrice(med, 'nearest');
   }
 
-  /**
-   * Max buy for a player: `discountPct` under the market price, but never
-   * more than the coins you can spend. Returns { maxBuy, cappedByCoins }.
-   */
   // ---- Session plan (2.4.7, debate) ------------------------------------------------
 
   /** Coins never go below this during a plan: the higher of Keep coins and (coins at start − budget). */
@@ -1245,6 +1241,10 @@
     return m.floor > 0 ? m.floor : m.avg;
   }
 
+  /**
+   * Max buy for a player: `discountPct` under the market price, but never
+   * more than the coins you can spend. Returns { maxBuy, cappedByCoins }.
+   */
   function planMaxBuy(avg, discountPct, spendable) {
     if (!avg || spendable < MIN_PRICE) return { maxBuy: 0, cappedByCoins: false };
     const target = roundPrice(avg * (1 - Math.max(0, Math.min(90, discountPct || 0)) / 100), 'down');
@@ -1796,7 +1796,6 @@
   /** Solver cost of one coin spent on a market fill-in, relative to your own fodder's value. */
   const COIN_WEIGHT = 50;
 
-  const QUALITY = { bronze: 1, silver: 2, gold: 3 };
   const qualityOf = (rating) => (rating >= 75 ? 3 : rating >= 65 ? 2 : 1);
 
   /**
