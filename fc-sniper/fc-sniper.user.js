@@ -12,6 +12,37 @@
 // ==/UserScript==
 
 /*
+ * Table of contents (search for the banner name; the file is one IIFE)
+ *
+ * Pure logic (unit-tested, exported as `core`)
+ *   Priority list ............ ordering of targets
+ *   Trading (resell) & bidding  flip plans, bid pricing, trade options
+ *   Bid wars ................. bid-war caps and Buy Now vs war choice
+ *   Market scanner ........... what's hot right now
+ *   Buy history & notifications  purchase log, reports, Discord payloads
+ *   Player name lookup ....... name search helpers
+ *   Smart sniping ............ learns which discount and target pay off
+ *   Market price check ....... findMarketPrice, robust (median) price
+ *   Price history ............ cards the bot actually sees, trends
+ *   Session plan ............. blocks, budget, floor
+ *   Safety limits ............ delays, rests, session/daily caps, lockouts
+ *   Squads: rating & chemistry
+ *   Positions, formations & best lineup
+ *   SBC solving .............. requirement parsing and fodder selection
+ *   Points SBCs, Pack items
+ *   Config defaults .......... DEFAULT_CONFIG, clamping, migration
+ * Runtime (talks to the Web App and the page)
+ *   Storage .................. saved settings and data
+ *   Web App adapter .......... wraps services.Item.* and friends
+ *   Player database .......... players.json name search
+ *   Device helpers ........... phone layout, wake lock, sound, vibration
+ *   Notifications, Engine .... the snipe loop and its state
+ *   Tasks .................... Pack opener, SBC solver, Upgrade advisor
+ *   Evolutions helper, Hot cards, Session plan (runtime side)
+ *   UI ....................... panels, logs, setup checks
+ */
+
+/*
  * FC Sniper
  * =========
  * Runs inside the official Web App and drives the app's own services
