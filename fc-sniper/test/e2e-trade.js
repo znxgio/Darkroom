@@ -110,6 +110,7 @@ function installHotMock() {
           for (let i = 0; i < 10; i++) items.push(card(300, 'Hot Card', 9500 + i * 300, i < 6 ? 8000 : 0, `s${i}`));
           for (let i = 0; i < 10; i++) items.push(card(301, 'Cold Card', 9800 + i * 20, 0, `s${i}`));
           items.push(card(302, 'Thin Card', 4000, 3000, 's0'), card(302, 'Thin Card', 4200, 3000, 's1'));
+          [8000, 8400, 9000, 10000, 10000, 10100, 10200, 10300].forEach((bin, i) => items.push(card(304, 'Wide Card', bin, 0, `s${i}`)));
           items.push(card(303, 'Pricey Card', 80000, 70000, 's0'));
         } else if (c.maskedDefId) {
           H.checks.push(c.maskedDefId);
@@ -221,6 +222,15 @@ function installHotMock() {
   check('auto-picked the hot card and started trading', players.length === 1 && players[0].id === 300 && players[0].hot && players[0].avg > 0 && hlog.some((l) => /Trading Hot Card/.test(l)), hlog.filter((l) => /Hot|Trading/.test(l)).join(' | '));
   await h.screenshot({ path: `${S}/trade-hot.png` });
   await h.tap('#fcs [data-a=toggle]');
+  await h.waitForFunction(() => !document.querySelector('#fcs [data-a=toggle]').classList.contains('on'));
+  check('🎯 snipe-friendly log line names the widely spread card', hlog.some((l) => /🎯 Snipe-friendly: .*Wide Card \d+ \(spread \d+%, try \d+% under\)/.test(l) && !/Cold Card/.test(l)), hlog.filter((l) => /🎯/.test(l)).join(' | '));
+  const wideIdx = await h.evaluate(() => [...document.querySelectorAll('#fcs [data-a=snipe-add]')].findIndex((b) => b.closest('.li').textContent.includes('Wide Card')));
+  check('Snipe it button listed for the wide card', wideIdx >= 0);
+  if (wideIdx >= 0) await h.tap(`#fcs [data-a=snipe-add][data-i="${wideIdx}"]`);
+  await h.waitForTimeout(300);
+  const players2 = await h.evaluate(() => JSON.parse(localStorage.getItem('fc-sniper:config')).players);
+  const log2 = await h.evaluate(() => [...document.querySelectorAll('#fcs [data-r=log] div')].map((d) => d.textContent));
+  check('Snipe it adds the card to the priority list and logs the suggestion', players2.some((p) => p.id === 304 && p.lowest === 8000) && log2.some((l) => /Added Wide Card — suggested Snipe % \d+ \(your Snipe % stays as set\)/.test(l)), JSON.stringify(players2.map((p) => p.id)));
   check('no page errors', errors.length === 0, errors.join('; '));
   console.log('log:\n  ' + lines.join('\n  '));
   await b.close();

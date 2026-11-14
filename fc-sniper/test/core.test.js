@@ -576,6 +576,18 @@ test('rankHot: demand and supply win, over-budget and thin cards drop out', () =
   assert.ok(r[0].score > r[1].score);
 });
 
+test('snipeScore: tight markets score 0, wide ones get a suggested Snipe %', () => {
+  const mk = (bins) => ({ id: 1, name: 'X', count: bins.length, minBin: bins[0], medianBin: bins[Math.floor(bins.length / 2)], bins });
+  assert.equal(c.snipeScore(mk([10000, 10050, 10100, 10120, 10150, 10200])).score, 0);
+  assert.equal(c.snipeScore(mk([9000, 10000, 10000])).score, 0); // fewer than 4 listings
+  const w = c.snipeScore(mk([8000, 8500, 9000, 10000, 10000, 10100, 10200, 10300, 10400]));
+  assert.ok(w.score > 0 && w.deep === 3);
+  assert.ok(w.suggest >= 3 && w.suggest <= 12);
+  assert.match(w.reason, /3 of 9 listings/);
+  assert.equal(c.snipeScore(mk([8000, 8500, 9000, 10000, 10000]), { budget: 5000 }).score, 0);
+  assert.equal(c.snipeScore(mk([1000, 9000, 10000, 10000])).suggest, 12); // clamped
+});
+
 // ---- meta lineups -----------------------------------------------------------------
 
 test('readStats handles different Web App field shapes', () => {

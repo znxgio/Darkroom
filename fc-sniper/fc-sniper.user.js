@@ -397,7 +397,7 @@
     }
     return [...m.values()].map((c) => {
       const bins = c.bins.sort((a, b) => a - b);
-      return { id: c.id, name: c.name, rating: c.rating, count: bins.length, bids: c.bids, minBin: bins[0], medianBin: bins[Math.floor(bins.length / 2)] };
+      return { id: c.id, name: c.name, rating: c.rating, count: bins.length, bids: c.bids, minBin: bins[0], medianBin: bins[Math.floor(bins.length / 2)], bins };
     });
   }
 
@@ -417,6 +417,25 @@
 
   function rankHot(cards, opts = {}) {
     return cards.map((c) => ({ ...c, score: hotScore(c, opts) })).filter((c) => c.score > 0).sort((a, b) => b.score - a.score);
+  }
+
+  /**
+   * How friendly a card is to a bot that searches every few seconds: wide gaps between
+   * the cheapest and the typical listing mean people misprice it; a tight market
+   * (everything within ~2%) is eaten by faster bots. c: aggregateListings entry (with bins).
+   * -> { score 0-100, spread, deep, suggest (Snipe %, 3-12), reason }
+   */
+  function snipeScore(c, opts = {}) {
+    const none = { score: 0, spread: 0, deep: 0, suggest: 0, reason: '' };
+    const budget = opts.budget || Infinity;
+    if (!c || c.count < (opts.minListings || 4) || !(c.medianBin > 0) || c.minBin > budget) return none;
+    const spread = (c.medianBin - c.minBin) / c.medianBin;
+    if (spread < 0.02) return { ...none, spread };
+    const bins = c.bins || [c.minBin];
+    const deep = bins.filter((b) => b <= c.medianBin * 0.95).length;
+    const score = Math.min(100, Math.round(Math.min(spread, 0.2) * 300 + Math.min(deep, 5) * 8));
+    const suggest = Math.max(3, Math.min(12, Math.round((spread * 100) / 2)));
+    return { score, spread, deep, suggest, reason: `${deep} of ${c.count} listings ≥ 5% under the usual price` };
   }
 
   /**
@@ -2007,7 +2026,7 @@
     findMarketPrice, robustPrice, searchBudget, addPriceSample, prunePrices, priceTrend, trendText, lookupUrl, planMaxBuy, effectiveMaxBuy, withinReach, huntTargets,
     cardAdvice, sessionReport, bidSkipReason, shortTime, searchReport, auctionReport, planFloor, planBudget, planVerdict, planSummary, robustLow, trendNudge, snipeBase, recordGap, gapStats, smartLevels, gammaSample, betaSample, armPrior, decayArm, upgradeArm, armRate, chooseDiscount, chooseTarget, missWeight, recordArm, deepestArmFor, priceShifted, bestArm, flipPlan, tradeOpts, tradeCap, bidAmount, freeCoins, bidBlock, warCeiling, warSteps, binVsWar, settleSales,
     listSpendable, reserveOk, afterListBuy,
-    aggregateListings, hotScore, rankHot, priceBands, provenFlips, flipValue, priceLadder, sbcCostEstimate,
+    aggregateListings, hotScore, rankHot, snipeScore, priceBands, provenFlips, flipValue, priceLadder, sbcCostEstimate,
     addHistory, summarizeHistory, isDiscordWebhook, discordPayload,
     squadRating, squadChemistry, topValues, rankUpgrades,
     POS_NAMES, normPos, baseId, FORMATIONS, META_NOTES, squadRatingExact, lineupScore, bestLineup, metaScore, readStats,
@@ -5032,6 +5051,8 @@
         ranked.forEach((c) => put(c, 'market'));
         // When nothing repeats, the most-bid-on singles are still worth a look.
         if (!ranked.length) agg.filter((c) => c.bids > 0 && c.minBin <= budget).sort((a, b) => b.bids - a.bids).slice(0, 4).forEach((c) => put({ ...c, score: c.bids }, 'bids'));
+        this.snipeList = agg.map((c) => ({ ...c, bins: undefined, ...snipeScore(c, { budget }) })).filter((c) => c.score > 0).sort((a, b) => b.score - a.score).slice(0, 5);
+        ui.log(this.snipeList.length ? `🎯 Snipe-friendly: ${this.snipeList.map((x) => `${x.name} ${x.score} (spread ${Math.round(x.spread * 100)}%, try ${x.suggest}% under)`).join(', ')}` : '🎯 No snipe-friendly cards in this scan (prices were tight)', this.snipeList.length ? 'ok' : 'muted');
         const repeats = agg.filter((c) => c.count >= 2).length;
         ui.log(`Scanned ${all.length} listings in ${searches} searches · ${agg.length} different cards, ${repeats} listed more than once · ${proven.length} proven flip${proven.length === 1 ? '' : 's'} from your history`, 'muted');
         if (!cands.size) {
@@ -5071,6 +5092,19 @@
         if (autoAdd && good.length) { this.addTop(); added = true; }
       });
       return added;
+    },
+
+    snipeList: [],
+
+    addSnipe(i) {
+      const c = this.snipeList[i];
+      if (!c || engine.running) return;
+      const players = engine.cfg.players.filter((p) => p.id !== c.id);
+      players.push({ id: c.id, name: c.name, rating: c.rating, avg: c.medianBin, lowest: c.minBin, checkedAt: Date.now() });
+      engine.cfg.players = players;
+      engine.save();
+      ui.renderPlayers(); ui.renderTrade(); ui.renderHot();
+      ui.log(`Added ${c.name} — suggested Snipe % ${c.suggest} (your Snipe % stays as set)`, 'ok');
     },
 
     add(card) {
@@ -5870,6 +5904,7 @@
             return this.log('Spend counter reset', 'muted');
           case 'hot-scan': return hot.scan(false);
           case 'hot-add': return hot.add(hot.list[Number(btn.dataset.i)]);
+          case 'snipe-add': return hot.addSnipe(Number(btn.dataset.i));
           case 'hot-top': return hot.addTop();
           case 'trade-start':
             if (engine.running || jobs.current) return;
@@ -6469,16 +6504,20 @@
 
     renderHot() {
       const box = this.q('[data-r=hot]');
-      if (!box || !hot.list.length) return;
+      if (!box || !(hot.list.length || hot.snipeList.length)) return;
       const mine = new Set(engine.cfg.players.map((p) => p.id));
       const ago = Math.round((Date.now() - hot.scannedAt) / 60e3);
+      const snipeHtml = hot.snipeList.length ? `<h4 style="margin:10px 0 4px">🎯 Snipe-friendly</h4><div class="list">${hot.snipeList.map((c, i) => `<div class="li">
+          <span class="t"><b>${esc(c.name)} ${c.rating || ''}</b>
+          <small>cheapest ${fmt(c.minBin)} · spread ${Math.round(c.spread * 100)}% · ${esc(c.reason)} · try ${c.suggest}% under</small></span>
+          ${mine.has(c.id) ? '<span class="tag ok">added</span>' : `<button class="mini" data-a="snipe-add" data-i="${i}">Snipe it</button>`}</div>`).join('')}</div>` : '';
       box.innerHTML = `<div class="list">${hot.list.map((c, i) => `<div class="li">
           <span class="t"><b>${esc(c.name)} ${c.rating || ''}${c.proven ? ` <span class="tag ok">flipped ${c.proven.wins}×</span>` : ''}${c.bids ? ` <span class="tag ok">${c.bids} bid${c.bids === 1 ? '' : 's'}</span>` : ''}</b>
           <small>${c.trend && c.trend.n ? `${esc(trendText(c.trend))}<br>` : ''}${c.listed} listed · avg ${fmt(c.avg)}${c.plan ? ` · buy ≤ ${fmt(c.plan.maxBuy)} → sell ${fmt(c.plan.sell)} <span class="up">+${fmt(c.plan.profit)}</span>` : ' · <span class="down">no profit at your settings</span>'}</small></span>
           <a class="mini" href="${lookupUrl(c.name)}" target="_blank" rel="noopener" title="Look up on FUT.GG">🔎</a>
           ${c.plan ? (mine.has(c.id) ? '<span class="tag ok">added</span>' : `<button class="mini" data-a="hot-add" data-i="${i}">Add</button>`) : ''}</div>`).join('')}</div>
         ${hot.list.some((c) => c.plan) ? `<button class="btn go-btn" data-a="hot-top">Trade the top ${Math.min(engine.cfg.hotPick || 3, hot.list.filter((c) => c.plan).length)}</button>` : ''}
-        <p class="note">Scanned ${ago < 1 ? 'just now' : `${ago} min ago`}.</p>`;
+        <p class="note">Scanned ${ago < 1 ? 'just now' : `${ago} min ago`}.</p>${snipeHtml}`;
     },
 
     renderTrade() {
@@ -6759,7 +6798,7 @@
       this.qa('[data-k] , [data-k] button, [data-r=pq], [data-a=price]').forEach((el) => { el.disabled = on; });
       const bar = this.q('[data-r=jobbar]');
       if (bar && !jobs.current) { bar.hidden = !on; this.q('[data-r=jobname]').textContent = on ? '▶ Bot running — stop (■) to change settings' : ''; }
-      this.qa('[data-a=trade-start], [data-a=hot-scan], [data-a=hot-top], [data-a=hot-add], [data-a=autofill], [data-up], [data-down], [data-fon], [data-fedit], [data-fmax], [data-a=filter-new]').forEach((el) => { el.disabled = on; });
+      this.qa('[data-a=trade-start], [data-a=hot-scan], [data-a=hot-top], [data-a=hot-add], [data-a=snipe-add], [data-a=autofill], [data-up], [data-down], [data-fon], [data-fedit], [data-fmax], [data-a=filter-new]').forEach((el) => { el.disabled = on; });
       const ts = this.q('[data-a=trade-start]');
       if (ts) ts.textContent = on ? (engine.cfg.mode === 'trade' ? 'Trading… (■ to stop)' : 'Sniping… (■ to stop)') : 'Start trading';
       this.renderStatus();
