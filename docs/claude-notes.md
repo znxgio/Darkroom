@@ -290,6 +290,8 @@ Newest learnings go at the end of each section. Dates are when the note was writ
 
 - 2.5.2 SERIOUS: user's squad lost an RB and a mid after a points SBC ("5x 80+ Upgrade" completed). Log: "skipped 4 in your squad" while squad names were "---" → the squad guard read a half-loaded squad and protected almost nothing. Fix: sbc.pool fails closed (≥7 readable starters, no blank names, squad cards must be in the club) and logs `squad guard refused`. Test: e2e-tasks blanks the mock squad names → no submit.
 
+- 2.5.2: user's active Web App squad was a fodder squad ("Foggia AS"), so "Never use my active squad" protected the wrong team. Now sbc.pool also protects every saved squad (fut.allSquadItems tries requestSquads/requestAllSquads/getSquads/getAllSquads, then requestSquadById each); if none works it warns once and logs the Squad service's method names. Real method name still to confirm from a log.
+
 ## 8. Debate protocol (user's design, 2026-11-12)
 Use when Opus is unsure about an idea or design. Relay it with background subagents + SendMessage (agent teams don't run here).
 - **Side A** and **Side B** (Sonnet, medium effort): argue opposite positions (e.g. aggressive vs cautious). Max ~250 words, top 2 changes.

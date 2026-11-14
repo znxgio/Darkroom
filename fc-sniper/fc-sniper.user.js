@@ -2972,6 +2972,41 @@
       const res = await observe(w.services.Squad.requestSquadById(w.services.Squad.getActiveSquadId()));
       return res.success ? res.data && res.data.squad : null;
     },
+    /**
+     * 2.5.2: every saved squad's player cards (not just the active one), so SBCs never use a card from any of your
+     * squads. Returns { ok, items, squads } — ok false when EA's squad list couldn't be read (the caller says so).
+     */
+    async allSquadItems(activeId) {
+      const S = w.services.Squad;
+      let list = null;
+      for (const m of ['requestSquads', 'requestAllSquads', 'getSquads', 'getAllSquads']) {
+        if (typeof S[m] !== 'function') continue;
+        try {
+          let r = S[m]();
+          if (r && typeof r.observe === 'function') { const res = await observe(r); r = res.success ? (res.data || res.response) : null; }
+          const arr = Array.isArray(r) ? r : r && (r.squads || r.items || (r.squad ? [r.squad] : null));
+          if (Array.isArray(arr)) { list = arr; break; }
+        } catch (e) { debugLog.push(`squad list via ${m}: ${errText(e)}`); }
+      }
+      if (!list) { debugLog.push(`squad list: no method found · Squad service: ${Object.keys(S).concat(Object.keys(Object.getPrototypeOf(S) || {})).filter((k) => typeof S[k] === 'function').join(',').slice(0, 600)}`); return { ok: false, items: [], squads: 0 }; }
+      const items = [];
+      let read = 0;
+      for (const sq of list.slice(0, 30)) {
+        const id = sq && (sq.id ?? (typeof sq.getId === 'function' ? sq.getId() : undefined));
+        if (id === undefined || id === null || id === activeId) continue;
+        let full = typeof sq.getPlayers === 'function' && sq.getPlayers().some((x) => x && (x.item || x).definitionId) ? sq : null;
+        if (!full) {
+          await sleep(jitter(400, 900));
+          const res = await observe(S.requestSquadById(id));
+          full = res.success ? res.data && res.data.squad : null;
+        }
+        if (!full) return { ok: false, items: [], squads: read };
+        read++;
+        for (const x of (typeof full.getPlayers === 'function' ? full.getPlayers() : full.getFieldPlayers())) { const it = x && (x.item || x); if (it && it.definitionId) items.push(it); }
+      }
+      return { ok: true, items, squads: read };
+    },
+
     /** Player cards an SBC set gives as its reward (empty for pack/coin rewards). */
     sbcRewardPlayers(set) {
       let raw = [];
@@ -4882,9 +4917,19 @@
           const it = s && (s.item || s);
           if (it && it.definitionId) { this.guard.itemIds.add(it.id); this.guard.defIds.add(it.definitionId); names.push(fut.toPlayer(it).name); }
         }
+        const activeIds = [...this.guard.itemIds];
+        // 2.5.2: your other saved squads too (the active one may not be your main team)
+        const others = await fut.allSquadItems(w.services.Squad.getActiveSquadId());
+        if (others.ok) {
+          for (const it of others.items) { this.guard.itemIds.add(it.id); this.guard.defIds.add(it.definitionId); }
+          if (others.squads) debugLog.push(`squad guard: also protecting ${others.items.length} cards from ${others.squads} other squad(s)`);
+        } else if (!this.otherSquadsWarned) {
+          this.otherSquadsWarned = true;
+          ui.log("⚠️ Couldn't read your other saved squads — only the active squad is protected. Set your main team as the active squad before SBCs.", 'warn');
+        }
         // 2.5.2 fail closed: a half-loaded squad (names "---", cards that aren't in your club) protects nothing — stop instead
         const clubIds = new Set(this.raw.map((p) => p.itemId));
-        const notInClub = [...this.guard.itemIds].filter((id) => !clubIds.has(id)).length;
+        const notInClub = activeIds.filter((id) => !clubIds.has(id)).length;
         const blank = names.filter((n) => /^(-+|#\d+)?$/.test(String(n || '').trim())).length;
         const problem = field.length < 7 ? `only ${field.length} players in your starting XI were readable`
           : blank ? `${blank} of your squad's cards haven't loaded yet (names show as “---”)`

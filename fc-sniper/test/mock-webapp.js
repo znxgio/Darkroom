@@ -44,7 +44,11 @@ function installMock() {
   ['GK', 'RB', 'CB', 'CB', 'CB', 'LB', 'RWB', 'LWB', 'CDM', 'CDM', 'CM', 'CAM', 'CAM', 'RM', 'LM', 'RW', 'LW', 'CF', 'CF', 'ST', 'ST']
     .forEach((pos, i) => club.push(mk(600 + i, 83 + (i % 4), { pos: ids[pos], league: 13, nation: 10 + (i % 4), name: `Bench ${pos} ${i}` })));
   window.T = { piles: { club: [], storage: [], transfer: [], discarded: [] }, unassigned: [], submitted: [], searches: [], opened: 0 };
-  window.T.squadItems = squadItems; // tests can make the squad look half-loaded
+  window.T.squadItems = squadItems;
+  // a second saved squad (not active) holding perfect fodder — must never be used either
+  const otherItems = [mk(690, 83, { rare: true, name: 'Main Team 83' }), mk(691, 84, { rare: true, name: 'Main Team 84' })];
+  otherItems.forEach((it) => club.push(it));
+  const otherSquad = { getPlayers: () => otherItems.map((item, index) => ({ index, item })), getFieldPlayers: () => otherItems.map((item, index) => ({ index, item })) }; // tests can make the squad look half-loaded
   const squad = {
     getFieldPlayers: () => squadItems.map((item, index) => ({ index, item, position: { typeName: posList[index] } })),
     getPlayers: () => [...squadItems, ...benchItems].map((item, index) => ({ index, item })),
@@ -182,7 +186,9 @@ function installMock() {
       search(c) { const page = club.slice(c.offset, c.offset + c.count); return obs({ success: true, response: { items: page, retrievedAll: c.offset + c.count >= club.length } }); },
     },
     Store: { getPacks: () => obs({ success: true, response: { packs: T.packList.slice() } }) },
-    Squad: { getActiveSquadId: () => 1, requestSquadById: () => obs({ success: true, data: { squad } }),
+    Squad: { getActiveSquadId: () => 1,
+      requestSquadById: (id) => obs({ success: true, data: { squad: id === 2 ? otherSquad : squad } }),
+      requestSquads: () => obs({ success: true, data: { squads: [{ id: 1 }, { id: 2 }] } }),
       create(name, formation, items) { T.created = { name, formation, n: items.filter(Boolean).length, ratings: items.map((i) => i && i.rating) }; return obs({ success: true }); } },
     SBC: {
       requestSets: () => obs({ success: true, data: { sets } }),

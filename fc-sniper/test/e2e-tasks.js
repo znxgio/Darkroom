@@ -209,6 +209,7 @@ const idle = (p, ms = 150000) => p.waitForFunction(() => !document.querySelector
   check('points hand-in never uses squad cards', !(await p.evaluate((ids) => ids.some((id) => services.Squad && false), P.ids)) && !plog.some((l) => /squads/.test(l)));
 
   check('active squad protected (starters)', !sub.flat().some((x) => x.def >= 100 && x.def <= 110));
+  check('other saved squads protected (not just the active one)', !sub.flat().some((x) => x.def === 690 || x.def === 691));
   check('subs and reserves protected', !sub.flat().some((x) => x.def === 650 || x.def === 651));
   check('special cards not used', !sub.flat().some((x) => x.def >= 660 && x.def < 670));
 
