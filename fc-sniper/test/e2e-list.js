@@ -103,9 +103,10 @@ async function run(b, opts) {
     players: [{ id: 2, name: 'Second Target', rating: 87 }], extra: { buyOnce: false, maxBuys: 2, smartProbeEvery: 2, discount: 4, smartPrice: true } }); // learner never goes closer than Snipe % under avg
   const mem = sm.learn && sm.learn.targets && sm.learn.targets['p:2'];
   const a4 = mem && mem.arms[4];
-  check('smart sniping tries several discounts', mem && Object.keys(mem.arms).length >= 3, mem && JSON.stringify(mem.arms));
+  // (2.4.6+: with no evidence a deeper level isn't favoured, so it may stay on the levels that land)
+  check('smart sniping tries more than one discount', mem && Object.keys(mem.arms).length >= 2, mem && JSON.stringify(mem.arms));
   check('lost races and buys recorded at the discount that hits', a4 && a4.misses >= 1 && a4.hits >= 1 && sm.L.bought.every((x) => x.price === 17000), JSON.stringify(a4));
-  check('near misses spotted just above the max (never bought above it)', Object.values(mem.arms).some((x) => x.near > 0) && sm.L.bought.every((x) => x.price <= 17250), JSON.stringify(mem.arms));
+  check('near-miss checks recorded (never bought above the max)', mem && Array.isArray(mem.gaps) && mem.gaps.length >= 1 && sm.L.bought.every((x) => x.price <= 17250), JSON.stringify({ gaps: mem && mem.gaps && mem.gaps.length, bought: sm.L.bought }));
   check('missed buys say someone was faster, with your speed', sm.log.some((l) => /Missed Second Target at 17,000 \(461\) — someone was faster · you: \d+ ms to react \+ \d+ ms to EA/.test(l)), sm.log.filter((l) => /Missed/.test(l))[0]);
   check('Learning card shows the best discount', /Second Target best 4% under/.test(sm.learnText.replace(/\s+/g, ' ')), sm.learnText.replace(/\s+/g, ' ').slice(0, 200));
   check('never buys above the learned max', sm.L.bought.length >= 1 && sm.L.bought.every((x) => x.price <= 17250), JSON.stringify(sm.L.bought));

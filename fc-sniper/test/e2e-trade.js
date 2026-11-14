@@ -230,7 +230,7 @@ function installHotMock() {
   await h.waitForTimeout(300);
   const players2 = await h.evaluate(() => JSON.parse(localStorage.getItem('fc-sniper:config')).players);
   const log2 = await h.evaluate(() => [...document.querySelectorAll('#fcs [data-r=log] div')].map((d) => d.textContent));
-  check('Snipe it adds the card to the priority list and logs the suggestion', players2.some((p) => p.id === 304 && p.lowest === 8000) && log2.some((l) => /Added Wide Card — suggested Snipe % \d+ \(your Snipe % stays as set\)/.test(l)), JSON.stringify(players2.map((p) => p.id)));
+  check('Snipe it adds the card to the priority list and logs the suggestion', players2.some((p) => p.id === 304 && !p.checkedAt) /* priced on start, never hunted at the default max (review fix) */ && log2.some((l) => /Added Wide Card — suggested Snipe % \d+ \(your Snipe % stays as set\)/.test(l)), JSON.stringify(players2.map((p) => p.id)));
   check('no page errors', errors.length === 0, errors.join('; '));
   console.log('log:\n  ' + lines.join('\n  '));
   await b.close();
