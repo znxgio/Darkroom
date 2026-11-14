@@ -1367,3 +1367,18 @@ test('evoPicks: starting XI first; bench only to fill up', () => {
   assert.deepEqual(c.evoPicks([m('Sub', 88, 'bench'), m('A', 84, 'xi'), m('B', 86, 'xi'), m('C', 80, 'xi')], 6).map((x) => x.player.name), ['B', 'A', 'C']);
   assert.deepEqual(c.evoPicks([m('Sub', 88, 'bench'), m('A', 84, 'xi')], 6).map((x) => x.player.name), ['A', 'Sub']);
 });
+
+test('auto-compare: pro picks, score parts and side-by-side rows', () => {
+  assert.equal(c.proPick({ name: 'Kylian Mbappé' }, 'ST'), true);
+  assert.equal(c.proPick({ name: 'Mbappe' }, 'LW'), true, 'accent-insensitive');
+  assert.equal(c.proPick({ name: 'Nobody' }, 'ST'), false);
+  const a = { name: 'Kimmich', rating: 88, positions: ['RB'], stats: { pac: 70, sho: 72, pas: 88, dri: 84, def: 82, phy: 75 }, playStyles: [] };
+  const b = { name: 'Frimpong', rating: 86, positions: ['RB'], stats: { pac: 95, sho: 70, pas: 78, dri: 86, def: 76, phy: 70 }, playStyles: [{ name: 'Quick Step', plus: true }] };
+  const sp = c.scoreParts(b, 'RB');
+  assert.ok(sp.parts.some((x) => x.label === 'meta PlayStyles'));
+  assert.equal(sp.total, c.metaScore(b, 'RB'), 'breakdown adds up to the meta score');
+  const cmp = c.comparePlayers(a, b, 'RB');
+  assert.equal(cmp.rows.find((r) => r.label === 'Pace').better, 'b');
+  assert.equal(cmp.rows.find((r) => r.label === 'Meta PlayStyles').b, 'Quick Step+');
+  assert.ok(['a', 'b', ''].includes(cmp.winner));
+});

@@ -1496,6 +1496,95 @@
     GK: [['Far Reach', 0.9, true], ['Footwork', 0.8, true], ['Deflector', 0.5], ['Rush Out', 0.5], ['Cross Claimer', 0.3]],
   };
 
+  /**
+   * "Pros run this" (2.5.0): players that pros and top guides use per position group, from dated public sources
+   * (research notes in docs/claude-notes.md). Names are matched loosely; refresh when the meta moves.
+   */
+  const PRO_PICKS = {
+    asOf: '2026-11-14 (fut.gg most-used-by-pros page; u7buy 21 Oct; Red Bull 27 Oct; LWOS 11 Nov — GK/CB/FB lists thin, single listicles)',
+    groups: {
+      ST: ['Mbappé', 'Dembélé', 'Dumornay', 'Adeyemi', 'Chawinga', 'Raphinha', 'Shaw', 'Brobbey'],
+      WING: ['Mbappé', 'Dembélé', 'Lamine Yamal', 'Diomande', 'Adeyemi', 'Claudia Pina', 'Barcola', 'Paralluelo'],
+      CAM: ['Alexia Putellas', 'Aitana Bonmatí', 'Dumornay', 'Vicky López', 'Kika Nazareth', 'Bruno Fernandes', 'Lavelle', 'Wirtz'],
+      CM: ['Karchaoui', 'Pedri', 'Stanway', 'Mariona', 'Xavi Espart', 'Valverde', 'Vitinha', 'Frenkie de Jong'],
+      CDM: ['Stanway', 'Patri Guijarro', 'Karchaoui', 'Xavi Espart', 'Pedri', 'João Neves', 'Elliot Anderson'],
+      FB: ['Xavi Espart', 'Ona Batlle', 'Selma Bacha', 'Carreras', 'Timber'],
+      CB: ['Lacroix', 'Pacho', 'Upamecano', 'Roger Ibañez', 'Carreras', 'Eric García', 'Tomori', 'Khusanov'],
+      GK: ['Joan García', 'Courtois', 'Emiliano Martínez', 'Kobel', 'Raya', 'Donnarumma'],
+    },
+  };
+
+  /** Is this player on the pro-picks list for the position? */
+  function proPick(p, pos) {
+    const list = (PRO_PICKS.groups[META_GROUP[pos] || pos] || []);
+    if (!p || !p.name || !list.length) return false;
+    const norm = (x) => String(x).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s*\(.*\)$/, '').trim();
+    const n = norm(p.name);
+    return list.some((x) => { const k = norm(x); return n === k || n.endsWith(` ${k}`) || k.endsWith(` ${n}`); });
+  }
+
+  /**
+   * Detailed attributes that matter per position group (weights sum to 1; priors from guides). Used only when the card
+   * carries detailed stats (p.attrs, keys like acceleration/sprintSpeed…); otherwise face stats are used.
+   */
+  const DETAIL_W = {
+    ST: { finishing: 0.2, acceleration: 0.14, sprintSpeed: 0.1, composure: 0.1, positioning: 0.1, strength: 0.08, agility: 0.08, shotPower: 0.08, ballControl: 0.06, reactions: 0.06 },
+    WING: { acceleration: 0.16, sprintSpeed: 0.12, agility: 0.12, dribbling: 0.14, ballControl: 0.1, finishing: 0.1, composure: 0.08, crossing: 0.06, shortPassing: 0.06, balance: 0.06 },
+    CAM: { shortPassing: 0.14, vision: 0.14, ballControl: 0.12, dribbling: 0.12, agility: 0.1, composure: 0.1, finishing: 0.08, longShots: 0.08, acceleration: 0.06, reactions: 0.06 },
+    CM: { shortPassing: 0.16, longPassing: 0.12, vision: 0.12, ballControl: 0.1, composure: 0.1, stamina: 0.1, interceptions: 0.08, agility: 0.08, reactions: 0.07, strength: 0.07 },
+    CDM: { interceptions: 0.16, defensiveAwareness: 0.14, standingTackle: 0.14, strength: 0.1, stamina: 0.1, shortPassing: 0.1, composure: 0.08, aggression: 0.06, longPassing: 0.06, reactions: 0.06 },
+    FB: { acceleration: 0.14, sprintSpeed: 0.14, stamina: 0.12, interceptions: 0.1, standingTackle: 0.12, defensiveAwareness: 0.1, crossing: 0.08, strength: 0.06, agility: 0.06, shortPassing: 0.08 },
+    CB: { defensiveAwareness: 0.16, standingTackle: 0.15, interceptions: 0.13, strength: 0.12, jumping: 0.08, headingAccuracy: 0.08, sprintSpeed: 0.1, acceleration: 0.06, composure: 0.06, aggression: 0.06 },
+  };
+
+  /**
+   * Why one player scores what he does in a position (2.5.0): the parts of the meta score, for the compare view.
+   * Returns { total, parts: [{ label, value }] }.
+   */
+  function scoreParts(p, pos) {
+    if (!p) return { total: 0, parts: [] };
+    const g = META_GROUP[pos] || pos;
+    const parts = [];
+    const dw = DETAIL_W[g];
+    if (dw && p.attrs && Object.keys(dw).some((k) => p.attrs[k] > 0)) {
+      parts.push({ label: 'key detailed stats', value: Math.round(Object.entries(dw).reduce((a, [k, w]) => a + (p.attrs[k] || 0) * w, 0) * 0.7 * 10) / 10 });
+    } else if (META_WEIGHTS[pos] && p.stats) {
+      const st = p.stats; const w = META_WEIGHTS[pos];
+      parts.push({ label: 'face stats for the position', value: Math.round([st.pac, st.sho, st.pas, st.dri, st.def, st.phy].reduce((a, x, i) => a + (x || 0) * w[i], 0) * 0.7 * 10) / 10 });
+    } else parts.push({ label: 'rating', value: Math.round((p.rating || 0) * 0.7 * 10) / 10 });
+    parts.push({ label: 'overall', value: Math.round((p.rating || 0) * 0.3 * 10) / 10 });
+    const ps = Math.min(4, metaPlayStyles(p, pos).reduce((a, x) => a + x.value, 0) * 1.2);
+    if (ps) parts.push({ label: 'meta PlayStyles', value: Math.round(ps * 10) / 10 });
+    if (ATTACKING.has(pos) && (p.skillMoves >= 4 || p.weakFoot >= 4)) parts.push({ label: 'skill moves / weak foot', value: (p.skillMoves >= 4 ? 1 : 0) + (p.weakFoot >= 4 ? 1 : 0) });
+    if (proPick(p, pos)) parts.push({ label: 'pros run this', value: 2 });
+    return { total: Math.round(parts.reduce((a, x) => a + x.value, 0) * 10) / 10, parts };
+  }
+
+  /**
+   * Side-by-side rows for two players in one position (2.5.0). Returns { rows: [{ label, a, b, better: 'a'|'b'|'' }], a, b, winner }.
+   */
+  function comparePlayers(a, b, pos) {
+    const rows = [];
+    const row = (label, x, y, higher = true) => {
+      const better = x === y || x === undefined || y === undefined || x === '' || y === '' ? '' : (higher ? (x > y ? 'a' : 'b') : (x < y ? 'a' : 'b'));
+      rows.push({ label, a: x ?? '—', b: y ?? '—', better });
+    };
+    row('Rating', a.rating, b.rating);
+    const keys = [['pac', 'Pace'], ['sho', 'Shooting'], ['pas', 'Passing'], ['dri', 'Dribbling'], ['def', 'Defending'], ['phy', 'Physical']];
+    if (a.stats && b.stats) keys.forEach(([k, l]) => row(l, a.stats[k], b.stats[k]));
+    const dw = DETAIL_W[META_GROUP[pos] || pos];
+    if (dw && a.attrs && b.attrs) Object.keys(dw).forEach((k) => row(k.replace(/([A-Z])/g, ' $1').replace(/^./, (c) => c.toUpperCase()), a.attrs[k], b.attrs[k]));
+    const ps = (p) => metaPlayStyles(p, pos).map((x) => x.name + (x.plus ? '+' : '')).join(', ') || '—';
+    rows.push({ label: 'Meta PlayStyles', a: ps(a), b: ps(b), better: metaPlayStyles(a, pos).length === metaPlayStyles(b, pos).length ? '' : metaPlayStyles(a, pos).length > metaPlayStyles(b, pos).length ? 'a' : 'b' });
+    if (a.accelerate || b.accelerate) rows.push({ label: 'AcceleRATE', a: a.accelerate || '—', b: b.accelerate || '—', better: '' });
+    row('Skill moves', a.skillMoves || undefined, b.skillMoves || undefined);
+    row('Weak foot', a.weakFoot || undefined, b.weakFoot || undefined);
+    rows.push({ label: 'Pros run this', a: proPick(a, pos) ? 'yes' : '—', b: proPick(b, pos) ? 'yes' : '—', better: proPick(a, pos) === proPick(b, pos) ? '' : proPick(a, pos) ? 'a' : 'b' });
+    const sa = scoreParts(a, pos); const sb = scoreParts(b, pos);
+    row('Meta score', sa.total, sb.total);
+    return { rows, a: sa, b: sb, winner: Math.abs(sa.total - sb.total) < 0.5 ? '' : sa.total > sb.total ? 'a' : 'b' };
+  }
+
   /** The meta PlayStyles a player has for a position: [{ name, plus, value }] (value already weighted). */
   function metaPlayStyles(p, pos) {
     const list = META_PS[META_GROUP[pos] || pos];
@@ -1528,8 +1617,9 @@
     } else if (pos === 'CM' && p.weakFoot >= 4) score += 0.5;
     // meta PlayStyles (2.5.0): a modest bonus — FC 27 rewards raw stats more than PlayStyles; at most +4
     const ps = Math.min(4, metaPlayStyles(p, pos).reduce((a, x) => a + x.value, 0) * 1.2);
+    const pro = proPick(p, pos) ? 2 : 0; // "pros run this" (curated, dated list)
     // keep the card's overall in the picture so a 70-rated speedster doesn't win on pace alone
-    return Math.round((score * 0.7 + (p.rating || 0) * 0.3 + ps) * 10) / 10;
+    return Math.round((score * 0.7 + (p.rating || 0) * 0.3 + ps + pro) * 10) / 10;
   }
 
   /**
@@ -2256,7 +2346,7 @@
     cacheBustBid, jitter, pickTargets, planSellPrice, classifyStatus,
     normalizeName, parsePlayerDb, searchPlayers, cardVersions, playerForIteration, migrateConfig, filterSummary, sniperTargets, LEAGUES,
     findMarketPrice, robustPrice, searchBudget, addPriceSample, prunePrices, priceTrend, trendText, lookupUrl, planMaxBuy, effectiveMaxBuy, withinReach, huntTargets,
-    newerVersion, setupIssues, adviceFix, sbcLikely, sbcOrder, coinGoal, cardAdvice, sessionReport, bidSkipReason, evoPicks, metaPlayStyles, upgradeWhy, readPlayStyles, cardFieldsProbe, shortTime, searchReport, auctionReport, planFloor, planBudget, planVerdict, planSummary, robustLow, trendNudge, snipeBase, recordGap, gapStats, smartLevels, gammaSample, betaSample, armPrior, decayArm, upgradeArm, armRate, chooseDiscount, chooseTarget, missWeight, recordArm, deepestArmFor, priceShifted, bestArm, flipPlan, tradeOpts, tradeCap, bidAmount, freeCoins, bidBlock, warCeiling, warSteps, binVsWar, settleSales,
+    newerVersion, setupIssues, adviceFix, sbcLikely, sbcOrder, coinGoal, cardAdvice, sessionReport, bidSkipReason, proPick, scoreParts, comparePlayers, evoPicks, metaPlayStyles, upgradeWhy, readPlayStyles, cardFieldsProbe, shortTime, searchReport, auctionReport, planFloor, planBudget, planVerdict, planSummary, robustLow, trendNudge, snipeBase, recordGap, gapStats, smartLevels, gammaSample, betaSample, armPrior, decayArm, upgradeArm, armRate, chooseDiscount, chooseTarget, missWeight, recordArm, deepestArmFor, priceShifted, bestArm, flipPlan, tradeOpts, tradeCap, bidAmount, freeCoins, bidBlock, warCeiling, warSteps, binVsWar, settleSales,
     listSpendable, reserveOk, afterListBuy,
     aggregateListings, hotScore, rankHot, snipeScore, priceBands, provenFlips, flipValue, priceLadder, sbcCostEstimate,
     addHistory, summarizeHistory, profitSummary, isDiscordWebhook, discordPayload,
@@ -4994,6 +5084,29 @@
       }
     },
 
+    /**
+     * ⚖️ Auto-compare (2.5.0): every spot in your XI against the best card you own for it (club + SBC storage), by the
+     * meta score (stats for the position, meta PlayStyles, pros-run-this). Reads your squad and club — no market searches.
+     */
+    async compareTeam() {
+      return jobs.run('Comparing your team', async () => {
+        const { slots } = await this.readSquad();
+        const { club } = await this.ownedCards(slots);
+        const used = new Set(slots.map((x) => x.player && x.player.id).filter(Boolean));
+        this.compare = slots.map((sl, i) => {
+          const cur = sl.player;
+          const pool = club.filter((c) => !used.has(c.id) && (c.positions || []).includes(sl.position));
+          const best = pool.map((c) => ({ c, s: metaScore(c, sl.position) })).sort((x, y) => y.s - x.s)[0];
+          const curS = cur ? metaScore(cur, sl.position) : 0;
+          const better = best && best.s - curS >= 1;
+          return { i, position: sl.position, cur, alt: best ? best.c : null, curScore: curS, altScore: best ? best.s : 0, verdict: !cur ? 'empty spot' : better ? 'swap' : 'keep' };
+        });
+        ui.renderCompare();
+        const swaps = this.compare.filter((x) => x.verdict === 'swap');
+        ui.log(swaps.length ? `⚖️ ${swaps.length} spot${swaps.length === 1 ? '' : 's'} where a card you own scores better: ${swaps.map((x) => `${x.position} ${x.alt.name}`).join(' · ')}` : '⚖️ Your XI is already your best by the meta score — use Find upgrades for market options', 'ok');
+      });
+    },
+
     /** The team saved by the last update (shown right away after a reload). */
     savedTeam() { return store.get(KEYS.team, null); },
 
@@ -6205,6 +6318,8 @@
               <div class="two"><button class="btn blue" data-a="team-update">↻ Update my team</button><button class="btn" data-a="analyse">Find upgrades</button></div>
               <button class="btn" data-a="refresh-squad">Clear squad data</button>
               <p class="note">“Update my team” reads your squad in seconds. “Find upgrades” is the slower part: it checks the market and SBCs for your 3 weakest spots.</p></div>
+            <div class="card"><h4>⚖️ Compare</h4><div data-r="cmp"><p class="empty">Compares every spot in your XI with the best card you own for it — stats for the position, meta PlayStyles, and whether pros run him. Tap a row to see them side by side.</p></div>
+              <button class="btn blue" data-a="compare-team">⚖️ Compare my team</button></div>
             <div data-r="upg"></div>
             <div class="card"><h4>Formation coach</h4><div data-r="forms"><p class="empty">Builds the best XI from your own club for each formation, with what public guides call meta marked 📰.</p></div>
               <button class="btn blue" data-a="forms">Compare formations</button>
@@ -6329,6 +6444,10 @@
           case 'evo-preview': return evos.preview(Number(btn.dataset.i));
           case 'evo-open': this.evoOpen = this.evoOpen === Number(btn.dataset.i) ? -1 : Number(btn.dataset.i); return this.renderEvos();
           case 'analyse': return upgrades.analyse();
+          case 'compare-team':
+            if (engine.running || jobs.current) { this.log('Stop the running task first (■)', 'warn'); return; }
+            return upgrades.compareTeam();
+          case 'compare-open': { this.cmpOpen = this.cmpOpen === Number(btn.dataset.i) ? -1 : Number(btn.dataset.i); return this.renderCompare(); }
           case 'team-update':
             if (engine.running || jobs.current) { this.log('Stop the running task first (■)', 'warn'); return; }
             return upgrades.updateTeam(false);
@@ -7159,6 +7278,23 @@
       this.showTab('log');
       ta.value = text; box.hidden = false;
       try { box.scrollIntoView({ block: 'nearest' }); ta.focus(); ta.select(); ta.setSelectionRange(0, 1e9); } catch { /* ignore */ }
+    },
+
+    /** ⚖️ Compare: one row per spot; tap to open the side-by-side table with the score breakdown. */
+    renderCompare() {
+      const box = this.q('[data-r=cmp]');
+      if (!box || !upgrades.compare) return;
+      box.innerHTML = `<div class="list">${upgrades.compare.map((x) => {
+        const open = this.cmpOpen === x.i && x.cur && x.alt;
+        const head = `<div class="li"><span class="t"><b>${esc(x.position)} · ${x.cur ? esc(x.cur.name) : 'empty'}${x.verdict === 'swap' ? ' <span class="tag no">swap?</span>' : x.verdict === 'keep' ? ' <span class="tag ok">keep</span>' : ''}${x.cur && proPick(x.cur, x.position) ? ' <span class="tag">🏆 pro pick</span>' : ''}</b>
+          <small>${x.alt ? `best you own: ${esc(x.alt.name)} ${x.alt.rating} · score ${x.altScore} vs ${x.curScore}` : 'nothing else you own plays here'}</small></span>${x.cur && x.alt ? `<button class="mini" data-a="compare-open" data-i="${x.i}">${open ? 'Close' : 'Compare'}</button>` : ''}</div>`;
+        if (!open) return head;
+        const c = comparePlayers(x.cur, x.alt, x.position);
+        const cell = (v, w) => `<td style="text-align:right${w ? ';color:var(--pos);font-weight:700' : ''}">${esc(String(v))}</td>`;
+        return head + `<table class="cmp" style="width:100%;font-size:12px;margin:4px 0 8px"><tr><th></th><th style="text-align:right">${esc(x.cur.name)}</th><th style="text-align:right">${esc(x.alt.name)}</th></tr>
+          ${c.rows.map((r) => `<tr><td style="color:var(--muted)">${esc(r.label)}</td>${cell(r.a, r.better === 'a')}${cell(r.b, r.better === 'b')}</tr>`).join('')}</table>
+          <p class="note">${c.winner ? `${esc(c.winner === 'a' ? x.cur.name : x.alt.name)} scores higher here` : 'About level here'} — ${esc(x.cur.name)}: ${esc(c.a.parts.map((p) => `${p.label} ${p.value}`).join(' + '))} · ${esc(x.alt.name)}: ${esc(c.b.parts.map((p) => `${p.label} ${p.value}`).join(' + '))}</p>`;
+      }).join('')}</div>`;
     },
 
     /** Evolutions your squad can use now (from Find upgrades). */

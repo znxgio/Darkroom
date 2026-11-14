@@ -109,6 +109,16 @@ const base = {
   check('team read automatically on launch, saved, no market searches', /Rating/.test(team) && /Read just now/.test(team) && tm.saved && tm.mkt === 0, `${team.slice(0, 90)} · ${JSON.stringify(tm)}`);
   check('no page errors (team)', !t.errors.length, t.errors.join('; '));
 
+  // 7) 2.5.0: ⚖️ compare my team — every spot vs the best card you own, side by side
+  await t.click('#fcs [data-a=compare-team]');
+  await t.waitForFunction(() => [...document.querySelectorAll('#fcs [data-r=log] div')].some((d) => /^.{0,12}⚖️/.test(d.textContent)), null, { timeout: 120000 }).catch(() => {});
+  const rows = await t.$$eval('#fcs [data-r=cmp] .li', (els) => els.length);
+  const openBtn = await t.$('#fcs [data-a=compare-open]');
+  let table = '';
+  if (openBtn) { await openBtn.click(); table = await t.$eval('#fcs [data-r=cmp] table.cmp', (e) => e.textContent.replace(/\s+/g, ' ')).catch(() => ''); }
+  check('compare: a row per XI spot, side-by-side table with meta score', rows === 11 && (!openBtn || (/Meta score/.test(table) && /Pros run this/.test(table))), `rows=${rows} table=${table.slice(0, 120)}`);
+  check('no page errors (compare)', !t.errors.length, t.errors.join('; '));
+
   check('no page errors', !q.errors.length && !r.errors.length && !f.errors.length, [...q.errors, ...r.errors, ...f.errors].join('; '));
 
   await b.close();
