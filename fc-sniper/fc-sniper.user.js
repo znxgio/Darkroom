@@ -6145,20 +6145,23 @@
               <button class="btn" data-a="refresh-prices">↻ Fresh prices (forget old prices, re-check all)</button>
               <div class="spend" data-r="spend"></div>
               ${FIELDS.list.map(fieldHtml).join('')}
-              <p class="note">All players are hunted at once; higher on the list wins ties. Tap a price to set your own max buy, ↑↓ to reorder. “Fill from team needs” adds snipes for your squad’s weakest spots.</p>
+              <p class="note">All players are hunted at once; higher on the list wins ties.</p>
+              <details class="hint"><summary>More</summary><p class="note">Tap a price to set your own max buy, ↑↓ to reorder. “Fill from team needs” adds snipes for your squad’s weakest spots.</p></details>
             </div>
             <div class="card"><h4>Search filters</h4>
               <div data-r="filters"></div>
               <div data-r="fedit" hidden></div>
               <button class="btn blue" data-a="filter-new">+ Add a search filter</button>
               <button class="btn" data-a="filter-starters">+ Starter filters (gold rare 84–86, big leagues)</button>
-              <p class="note">Snipe by quality, rarity, league, nation, club, position and rating range. Every filter that’s switched on is hunted together with your priority list. “Price” finds the going rate for the whole filter and sets the max buy under it.</p></div>
+              <p class="note">Every filter that’s switched on is hunted together with your priority list.</p>
+              <details class="hint"><summary>More</summary><p class="note">Snipe by quality, rarity, league, nation, club, position and rating range. “Price” finds the going rate for the whole filter and sets the max buy under it.</p></details></div>
             <details class="card" data-r="plan-card"><summary><h4 style="display:inline">📋 Session plan</h4></summary>
               <p class="note" data-r="plan-info"></p>
               ${FIELDS.plan.map(fieldHtml).join('')}
               <div data-r="plan-sbcs"></div>
               <button class="btn blue" data-a="plan-start">Start plan</button>
-              <p class="note">Snipes in blocks with real breaks (no market calls) and, in the breaks, does only the SBCs you add with ＋ Plan on the SBC tab — each while it's solvable and under your coin cap. Your coins never go below the floor shown above. Any captcha, market limit, logout or safety lock ends the plan at once; after a reload it never resumes by itself.</p>
+              <p class="note">Snipes in blocks with breaks, and does only the SBCs you add with ＋ Plan in the breaks.</p>
+              <details class="hint"><summary>More</summary><p class="note">Breaks make no market calls; each SBC runs while it's solvable and under your coin cap. Your coins never go below the floor shown above. Any captcha, market limit, logout or safety lock ends the plan at once; after a reload it never resumes by itself.</p></details>
             </details>
             <div class="card"><h4>Snipe settings</h4>${FIELDS.snipe.map(fieldHtml).join('')}
               <details class="adv"><summary>Advanced</summary>${FIELDS.snipeAdv.map(fieldHtml).join('')}
@@ -6180,13 +6183,15 @@
           <section class="pane" data-pane="trade">
             <div class="card"><h4>🔥 Hot right now</h4><div data-r="hot"><p class="empty">Scans the live market for cards people are buying and bidding on, then keeps the ones you can flip for profit.</p></div>
               <div class="two"><button class="btn blue" data-a="hot-scan">Find hot cards</button><button class="btn" data-a="refresh-hot">↻ Clear list</button></div>
-              <p class="note">Based on what’s listed and being bid on in EA’s market right now (about 10 searches plus a price check per card). Trend sites like Futbin block bots, so this is live market data instead.</p></div>
+              <p class="note">Based on what’s listed and being bid on in EA’s market right now.</p>
+              <details class="hint"><summary>More</summary><p class="note">About 10 searches plus a price check per card. Trend sites like Futbin block bots, so this is live market data instead.</p></details></div>
             <div class="card"><h4>Resell bot</h4>
               <div class="kpi" data-r="tkpi"></div>
               <div data-r="tplans"></div>
               <button class="btn go-btn" data-a="trade-start">Start trading</button>
               <button class="btn" data-a="upkeep">Check transfer list now</button>
-              <p class="note">For each player on the Snipe tab it lists a little under the market average so cards sell, and only buys low enough to keep your min profit after EA’s 5% tax. Every few minutes it records sales, clears sold items, relists expired ones, and pauses buying when your transfer list is full. Same safety limits as sniping.</p></div>
+              <p class="note">Buys only low enough to keep your min profit after EA’s 5% tax, then lists a little under market average.</p>
+              <details class="hint"><summary>More</summary><p class="note">Works on each player on the Snipe tab. Every few minutes it records sales, clears sold items, relists expired ones, and pauses buying when your transfer list is full. Same safety limits as sniping.</p></details></div>
             <div class="card"><h4>Trade settings</h4>${FIELDS.trade.map(fieldHtml).join('')}</div>
             <div class="card"><h4>Profit calculator</h4>
               <label class="row"><span>Buy for</span><input type="number" inputmode="numeric" data-r="pc-buy" placeholder="e.g. 45000"></label>
@@ -6222,7 +6227,8 @@
               <div class="two"><button class="btn blue" data-a="sbc-load">Load SBCs</button><button class="btn" data-a="refresh-sbc">↻ Refresh SBCs</button></div>
               <button class="btn blue" data-a="sbc-rank">🧩 Rank SBCs (from your club first)</button></div>
             <div class="card">${FIELDS.sbc.map(fieldHtml).join('')}
-              <p class="note">Never uses your active squad (starters, subs, reserves), loans, evolutions, specials or tradeables unless you allow them, or anyone above your max rating — and checks every player again right before sending. Cheapest fodder first: SBC storage and duplicates, then untradeables. When your club can’t complete one, it adds the cheapest market fill-ins (never cards you own) and shows the cost before buying. Chemistry, league/nation/club and “from league X” requirements are solved with players in the right positions. 💎 points SBCs (a points bar instead of a squad): Estimate shows what your spare cards cover and what the rest would cost, then hands them in 20 at a time.</p></div>
+              <p class="note">Never uses your active squad, loans, evolutions or (unless allowed) specials and tradeables, and re-checks every player before sending.</p>
+              <details class="hint"><summary>More</summary><p class="note">Also never anyone above your max rating. Cheapest fodder first: SBC storage and duplicates, then untradeables. When your club can’t complete one, it adds the cheapest market fill-ins (never cards you own) and shows the cost before buying. Chemistry, league/nation/club and “from league X” requirements are solved with players in the right positions. 💎 points SBCs (a points bar instead of a squad): Estimate shows what your spare cards cover and what the rest would cost, then hands them in 20 at a time.</p></details></div>
           </section>
           <section class="pane" data-pane="history">
             <div class="card profit" data-r="profit"></div>
@@ -6253,7 +6259,7 @@
               <p class="note">Minimums are enforced. A captcha locks the bot for 3 h, a market limit for 24 h.</p>
               <p class="note" data-r="lock"></p></div>
             <div class="card"><h4>Backup</h4>
-              <p class="note" style="margin:0 0 6px">Saves your players, filters, history, settings and log as text. Paste it into Notes; restore it here (or on another device) if Safari data is cleared.</p>
+              <p class="note" style="margin:0 0 6px">Saves your players, filters, history, settings and log as text, to restore here if Safari data is cleared.</p>
               <div class="two"><button class="btn blue" data-a="backup">Backup (copy)</button><button class="btn" data-a="restore">Restore (paste)</button></div>
               <button class="btn red" data-a="reset-defaults">Reset settings to defaults (keeps players, filters, history)</button></div>
             <div class="card"><h4>Look & notifications</h4>${FIELDS.notify.map(fieldHtml).join('')}
