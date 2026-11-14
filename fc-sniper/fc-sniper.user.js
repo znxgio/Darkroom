@@ -5701,7 +5701,7 @@
   }
 
   const CSS = `
-  #fcs{--bg:#0d1116;--card:#151b22;--card2:#1b232c;--line:#26303b;--text:#e9eef3;--muted:#8796a5;--dim:#7a8796;
+  #fcs{--bg:#0f1823;--card:#16212d;--card2:#1d2a38;--line:#263445;--pos:#3ddc84;--text:#e9eef3;--muted:#8796a5;--dim:#7a8796;
     --green:#3ddc84;--green-ink:#05210f;--red:#ff6b6b;--amber:#ffc857;--blue:#5aa9ff;
     position:fixed;top:14px;right:14px;z-index:2147483000;width:360px;max-height:calc(100vh - 28px);display:flex;flex-direction:column;
     background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:16px;overflow:hidden;
@@ -5730,6 +5730,7 @@
   #fcs.min .fold{transform:rotate(180deg)}
 
   #fcs.orange{--green:#ff7a1a;--green-ink:#1f0b00;--blue:#ffb066}
+  #fcs .up,#fcs .hist .g,#fcs .profit .stats b.g,#fcs .profit .hist .g{color:var(--pos)} /* profit is green in every theme */
   #fcs.orange .logo{background:linear-gradient(135deg,#ff8a2a,#c74507);color:#1f0b00}
   #fcs .hd,#fcs .tabs{flex:none}
   #fcs .frow{display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--line)}
