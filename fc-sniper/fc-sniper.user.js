@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FC Sniper
 // @namespace    https://github.com/znxgio/darkroom
-// @version      2.5.0
+// @version      2.5.1
 // @description  Sniper, pack opener, SBC solver and team upgrade advisor for the EA SPORTS FC Ultimate Team Web App, with built-in safety limits.
 // @match        https://www.ea.com/*ultimate-team/web-app*
 // @match        https://www.ea.com/ea-sports-fc/ultimate-team/web-app*
@@ -2669,7 +2669,7 @@
 
   const w = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '2.5.0';
+  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '2.5.1';
   const errText = (e) => (e && e.message ? e.message : String(e));
   const fmt = (n) => Number(n || 0).toLocaleString();
 
@@ -3500,7 +3500,7 @@
         document.body.appendChild(el);
       }
       const verdict = !v.cheapest ? 'no Buy Now in these results'
-        : v.ref ? (v.under ? `<b class="g">${Math.abs(v.pct)}% under</b> the usual ${fmt(v.ref)} (${v.refKind})` : `${v.pct >= 0 ? v.pct : 0}% ${v.pct > 0 ? 'over' : 'at'} the usual ${fmt(v.ref)} (${v.refKind})`)
+        : v.ref ? (v.under ? `<b class="g">✅ ${Math.abs(v.pct)}% under</b> the usual ${fmt(v.ref)} (${v.refKind})` : v.pct > 0 ? `<b class="r">❌ ${v.pct}% over</b> the usual ${fmt(v.ref)} (${v.refKind})` : `at the usual ${fmt(v.ref)} (${v.refKind})`)
         : 'no usual price yet';
       const tr = prices.trend(v.id);
       const hist = tr.n ? esc(trendText(tr)) : 'no history yet';
@@ -6602,7 +6602,7 @@
   #fcs .spend{margin:8px 0 2px;color:var(--muted);font-size:12px;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
   #fcs .spend b{color:var(--text)}
   #fcs-ovl{position:fixed;left:8px;bottom:calc(env(safe-area-inset-bottom, 0px) + 84px);max-width:min(300px,calc(100vw - 16px));z-index:2147483000;padding:9px 30px 9px 11px;border-radius:12px;background:rgba(20,26,34,.94);color:#fff;font:12px/1.35 system-ui,-apple-system,sans-serif;box-shadow:0 4px 18px rgba(0,0,0,.4);opacity:0;visibility:hidden;transition:opacity .2s}
-  #fcs-ovl.show{opacity:1;visibility:visible}#fcs-ovl b.g{color:#3ddc84}#fcs-ovl small{display:block;color:#aab;margin-top:2px}
+  #fcs-ovl.show{opacity:1;visibility:visible}#fcs-ovl b.g{color:#3ddc84}#fcs-ovl b.r{color:#ff5c5c}#fcs-ovl small{display:block;color:#aab;margin-top:2px}
   #fcs-ovl button{position:absolute;top:2px;right:4px;background:none;border:0;color:#fff;font-size:20px;line-height:1;padding:4px 7px}
   #fcs .chip .mb{font-size:10px;font-weight:700;color:var(--dim);border:1px solid currentColor;border-radius:6px;padding:0 4px;margin-left:4px;white-space:nowrap}
   #fcs .chip .ovr{font-weight:800;color:var(--green);font-size:12px;min-width:22px}

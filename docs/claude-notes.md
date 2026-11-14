@@ -284,6 +284,8 @@ Newest learnings go at the end of each section. Dates are when the note was writ
 - Analyst is rule-based on purpose (user: "not a bot that spews nonsense"): analystAnswer(q, ctx) in core, unit-tested; `.ask` card is exempt from the locked-tap toast so it works while the bot runs (club read still needs ■).
 - Helpers merged: status strip/locked toasts/job bar overlay; market overlay (`mktView`, pass-through wrapper on searchTransferMarket, skipped when fut.ownSearch) + M meta badges. Both only tested at desktop width.
 
+- 2.5.1 (user ask): overlay shows ✅ green under / ❌ red over the usual price. Offered but not asked for: per-listing tags in EA's results list, and a usual price from the search itself for unpriced cards.
+
 ## 8. Debate protocol (user's design, 2026-11-12)
 Use when Opus is unsure about an idea or design. Relay it with background subagents + SendMessage (agent teams don't run here).
 - **Side A** and **Side B** (Sonnet, medium effort): argue opposite positions (e.g. aggressive vs cautious). Max ~250 words, top 2 changes.
