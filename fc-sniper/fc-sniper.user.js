@@ -5732,19 +5732,30 @@
       ['buyOnce', 'Buy each player once', 'toggle'],
       ['reserveForHigher', 'Keep coins for players higher up', 'toggle'],
     ],
-    snipe: [
+    mode: [
       ['mode', 'Mode', 'seg', OPT([['buy', 'Buy'], ['trade', 'Trade'], ['alert', 'Alert']])],
+    ],
+    snipe: [
       ['discount', 'Snipe % under avg', 'number'],
       ['minCoins', 'Keep coins', 'number'],
       ['maxBuys', 'Buys per session', 'number'],
       ['bidSnipe', 'Also bid on auctions ending soon', 'toggle'],
-      ['bidWindow', 'Bid in the last (seconds)', 'number'],
+    ],
+    snipeAdv: [
       ['liveLog', 'Live updates (a log line for every search)', 'toggle'],
+    ],
+    bids: [
+      ['bidWindow', 'Bid in the last (seconds)', 'number'],
+      ['maxActiveBids', 'Open bids at once', 'number'],
       ['dryTurns', 'Dry spell: switch to auctions after N Buy Now searches (0 = off)', 'number'],
       ['dryAuctionSearches', '… then auction-only searches for that player', 'number'],
       ['bidWars', 'Bid wars at once (1–3)', 'number'],
       ['bidWarStretchPct', 'War: go up to % over my max', 'number'],
       ['bidWarMaxCounters', 'War: give up after N counter-bids', 'number'],
+      ['bidWarPoolPct', 'Wars may hold % of my coins', 'number'],
+      ['bidWarMinSteps', 'Start a war only with N+ bid steps of room', 'number'],
+      ['binIdealPct', 'Buy Now this % under avg always wins', 'number'],
+      ['warKeepPct', 'War this % under avg beats a Buy Now', 'number'],
     ],
     trade: [
       ['undercut', 'List % under market avg', 'number'],
@@ -5761,6 +5772,8 @@
     ],
     smart: [
       ['smartSnipe', 'Smart sniping (picks which card to search)', 'toggle'],
+    ],
+    smartAdv: [
       ['smartPrice', 'Also let it set the discount (experimental)', 'toggle'],
       ['smartMinPct', 'Never closer than % under avg', 'number'],
       ['smartMaxPct', 'Never deeper than % under avg', 'number'],
@@ -5831,11 +5844,6 @@
       ['maxSearches', 'Searches per session', 'number'],
       ['searchesPerDay', 'Searches per day', 'number'],
       ['buysPerDay', 'Buys per day', 'number'],
-      ['maxActiveBids', 'Open bids at once', 'number'],
-      ['bidWarPoolPct', 'Wars may hold % of my coins', 'number'],
-      ['bidWarMinSteps', 'Start a war only with N+ bid steps of room', 'number'],
-      ['binIdealPct', 'Buy Now this % under avg always wins', 'number'],
-      ['warKeepPct', 'War this % under avg beats a Buy Now', 'number'],
     ],
     notify: [
       ['theme', 'Accent colour', 'select', OPT([['green', 'Green'], ['orange', 'Orange']])],
@@ -6040,6 +6048,15 @@
   #fcs .kpi b{display:block;color:var(--text);font-size:16px}
   #fcs .up{font-weight:700;color:var(--green)}#fcs .down{font-weight:700;color:var(--red)}
   #fcs .plan{border-color:var(--green)}
+  #fcs details.adv,#fcs details.hint{margin-top:6px}
+  #fcs details.adv>summary,#fcs details.hint>summary{cursor:pointer;color:var(--muted);font-weight:600;font-size:12.5px;padding:6px 0;list-style:none}
+  #fcs details.adv>summary::-webkit-details-marker,#fcs details.hint>summary::-webkit-details-marker{display:none}
+  #fcs details.adv>summary::before,#fcs details.hint>summary::before{content:"▸ "}
+  #fcs details[open].adv>summary::before,#fcs details[open].hint>summary::before{content:"▾ "}
+  #fcs.mob details.adv>summary,#fcs.mob details.hint>summary{min-height:44px;display:flex;align-items:center}
+  #fcs .chip .mx.none{color:var(--dim);background:var(--card);font-weight:600}
+  #fcs .chip .ord button.edge{visibility:hidden}
+  #fcs.mob .chip .mx{min-height:40px;min-width:64px}
   #fcs.mob .mini{padding:9px 12px;font-size:14px;min-height:40px}#fcs.mob .rm,#fcs.mob .ord button{min-width:44px;min-height:44px}#fcs.mob .li{padding:10px 0}
 
   #fcs-toast{position:fixed;left:50%;top:calc(env(safe-area-inset-top, 0px) + 12px);transform:translate(-50%,-30px);opacity:0;visibility:hidden;z-index:2147483001;padding:10px 16px;border-radius:12px;
@@ -6117,13 +6134,8 @@
               <p class="note" data-r="budget"></p>
             </div>
             <div class="card setup" data-r="setup"></div>
-            <details class="card" data-r="plan-card"><summary><h4 style="display:inline">📋 Session plan</h4></summary>
-              <p class="note" data-r="plan-info"></p>
-              ${FIELDS.plan.map(fieldHtml).join('')}
-              <div data-r="plan-sbcs"></div>
-              <button class="btn blue" data-a="plan-start">Start plan</button>
-              <p class="note">Snipes in blocks with real breaks (no market calls) and, in the breaks, does only the SBCs you add with ＋ Plan on the SBC tab — each while it's solvable and under your coin cap. Your coins never go below the floor shown above. Any captcha, market limit, logout or safety lock ends the plan at once; after a reload it never resumes by itself.</p>
-            </details>
+            <div class="card"><h4>Mode</h4>${FIELDS.mode.map(fieldHtml).join('')}
+              <p class="note"><b>Buy</b> snipes under your max, <b>Trade</b> buys under value and relists, <b>Alert</b> only notifies you.</p></div>
             <div class="card picker">
               <h4>Priority list</h4>
               <div class="chips" data-r="chips"></div>
@@ -6141,13 +6153,23 @@
               <button class="btn blue" data-a="filter-new">+ Add a search filter</button>
               <button class="btn" data-a="filter-starters">+ Starter filters (gold rare 84–86, big leagues)</button>
               <p class="note">Snipe by quality, rarity, league, nation, club, position and rating range. Every filter that’s switched on is hunted together with your priority list. “Price” finds the going rate for the whole filter and sets the max buy under it.</p></div>
+            <details class="card" data-r="plan-card"><summary><h4 style="display:inline">📋 Session plan</h4></summary>
+              <p class="note" data-r="plan-info"></p>
+              ${FIELDS.plan.map(fieldHtml).join('')}
+              <div data-r="plan-sbcs"></div>
+              <button class="btn blue" data-a="plan-start">Start plan</button>
+              <p class="note">Snipes in blocks with real breaks (no market calls) and, in the breaks, does only the SBCs you add with ＋ Plan on the SBC tab — each while it's solvable and under your coin cap. Your coins never go below the floor shown above. Any captcha, market limit, logout or safety lock ends the plan at once; after a reload it never resumes by itself.</p>
+            </details>
+            <div class="card"><h4>Snipe settings</h4>${FIELDS.snipe.map(fieldHtml).join('')}
+              <details class="adv"><summary>Advanced</summary>${FIELDS.snipeAdv.map(fieldHtml).join('')}
+                <p class="note">Bid timing and bid wars are in Settings → Auctions &amp; bid wars.</p></details></div>
             <div class="card"><h4>🧠 Smart sniping</h4>
               <div data-r="learn"></div>
               ${FIELDS.smart.map(fieldHtml).join('')}
+              <details class="adv"><summary>Advanced</summary>${FIELDS.smartAdv.map(fieldHtml).join('')}</details>
               <button class="btn red" data-a="learn-reset">Forget what it learned</button>
-              <p class="note">For players with a checked price and no manual max, the bot tries several discounts and learns which pay off: a buy counts most, a card you lost to a faster buyer next, a listing just above your max a little. Players that hit get more of your searches. It stays inside your coins, Keep coins, spend limit and (in Trade) the profitable price, and never searches more often.</p></div>
-            <div class="card">${FIELDS.snipe.map(fieldHtml).join('')}
-              <p class="note"><b>Buy</b> snipes cards under your max. <b>Trade</b> buys under value and relists for profit (see Trade). <b>Alert</b> only notifies you.</p></div>
+              <p class="note">The bot tries several discounts on priced players and learns which pay off.</p>
+              <details class="hint"><summary>More</summary><p class="note">A buy counts most, a card you lost to a faster buyer next, a listing just above your max a little. Players that hit get more of your searches. It stays inside your coins, Keep coins, spend limit and (in Trade) the profitable price, and never searches more often.</p></details></div>
             <div class="card"><h4>This session</h4>
               <div class="stats">
                 <div><b data-s="searches">0</b>Searches</div><div><b data-s="buys">0</b>Bought</div><div><b data-s="missed">0</b>Missed</div>
@@ -6225,6 +6247,8 @@
               <p class="note">Players match every version of the card. Use Min rating to target one version.</p></div>
             <div class="card"><h4>After buying</h4>${FIELDS.sell.map(fieldHtml).join('')}
               <p class="note">Min profit and listing time are on the Trade tab. EA keeps 5% of every sale; profit shown is after tax.</p></div>
+            <div class="card"><h4>Auctions &amp; bid wars</h4>${FIELDS.bids.map(fieldHtml).join('')}
+              <p class="note">Bidding on auctions ending soon is switched on with “Also bid…” on the Snipe tab.</p></div>
             <div class="card"><h4>Safety limits</h4>${FIELDS.safety.map(fieldHtml).join('')}
               <p class="note">Minimums are enforced. A captcha locks the bot for 3 h, a market limit for 24 h.</p>
               <p class="note" data-r="lock"></p></div>
@@ -6850,14 +6874,15 @@
       }
       this.q('[data-r=chips]').innerHTML = cfg.players.map((p, i) => {
         const max = effectiveMaxBuy(p, cfg);
+        const unpriced = !p.manualMax && !p.maxBuy && !p.avg && (max === 0 || cfg.autoPrice);
         const tr = prices.trend(p.id);
         const sub = `${tr.n && !tr.thin ? `${esc(trendText(tr).split(' · seen')[0])} · ` : ''}${p.outOfReach && !p.manualMax ? '⏭️ out of reach · ' : ''}${p.hot ? '🔥 ' : ''}${p.autofill ? `🧩 ${esc(p.autofill)} · ` : ''}${p.manualMax ? (p.autofill && p.lowest ? `cheapest ${fmt(p.lowest)}` : 'your max') : p.avg ? `avg ${fmt(p.avg)}` : p.checkedAt ? 'none listed' : 'not priced yet'}`;
         return `<div class="chip">
           <div class="top"><span class="num">${i + 1}</span><span class="ovr">${p.rating || ''}</span>
             <span class="nm">${esc(p.name)}<small>${sub}</small></span>
             <button class="rm" data-rm="${p.id}" aria-label="Remove ${esc(p.name)}">×</button></div>
-          <div class="bot"><span class="ord"><button data-up="${i}" aria-label="Move up" ${i === 0 ? 'disabled' : ''}>↑</button><button data-down="${i}" aria-label="Move down" ${i === cfg.players.length - 1 ? 'disabled' : ''}>↓</button></span>
-            <button class="mx${p.manualMax ? ' manual' : ''}" data-max="${p.id}">≤ ${fmt(max)}</button></div></div>`;
+          <div class="bot"><span class="ord"><button data-up="${i}" aria-label="Move up" ${i === 0 ? 'disabled class="edge"' : ''}>↑</button><button data-down="${i}" aria-label="Move down" ${i === cfg.players.length - 1 ? 'disabled class="edge"' : ''}>↓</button></span>
+            <button class="mx${p.manualMax ? ' manual' : ''}${unpriced ? ' none' : ''}" data-max="${p.id}">${unpriced ? '—' : `≤ ${fmt(max)}`}</button></div></div>`;
       }).join('');
     },
 
