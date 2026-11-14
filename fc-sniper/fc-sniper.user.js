@@ -1085,6 +1085,7 @@
   async function findMarketPrice(search, opts) {
     const { defId, maxSteps = 6, sample = 5 } = opts;
     const seen = new Map();
+    let cardListing = null;
     let maxBuy = 0;
     let steps = 0;
     while (steps < maxSteps) {
@@ -1093,6 +1094,7 @@
       if (!res.ok) return { ok: false, status: res.status, steps };
       const mine = res.listings.filter((l) => l.buyNowPrice > 0 && (!defId || l.defId === defId));
       mine.forEach((l) => seen.set(l.tradeId, l.buyNowPrice));
+      if (!cardListing && mine.length) cardListing = mine[0]; // one listing of the card, so its rating/stats can be read (no extra request)
       if (!mine.length) break;
       const min = Math.min(...mine.map((l) => l.buyNowPrice));
       if (min <= MIN_PRICE) break;
@@ -1113,7 +1115,7 @@
         .forEach((l) => seen.set(l.tradeId, l.buyNowPrice));
       prices = [...seen.values()].sort((a, b) => a - b);
     }
-    return { ok: true, count: prices.length, lowest: prices[0], avg: robustPrice(prices, sample), ...robustLow(prices), steps };
+    return { ok: true, count: prices.length, lowest: prices[0], avg: robustPrice(prices, sample), ...robustLow(prices), steps, card: cardListing || null };
   }
 
   // ---- Price history (cards the bot actually sees) ---------------------------------
@@ -1821,6 +1823,28 @@
     return Math.max(1, Math.round(c));
   }
 
+  /**
+   * 🧭 Best way to do an SBC (2.5.0): compares the solutions the solver found — club only, club + market fill-ins —
+   * by real coins to buy plus the value of your own cards used up (playerCost). Returns
+   * { options: [{ key, label, buy, used, usedValue, total }], best (key) , short (coins missing, 0 if affordable) }.
+   */
+  function sbcPaths(club, mixed, freeCoins) {
+    const sum = (sol) => {
+      if (!sol) return null;
+      const buys = sol.players.filter((p) => p.market);
+      const own = sol.players.filter((p) => !p.market);
+      const buy = buys.reduce((a, p) => a + (p.price || 0), 0);
+      const usedValue = own.reduce((a, p) => a + playerCost(p), 0);
+      return { buy, used: own.length, usedValue, total: buy + usedValue, buys: buys.length };
+    };
+    const options = [];
+    const a = sum(club); if (a) options.push({ key: 'club', label: 'From your club only', ...a });
+    const b = sum(mixed); if (b && b.buys) options.push({ key: 'mixed', label: 'Your cards + cheap buys', ...b });
+    if (!options.length) return { options, best: '', short: 0 };
+    const best = options.slice().sort((x, y) => x.total - y.total)[0];
+    return { options, best: best.key, short: Math.max(0, best.buy - Math.max(0, freeCoins || 0)) };
+  }
+
   /** Solver cost of one coin spent on a market fill-in, relative to your own fodder's value. */
   const COIN_WEIGHT = 50;
 
@@ -2429,7 +2453,7 @@
     cacheBustBid, jitter, pickTargets, planSellPrice, classifyStatus,
     personalRecords, normalizeName, parsePlayerDb, searchPlayers, cardVersions, playerForIteration, migrateConfig, filterSummary, sniperTargets, LEAGUES,
     findMarketPrice, robustPrice, searchBudget, addPriceSample, prunePrices, priceTrend, trendText, lookupUrl, planMaxBuy, effectiveMaxBuy, withinReach, huntTargets,
-    fallingGuardPct, marketHint, newerVersion, setupIssues, adviceFix, sbcLikely, sbcOrder, coinGoal, cardAdvice, sessionReport, bidSkipReason, proPick, scoreParts, comparePlayers, evoPicks, metaPlayStyles, upgradeWhy, readPlayStyles, cardFieldsProbe, shortTime, searchReport, auctionReport, planFloor, planBudget, planVerdict, planSummary, robustLow, trendNudge, snipeBase, recordGap, gapStats, smartLevels, gammaSample, betaSample, armPrior, decayArm, upgradeArm, armRate, chooseDiscount, chooseTarget, missWeight, recordArm, deepestArmFor, priceShifted, bestArm, flipPlan, tradeOpts, tradeCap, bidAmount, freeCoins, bidBlock, warCeiling, warSteps, binVsWar, settleSales,
+    fallingGuardPct, marketHint, newerVersion, setupIssues, adviceFix, sbcPaths, sbcLikely, sbcOrder, coinGoal, cardAdvice, sessionReport, bidSkipReason, proPick, scoreParts, comparePlayers, evoPicks, metaPlayStyles, upgradeWhy, readPlayStyles, cardFieldsProbe, shortTime, searchReport, auctionReport, planFloor, planBudget, planVerdict, planSummary, robustLow, trendNudge, snipeBase, recordGap, gapStats, smartLevels, gammaSample, betaSample, armPrior, decayArm, upgradeArm, armRate, chooseDiscount, chooseTarget, missWeight, recordArm, deepestArmFor, priceShifted, bestArm, flipPlan, tradeOpts, tradeCap, bidAmount, freeCoins, bidBlock, warCeiling, warSteps, binVsWar, settleSales,
     listSpendable, reserveOk, afterListBuy,
     aggregateListings, hotScore, rankHot, snipeScore, priceBands, provenFlips, flipValue, priceLadder, sbcCostEstimate,
     addHistory, summarizeHistory, profitSummary, isDiscordWebhook, discordPayload,
@@ -2533,7 +2557,7 @@
       if (maxBid) c.maxBid = roundPrice(maxBid);
       // Changing a filter that doesn't matter makes EA send fresh results.
       if (iteration !== undefined) {
-        if (maxBid) c.minBuy = roundPrice(cacheBustBid(iteration, 0) + 1000);
+        if (maxBid) c.minBuy = roundPrice(150 + (iteration % 8) * 50); // low, so cheap cards' auctions still show (review fix)
         else c.minBid = cacheBustBid(iteration, maxBuy);
       }
       return c;
@@ -3030,13 +3054,15 @@
     // -- transfer list & watchlist --
 
     /** Where an item stands on the market: sold | expired | active | won | lost | none. */
-    auctionState(item) {
+    auctionState(item, opts) {
       const a = (typeof item.getAuctionData === 'function' && item.getAuctionData()) || item._auction || {};
       const call = (fn) => (typeof a[fn] === 'function' ? !!a[fn]() : undefined);
       const trade = a._tradeState || a.tradeState;
       const bid = a._bidState || a.bidState;
-      const sold = call('isSold') ?? (trade === 'closed' && a.currentBid > 0 && bid !== 'highest');
       const won = call('isWon') ?? (trade === 'closed' && bid === 'highest');
+      // on the watchlist a closed auction we don't lead is LOST (EA's isSold may only mean "trade closed")
+      if (opts && opts.watch && (trade === 'closed' || trade === 'expired') && !won) return { state: 'lost', price: a.currentBid || 0, tradeId: a.tradeId };
+      const sold = call('isSold') ?? (trade === 'closed' && a.currentBid > 0 && bid !== 'highest');
       const expired = call('isExpired') ?? trade === 'expired';
       const selling = call('isSelling') ?? trade === 'active';
       const state = won ? 'won' : sold ? 'sold' : expired ? 'expired' : selling ? 'active' : trade === 'closed' ? 'lost' : 'none';
@@ -3422,6 +3448,16 @@
           continue;
         }
         player.checkedAt = Date.now();
+        // unknown rating/stats: read them off a listing the price check already saw (no extra request)
+        if (!isFilter && r.card && r.card.item && (!player.rating || !player.stats)) {
+          const tp = fut.toPlayer(r.card.item);
+          const had = !!player.rating;
+          for (const k of ['rating', 'stats', 'skillMoves', 'weakFoot', 'playStyles', 'accelerate', 'positions']) {
+            if (tp[k] && !(Array.isArray(tp[k]) && !tp[k].length) && !player[k]) player[k] = tp[k];
+          }
+          if (/^#/.test(player.name || '') && tp.name && !/^#/.test(tp.name)) player.name = tp.name;
+          if (player.rating && !had) ui.log(`ℹ️ Read ${player.name}'s card: ${player.rating}${player.stats ? ` · PAC ${player.stats.pac} SHO ${player.stats.sho} PAS ${player.stats.pas}` : ''}`, 'muted');
+        }
         if (!r.count) {
           Object.assign(player, { avg: 0, lowest: 0, maxBuy: 0 });
           ui.log(`${player.name}: none listed right now — skipped until the next price check finds a price`, 'warn');
@@ -3489,7 +3525,7 @@
       if (!fut.ready()) { ui.log('Web App not ready — log in and open Transfers first', 'err'); return; }
       const { cfg, changed } = clampConfig(this.cfg);
       if (changed.length) ui.log(`Raised to safe minimums: ${changed.join(', ')}`, 'warn');
-      this.cfg = cfg; this.save(); ui.syncForm();
+      Object.assign(this.cfg, cfg); this.save(); ui.syncForm();
       const hasFilter = cfg.level !== 'any' || cfg.rarity || cfg.position || cfg.nation || cfg.league || cfg.club || cfg.minRating > 0;
       if (!sniperTargets(cfg).length && !hasFilter) {
         ui.log('Add a player or turn on a search filter first — otherwise it would buy any card under your max', 'warn');
@@ -4025,8 +4061,14 @@
       }
       const react = Math.round(performance.now() - (this.searchDoneAt || performance.now()));
       const t0 = performance.now();
+      const coinsBefore = fut.coins();
       const r = await fut.buy(t);
       const rtt = Math.round(performance.now() - t0);
+      // slow network: EA may have taken the coins although the answer timed out — then it's a buy (review fix)
+      if (!r.ok && (r.status === 'timeout' || classifyStatus(r.status) === 'missed') && coinsBefore - fut.coins() >= t.buyNowPrice) {
+        ui.log(`${t.name}: EA's answer was slow but your coins dropped by the price — counted as bought`, 'warn');
+        r.ok = true;
+      }
       if (!r.ok) {
         this.stats.missed++;
         const kind = classifyStatus(r.status);
@@ -4077,12 +4119,15 @@
         if (watched) {
           const lost = [];
           for (const it of watched) {
-            const st = fut.auctionState(it);
+            const st = fut.auctionState(it, { watch: true });
             const bid = this.bids.get(st.tradeId);
             if (st.state === 'won') {
-              const p = fut.toPlayer(it);
+              const booked = store.get('fc-sniper:booked', []);
+              if (booked.includes(String(st.tradeId))) continue; // already booked once (e.g. moving it failed last time)
               this.bids.delete(st.tradeId);
               this.saveBids();
+              store.set('fc-sniper:booked', [...booked, String(st.tradeId)].slice(-200));
+              if (!bid) { await fut.move([it], w.ItemPile.CLUB); continue; } // won by hand, not by the bot: not a bot buy
               out.won++;
               await this.collectWon(it, bid, st);
             } else if (st.state === 'lost' || st.state === 'expired') {
@@ -4421,6 +4466,51 @@
       });
     },
 
+    /**
+     * 🧭 Best way (2.5.0): solve the challenge twice — club only, and club + market fill-ins (within your SBC buy
+     * limit) — and compare coins to buy + value of your cards used. Nothing is bought or submitted here.
+     */
+    async bestPath(set, entry) {
+      return jobs.run('Finding the best way', async () => {
+        const cfg = engine.cfg;
+        const load = await fut.loadChallenge(entry.challenge);
+        jobs.check(load, 'loading the challenge');
+        entry.reqs = fut.requirements(entry.challenge);
+        entry.parsed = parseRequirements(entry.reqs, fut.requiredPlayers(entry.challenge));
+        const slots = fut.challengeSlots(entry.challenge);
+        if (entry.parsed.constraints.players !== slots.length) entry.parsed.constraints.players = slots.length;
+        if (entry.parsed.unsupported.length) { ui.log(`Can't plan this one yet: ${entry.parsed.unsupported.join(', ')}`, 'warn'); return; }
+        const club = await this.pool();
+        engine.setStatus('pricing', 'Comparing ways to do it…');
+        const solClub = this.solveWith(club, entry, slots);
+        let solMixed = null;
+        if (cfg.sbcBuyMissing) {
+          const ownedBase = new Set([...(this.raw || []).map((p) => baseId(p.defId ?? p.id)), ...(this.guard ? [...this.guard.defIds].map(baseId) : [])]);
+          const market = await this.marketPool(entry.parsed.constraints, ownedBase);
+          solMixed = this.solveWith([...club, ...market], entry, slots);
+          if (solMixed && solMixed.players.filter((p) => p.market).reduce((a, p) => a + p.price, 0) > (cfg.sbcBuyLimit || 0)) solMixed = null;
+        }
+        const res = sbcPaths(solClub, solMixed, freeCoins(cfg, fut.coins(), []));
+        this.path = { set, entry, slots, solClub, solMixed, ...res };
+        ui.renderSbc();
+        const b = res.options.find((o) => o.key === res.best);
+        ui.log(b ? `🧭 ${set.name}: best way — ${b.label.toLowerCase()} (buy ${fmt(b.buy)} + ${b.used} of your cards ≈ ${fmt(b.usedValue)})` : `🧭 ${set.name}: no way found within your limits — try Solve for the estimate`, b ? 'ok' : 'warn');
+      });
+    },
+
+    /** Hand the chosen path to the normal Submit flow (review it, then Submit). */
+    usePath(key) {
+      const p = this.path;
+      if (!p) return;
+      const sol = key === 'club' ? p.solClub : p.solMixed;
+      if (!sol) return;
+      const buys = sol.players.filter((x) => x.market);
+      this.plan = { set: p.set, entry: p.entry, solution: sol, slots: p.slots, buys, buyTotal: buys.reduce((a, x) => a + x.price, 0) };
+      this.path = null;
+      ui.renderSbc();
+      ui.log('🧭 Plan ready — review it, then tap Submit', 'ok');
+    },
+
     /** Rank every SBC by a quick club check (no market searches; one challenge list per SBC, paced). */
     async rank() {
       return jobs.run('Ranking SBCs', async () => {
@@ -4663,6 +4753,7 @@
      * the coin limit. Never buys a card you already own.
      */
     async buyForPoints(pt, ch, set, score, goal) {
+      const keepRoom = () => Math.max(0, fut.coins() - (engine.cfg.minCoins || 0)); // never under Keep coins (review fix)
       const cfg = engine.cfg;
       if (!jobs.buysLeft()) { ui.log('No buys left today — the rest of the points SBC has to wait', 'warn'); return { score, handed: 0, spent: 0 }; }
       const byRating = new Map(pt.byRating || []);
@@ -4676,7 +4767,8 @@
         const c = fut.newCriteria();
         c.level = 'gold';
         if (lo >= 200) c.minBuy = lo;
-        c.maxBuy = Math.min(hi, roundPrice(cfg.pointsBuyLimit - spent));
+        c.maxBuy = Math.min(hi, roundPrice(cfg.pointsBuyLimit - spent), roundPrice(keepRoom()));
+        if (c.maxBuy < 200) { ui.log('💎 Stopped: buying more would go under Keep coins', 'warn'); break; }
         const res = await fut.search(c);
         engine.countUsage('searches');
         jobs.check(res, 'market search');
@@ -5862,7 +5954,7 @@
       ui.commit();
       if (!fut.ready()) { ui.log('Web App not ready — log in first', 'err'); return; }
       const { cfg } = clampConfig(engine.cfg);
-      engine.cfg = cfg; engine.save(); ui.syncForm();
+      Object.assign(engine.cfg, cfg); engine.save(); ui.syncForm();
       engine.safety = store.get(KEYS.safety, {});
       const gate = engine.gate();
       if (!gate.ok) { ui.log(`Can't start the plan — ${gate.reason}`, 'err'); return; }
@@ -6437,6 +6529,7 @@
               <p class="note">New items go to your club, untradeable duplicates to SBC storage, tradeable duplicates to your transfer list. Specials are never quick-sold.</p></div>
           </section>
           <section class="pane" data-pane="sbc">
+            <div class="card" data-r="sbcpath" hidden></div>
             <div class="card" data-r="goal" hidden></div>
             <div class="card plan" data-r="plan" hidden></div>
             <div class="card"><h4>Squad Building Challenges</h4><div data-r="sbc"><p class="empty">Load SBCs to see which ones can be solved from your club.</p></div>
@@ -6655,6 +6748,12 @@
           case 'pack-open-all': return packs.open(packs.list.slice());
           case 'sbc-load': return sbc.loadSets();
           case 'sbc-rank': return sbc.rank();
+          case 'sbc-path': {
+            const set = sbc.sets[Number(btn.dataset.i)];
+            return set && sbc.bestPath(set, sbc.open.get(set.id)[Number(btn.dataset.j)]);
+          }
+          case 'sbc-use-path': return sbc.usePath(btn.dataset.k);
+          case 'sbc-path-close': sbc.path = null; return this.renderSbc();
           case 'plan-start':
             if (!plan.active) return plan.start();
             plan.cancel();
@@ -6689,13 +6788,15 @@
             if (engine.running || jobs.current || plan.active || !sbc.short || sbc.short.cost <= freeCoins(engine.cfg, fut.coins(), [])) return;
             const goal = coinGoal(sbc.short.cost, engine.cfg.minCoins, engine.cfg.goalBufferPct);
             this.commit();
-            engine.cfg = { ...engine.cfg, mode: 'trade', goal: { coins: goal, label: sbc.short.name, prevMode: engine.cfg.mode } };
+            Object.assign(engine.cfg, { mode: 'trade', goal: { coins: goal, label: sbc.short.name, prevMode: engine.cfg.mode } });
             engine.save(); this.syncForm(); this.renderGoal();
             this.log(`🎯 Trading toward ${fmt(goal)} for ${sbc.short.name} — it stops by itself when you have it`, 'ok');
             this.showTab('trade');
             return hot.scan(true).then((ok) => {
-              if (ok && !jobs.cancelled && engine.cfg.goal) engine.start();
-              else if (!jobs.cancelled) this.log('No profitable hot cards found right now — the goal stays; try 🎯 again later', 'warn');
+              if (ok && !jobs.cancelled && engine.cfg.goal) return engine.start();
+              const g = engine.cfg.goal;
+              if (g && g.prevMode) { engine.cfg.mode = g.prevMode; engine.cfg.goal = null; engine.save(); this.syncForm(); this.renderGoal(); }
+              if (!jobs.cancelled) this.log('No profitable hot cards found right now — goal not started (your mode is back); try 🎯 again later', 'warn');
             });
           }
           case 'plan-sbc': {
@@ -6834,7 +6935,7 @@
         else if (typeof DEFAULT_CONFIG[k] === 'number') cfg[k] = Number(el.value) || 0;
         else cfg[k] = el.value.trim();
       });
-      engine.cfg = cfg;
+      Object.assign(engine.cfg, cfg); // in place: a running loop never holds a stale copy (review fix)
       engine.save();
       this.root.classList.toggle('orange', cfg.theme === 'orange');
       this.renderStatus();
@@ -7183,13 +7284,14 @@
           const tagHtml = e.parsed.points ? '<span class="tag">💎 points</span>' : ok ? '<span class="tag ok">auto</span>' : '<span class="tag no">manual</span>';
           return `<div class="li"><span class="t"><b>${esc(e.challenge.name || set.name)}${tagHtml}</b>
             <small>${esc(e.reqs.filter((r) => r.key !== 'SCOPE' && r.key !== 'PLAYER_COUNT').map((r) => this.reqText(r)).filter(Boolean).join(' · ') || `${fut.requiredPlayers(e.challenge)} players`)}${e.parsed.unsupported.length ? ` — needs ${esc(e.parsed.unsupported.join(', '))}` : ''}</small></span>
-            ${ok ? `<button class="mini go2" data-a="sbc-solve" data-i="${i}" data-j="${j}">Solve</button>` : e.parsed.points ? `<button class="mini go2" data-a="sbc-points" data-i="${i}" data-j="${j}">Estimate</button><button class="mini" data-a="sbc-probe" data-i="${i}" data-j="${j}">Details</button>` : ''}</div>`;
+            ${ok ? `<button class="mini" data-a="sbc-path" data-i="${i}" data-j="${j}">🧭 Best way</button><button class="mini go2" data-a="sbc-solve" data-i="${i}" data-j="${j}">Solve</button>` : e.parsed.points ? `<button class="mini go2" data-a="sbc-points" data-i="${i}" data-j="${j}">Estimate</button><button class="mini" data-a="sbc-probe" data-i="${i}" data-j="${j}">Details</button>` : ''}</div>`;
         }).join('') : '<p class="empty">All done</p>'}</div>` : '';
         return `<div class="li"><span class="t"><b>${esc(set.name)}${rep}</b><small>${esc(set.description || '')}</small></span>
           ${loaded ? '' : `<button class="mini" data-a="sbc-set" data-i="${i}">View</button>`}<button class="mini" data-a="plan-sbc" data-i="${i}">${(engine.cfg.planSbcs || []).some((x) => String(x.id) === String(set.id)) ? '✓ Plan' : '＋ Plan'}</button></div>${sub}`;
       }).join('')}</div>` : '<p class="empty">Load SBCs to see which ones can be solved from your club.</p>';
 
       this.renderGoal();
+      this.renderPath();
       const plan = this.q('[data-r=plan]');
       const p = sbc.plan;
       const pt = sbc.points;
@@ -7461,6 +7563,22 @@
         ${items.map((x, i) => `<div class="li"><span class="t"><small>${icon[x.level]} ${esc(x.text)}</small></span>${x.fix ? `<button class="mini" data-a="setup-fix" data-i="${i}">${esc(fixLabel(x.fix))}</button>` : ''}</div>`).join('')}
         ${adv.length ? `<p class="note" style="margin:8px 0 4px">💡 Suggestions — tap to apply (nothing changes by itself)</p>${adv.map((a, i) => `<div class="li"><span class="t"><small>${esc(a.text.replace(/^💡 /, ''))}</small></span><button class="mini" data-a="advice-fix" data-i="${i}">${esc(a.fix.label)}</button></div>`).join('')}` : ''}
       </details>`;
+    },
+
+    /** 🧭 Best way to do an SBC: the options side by side, cheapest marked, one tap to turn it into the plan. */
+    renderPath() {
+      const box = this.q('[data-r=sbcpath]');
+      if (!box) return;
+      const p = sbc.path;
+      if (!p) { box.hidden = true; box.innerHTML = ''; return; }
+      box.hidden = false;
+      const name = p.entry.challenge.name && p.entry.challenge.name !== p.set.name ? `${p.set.name} — ${p.entry.challenge.name}` : p.set.name;
+      box.innerHTML = `<h4>🧭 Best way — ${esc(name)}</h4>${p.options.length ? `<div class="list">${p.options.map((o) => `<div class="li"><span class="t"><b>${esc(o.label)}${o.key === p.best ? ' <span class="tag ok">cheapest</span>' : ''}</b>
+          <small>buy ${o.buys ? `${o.buys} for ${fmt(o.buy)}` : 'nothing'} · uses ${o.used} of your cards (≈ ${fmt(o.usedValue)} value) · total ≈ ${fmt(o.total)}</small></span>
+          <button class="mini go2" data-a="sbc-use-path" data-k="${o.key}">Use</button></div>`).join('')}</div>` : '<p class="empty">No way found within your SBC buy limit — Solve estimates what it would cost.</p>'}
+        ${p.short ? `<p class="note">You're ${fmt(p.short)} short for the cheapest way — 🎯 a coin goal can trade toward it (Solve offers it).</p>` : ''}
+        <p class="note">“Value” is what your own cards are roughly worth (duplicates and storage count less). Nothing is bought until you tap Submit.</p>
+        <button class="btn" data-a="sbc-path-close">Close</button>`;
     },
 
     /** SBC coin goal: offer when an SBC needs more coins than you have; progress while trading toward it. */

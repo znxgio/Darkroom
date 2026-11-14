@@ -1417,3 +1417,15 @@ test('personalRecords: best flip, fastest sale, favourite flip, best day', () =>
   assert.deepEqual([r.mostFlipped.name, r.mostFlipped.n], ['A', 2]);
   assert.ok(r.bestDay.net > 0);
 });
+
+test('sbcPaths: club-only vs club + buys, cheapest by coins + value of your cards', () => {
+  const own = (r, extra = {}) => ({ rating: r, ...extra });
+  const club = { players: [own(84), own(84), own(85)] };
+  const mixed = { players: [own(84, { duplicate: true }), own(84, { duplicate: true }), { rating: 85, market: true, price: 1500 }] };
+  const r = c.sbcPaths(club, mixed, 100000);
+  assert.deepEqual(r.options.map((o) => o.key), ['club', 'mixed']);
+  assert.equal(r.best, 'mixed');
+  assert.equal(r.short, 0);
+  assert.equal(c.sbcPaths(null, null, 0).best, '');
+  assert.equal(c.sbcPaths(null, { players: [{ rating: 85, market: true, price: 5000 }] }, 1000).short, 4000);
+});

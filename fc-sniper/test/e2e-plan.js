@@ -85,6 +85,17 @@ const base = {
   const lg5 = await log(g);
   const firstSet = await g.$eval('#fcs [data-r=sbc] .li', (e) => e.textContent.replace(/\s+/g, ' '));
   check('SBC ranker: summary line and club-solvable SBCs first', lg5.some((x) => /🧩 SBCs ranked: [1-9]\d* likely from your club/.test(x)) && /from your club/.test(firstSet), `${lg5.filter((x) => /ranked/.test(x))[0]} | first: ${firstSet.slice(0, 80)}`);
+  // 🧭 best way for the first (club-solvable) SBC → options with the cheapest marked → Use → normal Submit
+  await g.click('#fcs [data-a=sbc-path]');
+  await g.waitForFunction(() => !document.querySelector('#fcs [data-r=sbcpath]').hidden, null, { timeout: 120000 }).catch(() => {});
+  const pathTxt = await g.$eval('#fcs [data-r=sbcpath]', (e) => (e.hidden ? '' : e.textContent.replace(/\s+/g, ' ')));
+  check('best way: options with the cheapest marked', /Best way/.test(pathTxt) && /cheapest/.test(pathTxt) && /total ≈/.test(pathTxt), pathTxt.slice(0, 200));
+  if (pathTxt) {
+    await g.click('#fcs [data-r=sbcpath] [data-a=sbc-use-path]');
+    await g.waitForSelector('#fcs [data-a=sbc-submit]', { timeout: 10000 }).catch(() => {});
+    check('best way: Use hands the plan to Submit (nothing bought yet)', !!(await g.$('#fcs [data-a=sbc-submit]')) && (await g.evaluate(() => (window.T && T.bought ? T.bought.length : 0))) === 0, '');
+    await g.click('#fcs [data-a=sbc-discard]').catch(() => {});
+  }
   // an SBC that needs more buys than allowed → goal card → trade toward it
   const eliteI = await g.$$eval('#fcs [data-a=sbc-solve]', (bs) => bs.findIndex((x) => /Break Away/.test(x.closest('.li') ? x.closest('.li').textContent : '')));
   const btns = await g.$$('#fcs [data-a=sbc-solve]');
