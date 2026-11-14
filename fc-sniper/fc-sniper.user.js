@@ -6261,9 +6261,11 @@
   #fcs .up{font-weight:700;color:var(--green)}#fcs .down{font-weight:700;color:var(--red)}
   #fcs .plan{border-color:var(--green)}
   #fcs details.adv,#fcs details.hint{margin-top:6px}
-  #fcs details.adv>summary,#fcs details.hint>summary{cursor:pointer;color:var(--muted);font-weight:600;font-size:12.5px;padding:6px 0;list-style:none}
+  #fcs details.adv>summary,#fcs details.hint>summary{cursor:pointer;color:var(--muted);font-weight:600;font-size:12.5px;padding:10px 0;min-height:40px;display:flex;align-items:center;gap:6px;list-style:none}
+  #fcs a.mini{text-decoration:none;display:inline-flex;align-items:center}
+  #fcs table{color:inherit;font:inherit}
   #fcs details.adv>summary::-webkit-details-marker,#fcs details.hint>summary::-webkit-details-marker{display:none}
-  #fcs details.adv>summary::before,#fcs details.hint>summary::before{content:"▸ "}
+  #fcs details.adv>summary::before,#fcs details.hint>summary::before{content:"▸"}
   #fcs details[open].adv>summary::before,#fcs details[open].hint>summary::before{content:"▾ "}
   #fcs.mob details.adv>summary,#fcs.mob details.hint>summary{min-height:44px;display:flex;align-items:center}
   #fcs .chip .mx.none{color:var(--dim);background:var(--card);font-weight:600}
@@ -6345,16 +6347,16 @@
               </div>
               <p class="note" data-r="budget"></p>
             </div>
-            <div class="card setup" data-r="setup"></div>
             <div class="card"><h4>Mode</h4>${FIELDS.mode.map(fieldHtml).join('')}
               <p class="note"><b>Buy</b> snipes under your max, <b>Trade</b> buys under value and relists, <b>Alert</b> only notifies you.</p></div>
+            <div class="card setup" data-r="setup"></div>
             <div class="card picker">
               <h4>Priority list</h4>
               <div class="chips" data-r="chips"></div>
               <div class="pqw"><input data-r="pq" type="search" autocomplete="off" autocorrect="off" spellcheck="false" placeholder="Add a player — name or ID">
               <div class="sugg" data-r="sugg"></div></div>
               <div class="two"><button class="btn blue" data-a="price">Check prices</button><button class="btn blue" data-a="autofill">🧩 Fill from team needs</button></div>
-              <button class="btn" data-a="refresh-prices">↻ Fresh prices (forget old prices, re-check all)</button>
+              <button class="btn" data-a="refresh-prices">↻ Fresh prices</button>
               <div class="spend" data-r="spend"></div>
               ${FIELDS.list.map(fieldHtml).join('')}
               <p class="note">All players are hunted at once; higher on the list wins ties.</p>
@@ -7151,7 +7153,7 @@
         case 'ACADEMY_PLAYER_SLOTTING': return `OVR min ${v}`;
         case 'PLAYER_ATTRIBUTE': return '';
         case 'PLAYER_QUALITY': case 'PLAYER_LEVEL': return `${per}Quality ${sym} ${r.values.map((x) => q[x] || x).join('/')}`;
-        case 'PLAYER_RARITY_GROUP': return `${per}Rare ${sym} ${r.count > 0 ? '' : 'all'}`.trim();
+        case 'PLAYER_RARITY_GROUP': return `${r.count > 0 ? per : 'All '}Rare`;
         case 'PLAYER_MIN_OVR': return `Each player ≥ ${v}`;
         case 'PLAYER_MAX_OVR': return `Each player ≤ ${v}`;
         case 'PLAYER_EXACT_OVR': return `Each player = ${v}`;
@@ -7175,7 +7177,7 @@
       box.innerHTML = sbc.sets.length ? `<div class="list">${sbc.sets.slice(0, 80).map((set, i) => {
         const loaded = sbc.open.get(set.id);
         const rep = (set.repeatable || set.timesCompleted ? `<span class="tag">${set.timesCompleted || 0} done</span>` : '')
-          + ({ club: '<span class="tag ok">✅ from your club</span>', buys: '<span class="tag no">needs buys</span>', points: '<span class="tag">💎 points</span>', manual: '<span class="tag">manual</span>' }[set.likely] || '');
+          + ({ club: '<span class="tag ok">✅ likely from your club</span>', buys: '<span class="tag no">needs buys</span>', points: '<span class="tag">💎 points</span>', manual: '<span class="tag">manual</span>' }[set.likely] || '');
         const sub = loaded ? `<div class="sub">${loaded.length ? loaded.map((e, j) => {
           const ok = !e.parsed.unsupported.length && !e.parsed.points;
           const tagHtml = e.parsed.points ? '<span class="tag">💎 points</span>' : ok ? '<span class="tag ok">auto</span>' : '<span class="tag no">manual</span>';
@@ -7564,7 +7566,7 @@
         const wd = new Date(`${d.key}T12:00:00`).toLocaleDateString([], { weekday: 'narrow' });
         return `<span title="${esc(d.key)}: ${sg(d.net)}"><i class="${d.net < 0 ? 'neg' : ''}" style="height:${d.net ? Math.max(4, Math.round(Math.abs(d.net) / max * 100)) : 0}%"></i><em>${esc(wd)}</em></span>`;
       }).join('');
-      const row = (c) => `<div><span>${esc(c.name)}${c.rating ? ` · ${c.rating}` : ''}</span><span class="p ${cls(c.net)}">${sg(c.net)}</span><small>sold ${c.sold}/${c.bought}${c.avgDays != null ? ` · ${c.avgDays}d avg` : ''}</small></div>`;
+      const row = (c) => `<div><span>${esc(c.name)}${c.rating ? ` · ${c.rating}` : ''}</span><span class="p ${cls(c.net)}">${sg(c.net)}</span><small>sold ${c.sold}/${c.bought}${c.avgDays != null ? ` · ${c.avgDays < 1 ? `${Math.max(1, Math.round(c.avgDays * 24))}h` : `${c.avgDays}d`} avg` : ''}</small></div>`;
       el.innerHTML = `<h4>💰 Profit</h4>
         <div class="stats">${cell('Today', ps.today)}${cell('7 days', ps.week)}${cell('All time', ps.all)}</div>
         <p class="note">Tied up in unsold listings: <b>${fmt(ps.all.tiedUp)}</b>${ps.all.sellThrough != null ? ` · sell-through ${ps.all.sellThrough}%` : ''}${ps.all.avgHours != null ? ` · avg ${ps.all.avgHours}h to sell` : ''} · received ${fmt(ps.all.received)} after tax</p>
