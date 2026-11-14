@@ -4497,12 +4497,13 @@
      * chemistry. Cards you already own are skipped (EA won't take duplicates
      * into your club). Your own fodder always goes first; only gaps are bought.
      */
-    async marketPool(k, ownedBase) {
+    async marketPool(k, ownedBase, cap) {
       const cfg = engine.cfg;
       const level = marketLevel(k);
       const cheapLevel = level === 'bronze' || level === 'silver';
-      const perPlayer = cheapLevel ? Math.min(cfg.sbcBuyLimit || 20000, 3000)
-        : Math.max(1000, Math.min(cfg.sbcBuyLimit || 20000, k.teamRating ? fodderValue(k.teamRating + 3) * 2 : 4000));
+      const limit = cap || cfg.sbcBuyLimit || 20000; // `cap`: a price estimate past your SBC buy limit (never used to buy)
+      const perPlayer = cheapLevel ? Math.min(limit, 3000)
+        : Math.max(1000, Math.min(limit, k.teamRating ? fodderValue(k.teamRating + 3) * 2 : 4000));
       // Several low price levels for bronzes/silvers (they're cheap), wider ones for golds.
       const mins = level === 'bronze' ? [0, 200, 300, 450] : level === 'silver' ? [0, 250, 400, 650] : [0, 0.2, 0.5].map((f) => (f ? roundPrice(perPlayer * f) : 0));
       const searches = mins.map((min) => ({ min }));
@@ -4548,6 +4549,7 @@
         let { parsed } = entry;
         if (parsed.unsupported.length) { ui.log(`Can't auto-solve yet: ${parsed.unsupported.join(', ')}`, 'warn'); return; }
         const cfg = engine.cfg;
+        this.short = null;
         const load = await fut.loadChallenge(challenge);
         jobs.check(load, 'loading the challenge');
         // The number of players is only known once the challenge is loaded.
@@ -4586,6 +4588,18 @@
               ui.log(`Cheapest solution needs ${fmt(total)} of buys — over your limit of ${fmt(cfg.sbcBuyLimit)}`, 'warn');
               this.short = { name: set.name, cost: total, overLimit: true };
               solution = null; buys = [];
+            }
+          }
+          // Nothing within your SBC buy limit: price it once without the limit (an estimate — nothing is bought),
+          // so a coin goal can be offered for it.
+          if (!solution && !this.short && (cfg.sbcBuyLimit || 0) < 1e6) {
+            ui.log('Nothing fits your SBC buy limit — estimating what it would cost (nothing is bought)…', 'muted');
+            const wide = await this.marketPool(parsed.constraints, ownedBase, 1e6);
+            const est = this.solveWith([...club, ...wide], entry, slots);
+            if (est) {
+              const total = est.players.filter((p) => p.market).reduce((a, p) => a + p.price, 0);
+              this.short = { name: set.name, cost: total, overLimit: true };
+              ui.log(`${set.name} would need about ${fmt(total)} of buys — over your SBC buy limit of ${fmt(cfg.sbcBuyLimit)}`, 'warn');
             }
           }
         }
@@ -6227,7 +6241,7 @@
           }
           case 'goal-cancel': engine.cfg.goal = null; engine.save(); this.renderGoal(); this.log('🎯 Coin goal cancelled', 'muted'); return;
           case 'goal-start': {
-            if (engine.running || jobs.current || plan.active || !sbc.short) return;
+            if (engine.running || jobs.current || plan.active || !sbc.short || sbc.short.cost <= freeCoins(engine.cfg, fut.coins(), [])) return;
             const goal = coinGoal(sbc.short.cost, engine.cfg.minCoins, engine.cfg.goalBufferPct);
             this.commit();
             engine.cfg = { ...engine.cfg, mode: 'trade', goal: { coins: goal, label: sbc.short.name } };
@@ -6983,8 +6997,14 @@
       }
       const sh = sbc.short;
       if (!sh) { box.hidden = true; box.innerHTML = ''; return; }
-      const goal = coinGoal(sh.cost, cfg.minCoins, cfg.goalBufferPct);
+      const free = freeCoins(cfg, coins, []);
       box.hidden = false;
+      if (sh.cost <= free) {
+        // affordable — only your SBC buy limit is in the way
+        box.innerHTML = `<h4>SBC buy limit</h4><p class="note">${esc(sh.name)} needs about ${fmt(sh.cost)} of buys — you can afford it, but it's over your SBC buy limit of ${fmt(cfg.sbcBuyLimit)}. Raise “Max coins to spend per SBC” in the SBC settings to solve it.</p>`;
+        return;
+      }
+      const goal = coinGoal(sh.cost, cfg.minCoins, cfg.goalBufferPct);
       box.innerHTML = `<h4>🎯 Not enough coins yet</h4><p class="note">${esc(sh.name)} needs about ${fmt(sh.cost)} of buys${sh.overLimit ? ` (over your SBC buy limit of ${fmt(cfg.sbcBuyLimit)})` : ''}; you have ${fmt(coins)}. Trade toward ${fmt(goal)} (${cfg.goalBufferPct ?? 12}% extra so you can do it again).</p>
         <button class="btn blue" data-a="goal-start">🎯 Trade toward ${fmt(goal)}</button>`;
     },
