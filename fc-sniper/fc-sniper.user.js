@@ -282,6 +282,7 @@
       out.push({ level: 'warn', text: `Keep coins is 0 — the bot may spend everything. Keep ${n(keep)} back?`, fix: { type: 'keep', value: keep } });
     }
     if (!cfg.bidSnipe && cfg.mode !== 'alert') out.push({ level: 'info', text: 'Auction bidding is off — turning it on adds late bids and dry-spell auction turns', fix: { type: 'bid' } });
+    if (ctx.probePending) out.push({ level: 'info', text: 'After your first session, tap Copy log (Log tab) and send it — it shows how EA stores PlayStyles, detailed stats and evolutions on your cards, so they can be read properly' });
     if (ctx.searchesLeft !== undefined && ctx.searchesLeft < 50) out.push({ level: 'warn', text: `Only ${n(ctx.searchesLeft)} searches left today (raise Searches per day in Settings, up to 1,500)` });
     return out;
   }
@@ -6507,7 +6508,7 @@
           case 'forms': return upgrades.compareFormations();
           case 'form-view': this.formOpen = this.formOpen === Number(btn.dataset.i) ? -1 : Number(btn.dataset.i); return this.renderFormations();
           case 'form-create': return upgrades.createSquad(Number(btn.dataset.i));
-          case 'copy-log': return this.copyLog(false);
+          case 'copy-log': try { localStorage.setItem('fc-sniper:probe-sent', VERSION); } catch { /* fine */ } this.renderSetup(); return this.copyLog(false);
           case 'copy-log-full': return this.copyLog(true);
           case 'copy-close': return this.showCopyBox(null);
           case 'job-stop': return jobs.cancel();
@@ -7374,7 +7375,9 @@
       const coins = fut.ready() ? fut.coins() : 0;
       engine.safety = engine.safety || store.get(KEYS.safety, {});
       const left = Math.max(0, (cfg.searchesPerDay || 0) - usageFor(engine.safety.usage, Date.now()).searches);
-      const items = setupIssues(cfg, { coins, version: VERSION, latest: this.latest, targets: sniperTargets(cfg).length, reachable: huntTargets(cfg).length, searchesLeft: left });
+      let probeSent = '';
+      try { probeSent = localStorage.getItem('fc-sniper:probe-sent') || ''; } catch { /* fine */ }
+      const items = setupIssues(cfg, { coins, version: VERSION, latest: this.latest, targets: sniperTargets(cfg).length, reachable: huntTargets(cfg).length, searchesLeft: left, probePending: probeSent !== VERSION });
       const adv = (engine.lastAdvice || []).filter((a) => a.fix);
       this.setupItems = items; this.adviceItems = adv;
       const icon = { ok: '✅', warn: '⚠️', info: 'ℹ️' };
