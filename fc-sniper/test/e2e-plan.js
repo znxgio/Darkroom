@@ -44,6 +44,7 @@ const base = {
   check('both blocks ran, each after a passed check', l1.filter((x) => /📋 Block \d of 2: .*check passed/.test(x)).length === 2, l1.filter((x) => /📋/.test(x)).join(' | ').slice(0, 400));
   check('ticked SBC done in the break', l1.some((x) => /📋 84\+ Upgrade done/.test(x)), l1.filter((x) => /84\+|SBC/.test(x)).join(' | ').slice(0, 300));
   check('plan ends normally', l1.some((x) => /Plan ended — all 2 blocks done/.test(x)), l1.filter((x) => /Plan ended/.test(x))[0]);
+  check('plan button says Start again after the plan ended', (await p.textContent('#fcs [data-a=plan-start]')).trim() === 'Start plan', await p.textContent('#fcs [data-a=plan-start]'));
   check('Keep coins and session length put back after the plan', cfg1.minCoins === 0 && cfg1.sessionMinutes === 40, JSON.stringify({ minCoins: cfg1.minCoins, sessionMinutes: cfg1.sessionMinutes }));
   check('no page errors (plan)', !p.errors.length, p.errors.join('; '));
   await p.context().close();

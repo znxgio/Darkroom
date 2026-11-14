@@ -5161,6 +5161,7 @@
 
     end(reason, kind = 'warn') {
       const st = this.state;
+      this.active = false; // first, so the button and the panel show "ended" when they re-render below
       this.restore();
       st.ended = reason;
       st.endedAt = Date.now();
