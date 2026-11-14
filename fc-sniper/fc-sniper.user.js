@@ -1577,7 +1577,7 @@
     if (!p || !p.name || !list.length) return false;
     const norm = (x) => String(x).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s*\(.*\)$/, '').trim();
     const n = norm(p.name);
-    return list.some((x) => { const k = norm(x); return n === k || n.endsWith(` ${k}`) || k.endsWith(` ${n}`); });
+    return list.some((x) => { const k = norm(x); return n === k || n.endsWith(` ${k}`); }); // "Kylian Mbappé" ⊃ "Mbappé", but "García" ≠ "Joan García"
   }
 
   /**
@@ -5124,7 +5124,11 @@
      * tools know your team without the slow "find upgrades" pass. Runs by itself when the panel loads.
      */
     async updateTeam(auto) {
-      if (engine.running || engine.busy || jobs.current || !fut.ready()) return false;
+      if (this.updating) return false;
+      if (engine.running || engine.busy || jobs.current || !fut.ready()) {
+        if (!auto) ui.log(!fut.ready() ? 'Web App not ready — log in first' : 'Busy — wait for the running task to finish', 'warn');
+        return false;
+      }
       this.updating = true;
       try {
         await this.readSquad();
@@ -5147,7 +5151,7 @@
         return false;
       } finally {
         this.updating = false;
-        if (!engine.running && !jobs.current) engine.setStatus('idle', 'Idle');
+        if (!engine.running && !engine.busy && !jobs.current) engine.setStatus('idle', 'Idle');
       }
     },
 
@@ -5159,15 +5163,18 @@
       return jobs.run('Comparing your team', async () => {
         const { slots } = await this.readSquad();
         const { club } = await this.ownedCards(slots);
-        const used = new Set(slots.map((x) => x.player && x.player.id).filter(Boolean));
-        this.compare = slots.map((sl, i) => {
-          const cur = sl.player;
-          const pool = club.filter((c) => !used.has(c.id) && (c.positions || []).includes(sl.position));
-          const best = pool.map((c) => ({ c, s: metaScore(c, sl.position) })).sort((x, y) => y.s - x.s)[0];
-          const curS = cur ? metaScore(cur, sl.position) : 0;
-          const better = best && best.s - curS >= 1;
-          return { i, position: sl.position, cur, alt: best ? best.c : null, curScore: curS, altScore: best ? best.s : 0, verdict: !cur ? 'empty spot' : better ? 'swap' : 'keep' };
-        });
+        // the same player (any version) is never suggested twice, and one card only for one spot — biggest gain first
+        const used = new Set(slots.map((x) => x.player && baseId(x.player.id)).filter(Boolean));
+        const rows = slots.map((sl, i) => ({ i, position: sl.position, cur: sl.player, curScore: sl.player ? metaScore(sl.player, sl.position) : 0, alt: null, altScore: 0 }));
+        const offers = [];
+        for (const r of rows) for (const c of club) if (!used.has(baseId(c.id)) && (c.positions || []).includes(r.position)) offers.push({ r, c, s: metaScore(c, r.position) });
+        offers.sort((x, y) => (y.s - y.r.curScore) - (x.s - x.r.curScore));
+        const taken = new Set();
+        for (const o of offers) {
+          if (o.r.alt || taken.has(baseId(o.c.id))) continue;
+          o.r.alt = o.c; o.r.altScore = o.s; taken.add(baseId(o.c.id));
+        }
+        this.compare = rows.map((r) => ({ ...r, verdict: !r.cur ? 'empty spot' : r.alt && r.altScore - r.curScore >= 1 ? 'swap' : 'keep' }));
         ui.renderCompare();
         const swaps = this.compare.filter((x) => x.verdict === 'swap');
         ui.log(swaps.length ? `⚖️ ${swaps.length} spot${swaps.length === 1 ? '' : 's'} where a card you own scores better: ${swaps.map((x) => `${x.position} ${x.alt.name}`).join(' · ')}` : '⚖️ Your XI is already your best by the meta score — use Find upgrades for market options', 'ok');
@@ -6459,7 +6466,10 @@
       this.renderPlayers(); this.renderStats(); this.renderHistory(); this.renderStatus(); this.renderTrade();
       plan.recover(); this.renderPlan();
       this.renderUpgrades();
-      setTimeout(() => { upgrades.updateTeam(true); }, 4000); // 2.5.0: read the squad by itself (one request, no market)
+      // 2.5.0: read the squad by itself (one request, no market) — retried while the Web App is still loading
+      let tries = 0;
+      const autoRead = async () => { tries++; if (!(await upgrades.updateTeam(true)) && tries < 6 && !store.get(KEYS.team, null)) setTimeout(autoRead, 5000); };
+      setTimeout(autoRead, 4000);
       setInterval(() => this.tick(), 500);
 
       // previous log, so it survives reloads
@@ -6556,7 +6566,9 @@
           }
           case 'refresh-squad': {
             if (jobs.current || engine.running) { this.log('Stop the running task first (Stop in the top bar)', 'warn'); return; }
-            Object.assign(upgrades, { squad: null, summary: null, results: [], formations: [], sbcCache: null, ladderCache: null, costed: 0 });
+            Object.assign(upgrades, { squad: null, summary: null, results: [], formations: [], sbcCache: null, ladderCache: null, costed: 0, compare: null, evoTeam: null });
+            store.set(KEYS.team, null);
+            { const cmp = this.q('[data-r=cmp]'); if (cmp) cmp.innerHTML = '<p class="empty">Cleared — tap ⚖️ Compare my team.</p>'; }
             evos.list = [];
             this.formOpen = -1;
             this.renderUpgrades(); this.renderFormations(); if (this.renderEvos) this.renderEvos();

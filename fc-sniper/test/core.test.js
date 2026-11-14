@@ -1397,3 +1397,8 @@ test('falling-market guard and timing hint', () => {
   assert.match(c.marketHint(new Date('2026-11-20T15:00:00Z')), /Thursday night–Friday/);
   assert.equal(c.marketHint(new Date('2026-11-18T12:00:00Z')), '');
 });
+
+test('proPick: a surname-only card is not matched to a longer list name', () => {
+  assert.equal(c.proPick({ name: 'García' }, 'GK'), false);
+  assert.equal(c.proPick({ name: 'Joan García' }, 'GK'), true);
+});
