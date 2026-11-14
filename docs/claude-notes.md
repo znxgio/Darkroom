@@ -146,6 +146,15 @@ Newest learnings go at the end of each section. Dates are when the note was writ
   back-and-forths. Models in a debate wrongly assumed no extension: trust the user's real-app knowledge over model memory.
 - Auction bidding (`bidSnipe`) is OFF by default; the user had only ever seen Buy Now. Keep it off until the 2.4.0 bid spend guard ships.
 
+- 2026-11-14 data sources that ALLOW automated use (official APIs with keys): DataFluxor "FUT Data"
+  (datafluxor.com/fut-data): FC 27 prices by EA item id (ea_id), console + PC, list prices every ~8–25 min, price history
+  from 25 Sep 2026, up to 500 ids per request; $29/mo 100k req (no free production tier; free sandbox with fake data);
+  X-API-Key header; NO CORS header (a plain fetch from the EA page is blocked) → would need `@grant GM.xmlHttpRequest`
+  + `@connect datafluxor.com` (changes the sandbox: page objects via unsafeWindow) and the key kept in GM storage, not
+  localStorage. FutDB (futdatabase.com) says "free to use" with prices (€79/mo plan for prices; 30 min–24 h updates; one
+  player per request) — site rate-limited us (429), terms not read yet. Parse.bot/Apify "Futbin/FUT.GG APIs" are
+  scrapers of sites that forbid/block bots → never use. User wants to decide on a paid API.
+
 ## 5. Bugs we hit and why (lessons)
 - Club read 0 players: reply was in `response`, not `data`.
 - SBC fill-ins re-bought on retry → mark items bought, per-buy move to club. Duplicates in a plan → one copy per base id.
