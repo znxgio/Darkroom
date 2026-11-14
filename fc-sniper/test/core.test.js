@@ -1382,3 +1382,18 @@ test('auto-compare: pro picks, score parts and side-by-side rows', () => {
   assert.equal(cmp.rows.find((r) => r.label === 'Meta PlayStyles').b, 'Quick Step+');
   assert.ok(['a', 'b', ''].includes(cmp.winner));
 });
+
+test('cardFieldsProbe never throws on circular values', () => {
+  const sd = { name: 'X' }; sd.self = sd;
+  assert.match(c.cardFieldsProbe({ _staticData: sd, playStyles: [1] }), /playStyles=\[1\]/);
+});
+
+test('falling-market guard and timing hint', () => {
+  assert.equal(c.fallingGuardPct({ thin: false, pct: -12 }), 6);
+  assert.equal(c.fallingGuardPct({ thin: false, pct: -30 }), 8, 'capped');
+  assert.equal(c.fallingGuardPct({ thin: false, pct: -2 }), 0);
+  assert.equal(c.fallingGuardPct({ thin: true, pct: -20 }), 0);
+  assert.match(c.marketHint(new Date('2026-11-19T08:00:00Z')), /Thursday rewards window/);
+  assert.match(c.marketHint(new Date('2026-11-20T15:00:00Z')), /Thursday night–Friday/);
+  assert.equal(c.marketHint(new Date('2026-11-18T12:00:00Z')), '');
+});

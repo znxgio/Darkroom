@@ -255,6 +255,29 @@
     return `${head} · ${tips.join(' · ')}`;
   }
 
+  /**
+   * Falling-market guard (2.5.0): extra min profit (as a % of the market price) for a flip when the card's price has
+   * been falling — guides report fodder spikes unwinding fast (e.g. +20% then −35% in 3 days). 0 when flat or rising
+   * or with too little history (trend.thin).
+   */
+  function fallingGuardPct(trend) {
+    if (!trend || trend.thin || !(trend.pct <= -5)) return 0;
+    return Math.min(8, Math.round(-trend.pct / 2));
+  }
+
+  /**
+   * Market timing hint (2.5.0, from trader guides — medium-low confidence): Division Rivals rewards land Thursday 06:59
+   * UTC; prices tend to be lowest around then and highest Thursday night–Friday, with a trough Monday/Tuesday.
+   * Returns a short hint for "now" (a Date) or ''.
+   */
+  function marketHint(now) {
+    const d = now.getUTCDay(); const h = now.getUTCHours();
+    if (d === 4 && h >= 6 && h < 12) return 'Thursday rewards window — guides say prices are often at their lowest now: a good time to buy, a poor time to sell';
+    if ((d === 4 && h >= 18) || d === 5) return 'Thursday night–Friday — guides say prices are often at their highest: a good time to sell, a poor time to buy';
+    if (d === 1 || d === 2) return 'Monday/Tuesday — guides say prices often dip early in the week';
+    return '';
+  }
+
   /** Compare versions like "2.5.0" < "2.5.10". */
   function newerVersion(latest, current) {
     const a = String(latest || '').split('.').map(Number); const b = String(current || '').split('.').map(Number);
@@ -282,6 +305,7 @@
       out.push({ level: 'warn', text: `Keep coins is 0 — the bot may spend everything. Keep ${n(keep)} back?`, fix: { type: 'keep', value: keep } });
     }
     if (!cfg.bidSnipe && cfg.mode !== 'alert') out.push({ level: 'info', text: 'Auction bidding is off — turning it on adds late bids and dry-spell auction turns', fix: { type: 'bid' } });
+    if (ctx.hint) out.push({ level: 'info', text: `🕒 ${ctx.hint} (trader guides; not a rule)` });
     if (ctx.probePending) out.push({ level: 'info', text: 'After your first session, tap Copy log (Log tab) and send it — it shows how EA stores PlayStyles, detailed stats and evolutions on your cards, so they can be read properly' });
     if (ctx.searchesLeft !== undefined && ctx.searchesLeft < 50) out.push({ level: 'warn', text: `Only ${n(ctx.searchesLeft)} searches left today (raise Searches per day in Settings, up to 1,500)` });
     return out;
@@ -1701,8 +1725,10 @@
   function cardFieldsProbe(item) {
     if (!item) return 'no card';
     const rx = /play|style|trait|role|accel|chem|icon|attr|stat|sprint|agil|stamina|strength|compos|finish|vision|tackl|intercept|bio/i;
-    const own = Object.keys(item).filter((k) => rx.test(k)).map((k) => `${k}=${JSON.stringify(item[k]).slice(0, 80)}`);
-    const sd = item._staticData ? Object.keys(item._staticData).filter((k) => rx.test(k)).map((k) => `sd.${k}=${JSON.stringify(item._staticData[k]).slice(0, 80)}`) : [];
+    // values can be circular objects (e.g. _staticData): never let the probe throw
+    const show = (v) => { try { return String(JSON.stringify(v, (k, x) => (typeof x === 'function' ? 'fn' : x))).slice(0, 80); } catch { return typeof v === 'object' && v ? `{${Object.keys(v).slice(0, 12).join(',')}}` : String(v).slice(0, 40); } };
+    const own = Object.keys(item).filter((k) => rx.test(k)).map((k) => `${k}=${show(item[k])}`);
+    const sd = item._staticData ? Object.keys(item._staticData).filter((k) => rx.test(k)).map((k) => `sd.${k}=${show(item._staticData[k])}`) : [];
     const fns = [];
     for (let o = Object.getPrototypeOf(item), d = 0; o && o !== Object.prototype && d < 4; o = Object.getPrototypeOf(o), d++) {
       for (const k of Object.getOwnPropertyNames(o)) if (rx.test(k) && typeof item[k] === 'function') fns.push(`${k}()`);
@@ -2378,7 +2404,7 @@
     cacheBustBid, jitter, pickTargets, planSellPrice, classifyStatus,
     normalizeName, parsePlayerDb, searchPlayers, cardVersions, playerForIteration, migrateConfig, filterSummary, sniperTargets, LEAGUES,
     findMarketPrice, robustPrice, searchBudget, addPriceSample, prunePrices, priceTrend, trendText, lookupUrl, planMaxBuy, effectiveMaxBuy, withinReach, huntTargets,
-    newerVersion, setupIssues, adviceFix, sbcLikely, sbcOrder, coinGoal, cardAdvice, sessionReport, bidSkipReason, proPick, scoreParts, comparePlayers, evoPicks, metaPlayStyles, upgradeWhy, readPlayStyles, cardFieldsProbe, shortTime, searchReport, auctionReport, planFloor, planBudget, planVerdict, planSummary, robustLow, trendNudge, snipeBase, recordGap, gapStats, smartLevels, gammaSample, betaSample, armPrior, decayArm, upgradeArm, armRate, chooseDiscount, chooseTarget, missWeight, recordArm, deepestArmFor, priceShifted, bestArm, flipPlan, tradeOpts, tradeCap, bidAmount, freeCoins, bidBlock, warCeiling, warSteps, binVsWar, settleSales,
+    fallingGuardPct, marketHint, newerVersion, setupIssues, adviceFix, sbcLikely, sbcOrder, coinGoal, cardAdvice, sessionReport, bidSkipReason, proPick, scoreParts, comparePlayers, evoPicks, metaPlayStyles, upgradeWhy, readPlayStyles, cardFieldsProbe, shortTime, searchReport, auctionReport, planFloor, planBudget, planVerdict, planSummary, robustLow, trendNudge, snipeBase, recordGap, gapStats, smartLevels, gammaSample, betaSample, armPrior, decayArm, upgradeArm, armRate, chooseDiscount, chooseTarget, missWeight, recordArm, deepestArmFor, priceShifted, bestArm, flipPlan, tradeOpts, tradeCap, bidAmount, freeCoins, bidBlock, warCeiling, warSteps, binVsWar, settleSales,
     listSpendable, reserveOk, afterListBuy,
     aggregateListings, hotScore, rankHot, snipeScore, priceBands, provenFlips, flipValue, priceLadder, sbcCostEstimate,
     addHistory, summarizeHistory, profitSummary, isDiscordWebhook, discordPayload,
@@ -3491,7 +3517,14 @@
       if (cfg.mode !== 'trade') return { maxBuy: effectiveMaxBuy(player, cfg), plan: null };
       // under 3 listed the "market" can be one overpriced card: no trade
       if (player && player.listed > 0 && player.listed < 3) return { maxBuy: 0, plan: null };
-      const plan = player && flipPlan(snipeBase(player.kind === 'filter' ? { avg: player.avg } : player, 'trade'), tradeOpts(player.avg, cfg));
+      const opts = tradeOpts(player && player.avg, cfg);
+      // falling price: ask for more profit so a flip doesn't buy into a crash (2.5.0)
+      const guard = player && player.kind !== 'filter' ? fallingGuardPct(prices.trend(player.id)) : 0;
+      if (guard && player.avg > 0) {
+        opts.minProfit = Math.max(opts.minProfit || 0, Math.round(player.avg * ((cfg.minProfitPct || 0) + guard) / 100));
+        if (!this.guardSaid || !this.guardSaid.has(player.id)) { (this.guardSaid = this.guardSaid || new Set()).add(player.id); ui.log(`📉 ${player.name}: price falling — flips need ${guard}% more profit until it settles`, 'muted'); }
+      }
+      const plan = player && flipPlan(snipeBase(player.kind === 'filter' ? { avg: player.avg } : player, 'trade'), opts);
       if (!plan) return { maxBuy: 0, plan: null };
       const cap = roundPrice(tradeCap(cfg, fut.coins()), 'down'); // never too many coins on one card
       return { maxBuy: Math.min(plan.maxBuy, player.manualMax || Infinity, cap), plan };
@@ -5097,10 +5130,12 @@
         await this.readSquad();
         if (!this.probed) {
           this.probed = true;
-          const first = (this.squad || []).find((x) => x.player && x.player.item);
-          if (first) debugLog.push(`card fields (${first.player.name}): ${cardFieldsProbe(first.player.item)}`);
-          const ps = (this.squad || []).map((x) => x.player && x.player.playStyles && x.player.playStyles.length).filter(Boolean).length;
-          debugLog.push(`playstyles read for ${ps}/11 squad players`);
+          try { // read-only diagnostics — must never stop the team from being saved
+            const first = (this.squad || []).find((x) => x.player && x.player.item);
+            if (first) debugLog.push(`card fields (${first.player.name}): ${cardFieldsProbe(first.player.item)}`);
+            const ps = (this.squad || []).map((x) => x.player && x.player.playStyles && x.player.playStyles.length).filter(Boolean).length;
+            debugLog.push(`playstyles read for ${ps}/11 squad players`);
+          } catch (e) { debugLog.push(`card fields probe: ${errText(e)}`); }
         }
         store.set(KEYS.team, { at: Date.now(), summary: this.summary, squad: (this.squad || []).map((x) => ({ position: x.position, name: x.player && x.player.name, rating: x.player && x.player.rating })) });
         ui.renderUpgrades();
@@ -7377,7 +7412,7 @@
       const left = Math.max(0, (cfg.searchesPerDay || 0) - usageFor(engine.safety.usage, Date.now()).searches);
       let probeSent = '';
       try { probeSent = localStorage.getItem('fc-sniper:probe-sent') || ''; } catch { /* fine */ }
-      const items = setupIssues(cfg, { coins, version: VERSION, latest: this.latest, targets: sniperTargets(cfg).length, reachable: huntTargets(cfg).length, searchesLeft: left, probePending: probeSent !== VERSION });
+      const items = setupIssues(cfg, { coins, version: VERSION, latest: this.latest, targets: sniperTargets(cfg).length, reachable: huntTargets(cfg).length, searchesLeft: left, probePending: probeSent !== VERSION, hint: marketHint(new Date()) });
       const adv = (engine.lastAdvice || []).filter((a) => a.fix);
       this.setupItems = items; this.adviceItems = adv;
       const icon = { ok: '✅', warn: '⚠️', info: 'ℹ️' };
