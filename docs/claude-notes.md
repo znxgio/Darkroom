@@ -292,6 +292,8 @@ Newest learnings go at the end of each section. Dates are when the note was writ
 
 - 2.5.2: user's active Web App squad was a fodder squad ("Foggia AS"), so "Never use my active squad" protected the wrong team. Now sbc.pool also protects every saved squad (fut.allSquadItems tries requestSquads/requestAllSquads/getSquads/getAllSquads, then requestSquadById each); if none works it warns once and logs the Squad service's method names. Real method name still to confirm from a log.
 
+- 2.5.3 (user chose both): the 24 h lock on Nov 14 was ONE lock — 429 during "loading challenges" (SBC tab burst); I wrongly told the user it was a second lock before reading the log. Fixes: fut.challenges spaces every challenge-list load 3–5 s; a plain 429 while loading SBCs/challenges locks 3 h (`lockMs.rate`); market codes (426/512/521, and 429 elsewhere) stay 24 h. Lesson: read the log before explaining a lock.
+
 ## 8. Debate protocol (user's design, 2026-11-12)
 Use when Opus is unsure about an idea or design. Relay it with background subagents + SendMessage (agent teams don't run here).
 - **Side A** and **Side B** (Sonnet, medium effort): argue opposite positions (e.g. aggressive vs cautious). Max ~250 words, top 2 changes.

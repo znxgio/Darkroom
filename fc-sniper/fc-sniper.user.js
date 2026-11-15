@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FC Sniper
 // @namespace    https://github.com/znxgio/darkroom
-// @version      2.5.2
+// @version      2.5.3
 // @description  Sniper, pack opener, SBC solver and team upgrade advisor for the EA SPORTS FC Ultimate Team Web App, with built-in safety limits.
 // @match        https://www.ea.com/*ultimate-team/web-app*
 // @match        https://www.ea.com/ea-sports-fc/ultimate-team/web-app*
@@ -1293,7 +1293,7 @@
     maxSearchesPerDay: 1500,
     maxSessionMinutes: 120,
     maxConsecutiveErrors: 3,
-    lockMs: { captcha: 3 * 3600e3, throttled: 24 * 3600e3, errors: 30 * 60e3 },
+    lockMs: { captcha: 3 * 3600e3, throttled: 24 * 3600e3, rate: 3 * 3600e3, errors: 30 * 60e3 },
   };
 
   /** Enforce the safety floors on a config. Returns { cfg, changed: [keys] }. */
@@ -2669,7 +2669,7 @@
 
   const w = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '2.5.2';
+  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '2.5.3';
   const errText = (e) => (e && e.message ? e.message : String(e));
   const fmt = (n) => Number(n || 0).toLocaleString();
 
@@ -3025,6 +3025,10 @@
       return { ok: true, sets: d.sets || (Array.isArray(d) ? d : []) };
     },
     async challenges(set) {
+      // 2.5.2: at least ~3–5 s between challenge-list loads, whoever asks (EA answered 429 to quicker bursts)
+      const gap = jitter(3000, 5000) - (Date.now() - (this.lastChallengesAt || 0));
+      if (gap > 0) await sleep(gap);
+      this.lastChallengesAt = Date.now();
       const res = await observe(w.services.SBC.requestChallengesForSet(set));
       if (!res.success) return { ok: false, status: res.status, list: [] };
       const list = (res.data && res.data.challenges) || (typeof set.getChallenges === 'function' ? set.getChallenges() : []);
@@ -4627,7 +4631,9 @@
       const status = res ? res.status : 'error';
       const kind = classifyStatus(status);
       if (kind === 'captcha' || kind === 'throttled') {
-        engine.lock(kind, `EA pushback during ${what} (${status})`);
+        // 2.5.2 (user's call): a plain 429 while loading SBCs is EA's short "slow down" — 3 h, not 24 h. Market codes stay 24 h.
+        const short = kind === 'throttled' && Number(status) === 429 && /^loading (SBCs|challenges|the challenge)/.test(what);
+        engine.lock(short ? 'rate' : kind, `EA pushback during ${what} (${status})`);
         sounds.alarm();
         throw new Stopped();
       }

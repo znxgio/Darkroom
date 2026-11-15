@@ -238,6 +238,7 @@ test('lockouts: captcha 3h, market limit 24h, repeated errors 30min', () => {
   assert.equal(c.lockoutFor('captcha'), 3 * 3600e3);
   assert.equal(c.lockoutFor('throttled'), 24 * 3600e3);
   assert.equal(c.lockoutFor('errors'), 30 * 60e3);
+  assert.equal(c.lockoutFor('rate'), 3 * 3600e3); // 2.5.3: plain 429 while loading SBCs
   assert.equal(c.lockoutFor('missed'), 0);
   assert.equal(c.formatDuration(45 * 60e3), '45 min');
   assert.equal(c.formatDuration(3 * 3600e3), '3 h');

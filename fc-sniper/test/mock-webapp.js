@@ -192,7 +192,7 @@ function installMock() {
       create(name, formation, items) { T.created = { name, formation, n: items.filter(Boolean).length, ratings: items.map((i) => i && i.rating) }; return obs({ success: true }); } },
     SBC: {
       requestSets: () => obs({ success: true, data: { sets } }),
-      requestChallengesForSet: (set) => obs({ success: true, data: { challenges: set.id === 1 ? (done < 2 ? [challenge()] : []) : set.id === 3 ? [eliteChallenge] : set.id === 4 ? [bronzeChallenge] : set.id === 5 ? [hatChallenge] : set.id === 6 ? [pointsChallenge] : set.id === 7 ? [heroChallenge] : [chemChallenge] } }),
+      requestChallengesForSet: (set) => (T.ch429 ? obs({ success: false, status: 429 }) : null) || obs({ success: true, data: { challenges: set.id === 1 ? (done < 2 ? [challenge()] : []) : set.id === 3 ? [eliteChallenge] : set.id === 4 ? [bronzeChallenge] : set.id === 5 ? [hatChallenge] : set.id === 6 ? [pointsChallenge] : set.id === 7 ? [heroChallenge] : [chemChallenge] } }),
       loadChallenge: (ch) => { if (ch && ch.squad && 'loaded' in ch.squad) ch.squad.loaded = true; return obs({ success: true }); },
       saveChallenge: () => obs({ success: true }),
       initiateOneClickChallenge: () => obs({ success: true }),

@@ -284,6 +284,20 @@ const idle = (p, ms = 150000) => p.waitForFunction(() => !document.querySelector
   // SBC pool diagnostics
   check('SBC log explains skipped players', (await log(p)).some((l) => /Club: read \d+ · usable for SBCs \d+ · skipped .*in your squad/.test(l)));
 
+  // 2.5.3: a plain 429 while loading an SBC's challenges locks for 3 h (not 24 h); loads are spaced ≥ 3 s
+  await p.click('#fcs [data-tab=sbc]');
+  await idle(p);
+  const viewBtn = await p.$('#fcs [data-a=sbc-set]');
+  if (viewBtn) {
+    await p.evaluate(() => { T.ch429 = true; });
+    await viewBtn.click();
+    await p.waitForFunction(() => /Safety lock/.test(document.querySelector('#fcs [data-r=log]').textContent), null, { timeout: 30000 }).catch(() => {});
+    const lk = await p.evaluate(() => JSON.parse(localStorage.getItem('fc-sniper:safety') || '{}'));
+    const hrs = (lk.lockUntil - Date.now()) / 3600e3;
+    check('429 while loading challenges → 3 h lock, not 24 h', hrs > 2.9 && hrs <= 3.01 && /loading challenges \(429\)/.test(lk.lockReason || ''), JSON.stringify({ hrs: hrs.toFixed(2), reason: lk.lockReason }));
+    await p.evaluate(() => { T.ch429 = false; });
+  } else check('429 while loading challenges → 3 h lock, not 24 h', false, 'no unloaded SBC to view');
+
   // copy log works (falls back to prompt if clipboard is blocked)
   await p.click('#fcs [data-tab=log]');
   p.once('dialog', (d) => d.accept());
