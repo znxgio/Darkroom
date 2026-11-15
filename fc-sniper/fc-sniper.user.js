@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FC Sniper
 // @namespace    https://github.com/znxgio/darkroom
-// @version      2.5.3
+// @version      2.5.4
 // @description  Sniper, pack opener, SBC solver and team upgrade advisor for the EA SPORTS FC Ultimate Team Web App, with built-in safety limits.
 // @match        https://www.ea.com/*ultimate-team/web-app*
 // @match        https://www.ea.com/ea-sports-fc/ultimate-team/web-app*
@@ -2680,7 +2680,7 @@
 
   const w = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '2.5.3';
+  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '2.5.4';
   const errText = (e) => (e && e.message ? e.message : String(e));
   const fmt = (n) => Number(n || 0).toLocaleString();
 
@@ -3640,9 +3640,17 @@
     reset() { this.data = { targets: {}, hours: {}, speed: { n: 0, ms: 0, lost: 0 } }; this.save(); },
   };
 
+  /** The saved safety state, with 2.5.3's lock rule applied and saved (every reader goes through here). */
+  function readSafety() {
+    const raw = store.get(KEYS.safety, {});
+    const m = migrateLock(raw, Date.now());
+    if (m !== raw) store.set(KEYS.safety, m);
+    return m;
+  }
+
   const engine = {
     cfg: loadConfig(),
-    safety: migrateLock(store.get(KEYS.safety, {}), Date.now()),
+    safety: readSafety(),
     history: store.get(KEYS.history, []),
     stats: newStats(),
     running: false,
@@ -3833,7 +3841,7 @@
       if (!fut.ready()) { ui.log('Web App not ready — log in first', 'err'); return; }
       if (!sniperTargets(this.cfg).length) { ui.log('Add a player or turn on a filter first', 'warn'); return; }
       this.busy = true; ui.setBusy(true);
-      this.safety = store.get(KEYS.safety, {});
+      this.safety = readSafety();
       try {
         await this.priceCheck(sniperTargets(this.cfg));
       } catch (e) {
@@ -3868,7 +3876,7 @@
         ui.toast('Add a player first — ▶ starts the sniper', 'alert');
         return;
       }
-      this.safety = store.get(KEYS.safety, {});
+      this.safety = readSafety();
       const gate = this.gate();
       if (!gate.ok) { ui.log(`Can't start — ${gate.reason}`, 'err'); ui.renderStatus(); return; }
 
@@ -4558,7 +4566,7 @@
       if (engine.running || engine.busy || this.current) { ui.log('Busy — wait for the current task to finish', 'warn'); return; }
       if (Date.now() - (this.freedAt || 0) < 35000) { ui.log('A stuck task was just freed — wait a few seconds before starting another', 'warn'); return; }
       if (!fut.ready()) { ui.log('Web App not ready — log in first', 'err'); return; }
-      engine.safety = store.get(KEYS.safety, {});
+      engine.safety = readSafety();
       const gate = engine.gate();
       if (!gate.ok) { ui.log(`Can't start — ${gate.reason}`, 'err'); return; } // daily caps too, not only lockouts
       this.current = name;
@@ -4590,7 +4598,7 @@
     async gate(kind) {
       if (this.cancelled) throw new Stopped();
       const cfg = engine.cfg;
-      engine.safety = store.get(KEYS.safety, {});
+      engine.safety = readSafety();
       const g = engine.gate();
       if (!g.ok) { ui.log(`${this.current} stopped — ${g.reason}. Anything already bought stays in your club.`, 'warn'); throw new Stopped(); }
       const afterSearch = kind === 'buy' && this.lastKind === 'search';
@@ -6211,7 +6219,7 @@
 
     save() { store.set(KEYS.plan, this.state); ui.renderPlan(); },
     cancel() { if (this.active && !this.cancelled) { this.cancelled = true; ui.log('Stopping the plan…', 'warn'); } },
-    locked() { engine.safety = store.get(KEYS.safety, {}); return (engine.safety.lockUntil || 0) > Date.now(); },
+    locked() { engine.safety = readSafety(); return (engine.safety.lockUntil || 0) > Date.now(); },
 
     /** After a reload: a plan that was running is never resumed — put your settings back and say where it stopped. */
     recover() {
@@ -6346,7 +6354,7 @@
       if (!fut.ready()) { ui.log('Web App not ready — log in first', 'err'); return; }
       const { cfg } = clampConfig(engine.cfg);
       Object.assign(engine.cfg, cfg); engine.save(); ui.syncForm();
-      engine.safety = store.get(KEYS.safety, {});
+      engine.safety = readSafety();
       const gate = engine.gate();
       if (!gate.ok) { ui.log(`Can't start the plan — ${gate.reason}`, 'err'); return; }
       const coins = fut.coins();
@@ -6388,7 +6396,7 @@
         await engine.start();
         while (engine.running || engine.busy) await sleep(500);
         if (this.cancelled) return this.end('stopped by you');
-        if (planVerdict(engine.lastStop, (store.get(KEYS.safety, {}).lockUntil || 0), Date.now()) === 'end') return this.end(`block ${b} ended: ${engine.lastStop || 'it did not start'}`);
+        if (planVerdict(engine.lastStop, (readSafety().lockUntil || 0), Date.now()) === 'end') return this.end(`block ${b} ended: ${engine.lastStop || 'it did not start'}`);
         if (b === st.blocks) break;
         const sb = await this.sbcs();
         if (sb === 'stopped during SBCs') return this.end(this.cancelled ? 'stopped by you' : jobs.loggedOut ? 'logged out during an SBC' : 'EA pushback during an SBC', this.cancelled ? 'warn' : 'err');
@@ -7876,7 +7884,7 @@
 
     async backup() {
       const data = { app: 'fc-sniper', version: VERSION, at: new Date().toISOString(),
-        config: engine.cfg, history: engine.history, safety: store.get(KEYS.safety, {}), log: (this.saved || []).slice(-150) };
+        config: engine.cfg, history: engine.history, safety: readSafety(), log: (this.saved || []).slice(-150) };
       const text = JSON.stringify(data);
       try { await navigator.clipboard.writeText(text); this.toast('Backup copied — paste it into Notes', 'ok'); this.log(`Backup copied (${Math.round(text.length / 1024)} KB)`, 'ok'); } catch {
         w.prompt('Copy this backup and keep it somewhere safe:', text);
@@ -8017,7 +8025,7 @@
           .catch(() => { this.latest = null; this.renderSetup(); });
       }
       const coins = fut.ready() ? fut.coins() : 0;
-      engine.safety = engine.safety || store.get(KEYS.safety, {});
+      engine.safety = engine.safety || readSafety();
       const left = Math.max(0, (cfg.searchesPerDay || 0) - usageFor(engine.safety.usage, Date.now()).searches);
       let probeSent = '';
       try { probeSent = localStorage.getItem('fc-sniper:probe-sent') || ''; } catch { /* fine */ }

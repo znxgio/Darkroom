@@ -69,6 +69,7 @@ function installDryMock(opts) {
   };
   window.repositories = { Item: { getPileSize: () => 100, numItemsInCache: () => 0, isPileFull: () => false } };
   const now = Date.now();
+  if (opts.oldLock) localStorage.setItem('fc-sniper:safety', JSON.stringify({ lockUntil: now + opts.oldLock.hours * 3600e3, lockReason: opts.oldLock.reason }));
   localStorage.setItem('fc-sniper:config', JSON.stringify({
     players: opts.players.map((p) => (p.none ? { id: p.id, name: p.name, rating: 88, avg: 0, lowest: 0, maxBuy: 0, checkedAt: now }
       : { id: p.id, name: p.name, rating: 88, manualMax: p.manualMax, lowest: p.lowest, avg: Math.round(p.lowest * 1.05), floor: p.lowest, checkedAt: now })),
@@ -161,6 +162,16 @@ async function run(b, opts) {
   const fz = await run(b, { coins: 50000, bidSnipe: false, dryTurns: 0, dryAuctionSearches: 60, maxSearches: 20, timeout: 60000,
     players: [{ id: 7, name: 'None Listed', none: true }, { id: 8, name: 'Pricey Target', lowest: 194000, manualMax: 186000 }] });
   check('no frozen loop: stops when nothing can be bought (none listed + unaffordable)', fz.log.some((l) => /Stopped — (no player or filter can be bought right now|no player or filter can be traded for profit|can't afford any target)/.test(l)), fz.log.slice(-3).join(' | '));
+
+  // 6) 2.5.4: a 24 h lock saved by 2.5.2 for a 429 while loading SBCs is cut to 3 h — saved, so the start check agrees
+  const ol = await run(b, { coins: 50000, bidSnipe: false, dryTurns: 0, dryAuctionSearches: 60, maxSearches: 20, timeout: 60000,
+    oldLock: { hours: 12, reason: 'EA pushback during loading challenges (429)' },
+    players: [{ id: 7, name: 'None Listed', none: true }, { id: 8, name: 'Pricey Target', lowest: 194000, manualMax: 186000 }] });
+  check('old SBC-429 lock is lifted by the 3 h rule (bot starts)', !ol.log.some((l) => /Can't start — cooling down|Locked — cooling down/.test(l)) && ol.log.some((l) => /Stopped —/.test(l)), ol.log.slice(-3).join(' | '));
+  const ml = await run(b, { coins: 50000, bidSnipe: false, dryTurns: 0, dryAuctionSearches: 60, maxSearches: 20, timeout: 60000,
+    oldLock: { hours: 12, reason: 'transfer market limited (521) — stop for today' },
+    players: [{ id: 8, name: 'Pricey Target', lowest: 194000, manualMax: 186000 }] });
+  check('market lock is kept (bot refuses to start)', ml.log.some((l) => /cooling down/.test(l)), ml.log.slice(-3).join(' | '));
 
   check('no page errors', !dry.errors.length && !stop.errors.length && !gate.errors.length && !wv.errors.length && !fz.errors.length, [...dry.errors, ...stop.errors, ...gate.errors, ...wv.errors, ...fz.errors].join('; '));
   await b.close();
