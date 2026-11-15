@@ -1336,6 +1336,17 @@
   }
 
   /** How long to refuse to start after a problem of this kind. */
+  /**
+   * 2.5.3: a 24 h lock saved before the 3 h rule, caused by a plain 429 while loading SBCs, is shortened to 3 h from
+   * when it started (the user's rule applied to it). Market locks are left alone. Returns the (possibly new) state.
+   */
+  function migrateLock(state, now) {
+    if (!state || !state.lockUntil || state.lockKind) return state || {};
+    if (!/during loading (SBCs|challenges|the challenge)[^(]*\(429\)/.test(state.lockReason || '')) return state;
+    const started = state.lockUntil - SAFETY.lockMs.throttled;
+    return { ...state, lockKind: 'rate', lockUntil: Math.min(state.lockUntil, started + SAFETY.lockMs.rate) };
+  }
+
   function lockoutFor(kind) {
     return SAFETY.lockMs[kind] || 0;
   }
@@ -2647,7 +2658,7 @@
     priceStep, roundPrice, nextPrice, prevPrice, afterTax, profit, breakEvenSell,
     cacheBustBid, jitter, pickTargets, planSellPrice, classifyStatus,
     personalRecords, normalizeName, parsePlayerDb, searchPlayers, cardVersions, playerForIteration, migrateConfig, filterSummary, sniperTargets, LEAGUES,
-    findMarketPrice, robustPrice, searchBudget, addPriceSample, prunePrices, priceTrend, trendText, lookupUrl, planMaxBuy, effectiveMaxBuy, withinReach, huntTargets,
+    findMarketPrice, migrateLock, robustPrice, searchBudget, addPriceSample, prunePrices, priceTrend, trendText, lookupUrl, planMaxBuy, effectiveMaxBuy, withinReach, huntTargets,
     fallingGuardPct, marketHint, newerVersion, setupIssues, adviceFix, sbcPaths, analystAnswer, analystPrompt, namedPlayers, namedCoins, namedPos, sbcLikely, sbcOrder, coinGoal, cardAdvice, sessionReport, bidSkipReason, proPick, scoreParts, comparePlayers, evoPicks, metaPlayStyles, upgradeWhy, readPlayStyles, cardFieldsProbe, shortTime, searchReport, auctionReport, planFloor, planBudget, planVerdict, planSummary, robustLow, trendNudge, snipeBase, recordGap, gapStats, smartLevels, gammaSample, betaSample, armPrior, decayArm, upgradeArm, armRate, chooseDiscount, chooseTarget, missWeight, recordArm, deepestArmFor, priceShifted, bestArm, flipPlan, tradeOpts, tradeCap, bidAmount, freeCoins, bidBlock, warCeiling, warSteps, binVsWar, settleSales,
     listSpendable, reserveOk, afterListBuy,
     aggregateListings, hotScore, rankHot, snipeScore, priceBands, provenFlips, flipValue, priceLadder, sbcCostEstimate,
@@ -3631,7 +3642,7 @@
 
   const engine = {
     cfg: loadConfig(),
-    safety: store.get(KEYS.safety, {}),
+    safety: migrateLock(store.get(KEYS.safety, {}), Date.now()),
     history: store.get(KEYS.history, []),
     stats: newStats(),
     running: false,
@@ -3660,6 +3671,7 @@
       if (!ms) return;
       this.safety.lockUntil = Date.now() + ms;
       this.safety.lockReason = reason;
+      this.safety.lockKind = kind;
       this.saveSafety();
       ui.log(`Safety lock (${reason || kind}): won't start again for ${formatDuration(ms)}`, 'err');
       ui.renderStatus();

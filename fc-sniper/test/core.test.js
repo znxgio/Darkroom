@@ -1488,3 +1488,16 @@ test('overlayView: most common card, cheapest Buy Now, usual price', () => {
   assert.equal(w.refKind, 'list price'); assert.equal(w.under, false);
   assert.equal(overlayView([mk(1, 0)], [], 0).cheapest, 0);
 });
+
+test('2.5.3: an old 24 h lock from a 429 while loading SBCs becomes 3 h; market locks stay', () => {
+  const now = Date.now();
+  const start = now - 10 * 3600e3;
+  const old = { lockUntil: start + 24 * 3600e3, lockReason: 'EA pushback during loading challenges (429)' };
+  const m = c.migrateLock(old, now);
+  assert.equal(m.lockUntil, start + 3 * 3600e3);
+  assert.ok(m.lockUntil < now); // already over
+  const market = { lockUntil: start + 24 * 3600e3, lockReason: 'transfer market limited (521) — stop for today' };
+  assert.equal(c.migrateLock(market, now).lockUntil, market.lockUntil);
+  const newer = { lockUntil: start + 24 * 3600e3, lockReason: 'EA pushback during loading challenges (429)', lockKind: 'throttled' };
+  assert.equal(c.migrateLock(newer, now).lockUntil, newer.lockUntil); // new locks carry their kind
+});
