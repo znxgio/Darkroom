@@ -162,8 +162,10 @@ function installHotMock() {
   const smart = lines.find((l) => /Relisted Mbappé at/.test(l));
   check('smart relist: expired card repriced one step under the cheapest, above break-even', t.listed[0] === 49750 && /at 49,750 \(cheapest 50,000\)/.test(smart || ''), `${smart} · listed ${t.listed}`);
   check('relisted under market average', t.listed.length >= 2 && t.listed[1] < 52000 && t.listed.slice(1).every((x) => x === t.listed[1]), `listed ${t.listed}`);
-  const buy = t.searches.find((x) => x.maxBuy && x.minBid !== undefined);
-  check('snipe search max buy keeps min profit', buy && 0.95 * t.listed[0] - buy.maxBuy >= 1000, JSON.stringify(buy));
+  // the real max buy (a near-miss check may search a little higher, but never buys above this)
+  const tl = lines.find((l) => /Trading Mbappé \(buy ≤ [\d,]+/.test(l));
+  const maxBuy = tl ? Number(tl.match(/buy ≤ ([\d,]+)/)[1].replace(/,/g, '')) : 0;
+  check('snipe max buy keeps min profit', maxBuy > 0 && 0.95 * t.listed[0] - maxBuy >= 1000 && t.bought.every((x) => x <= maxBuy), JSON.stringify({ maxBuy, listed: t.listed[0], bought: t.bought }));
   check('auction searches use max bid', t.searches.some((x) => x.maxBid && !x.maxBuy), JSON.stringify(t.searches.filter((x) => x.maxBid)[0]));
   check('bid placed on ending auction', t.bids.includes(30250), `bids ${t.bids}`);
   check('second bid that would break Keep coins is not placed', t.bids.length === 1, `bids ${t.bids}`);
