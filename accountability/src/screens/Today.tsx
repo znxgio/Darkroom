@@ -5,6 +5,7 @@ import PhotoItem from '../features/photos/PhotoItem';
 import { prettyDay, weekStart, type Day } from '../lib/dates';
 import { canSkip, itemsFor, type DayItem, type Task, type TaskLog } from '../lib/schedule';
 import { errMsg, fmtTime } from './ui';
+import TrackerCards from '../features/trackers/TrackerCards';
 
 interface Props {
   repo: Repo;
@@ -170,6 +171,8 @@ export default function Today({ repo, backend, onError, onAddTask }: Props) {
           ))}
         </ul>
       )}
+
+      <TrackerCards />
 
       {skipping && (
         <SkipSheet

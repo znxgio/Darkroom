@@ -83,12 +83,13 @@ The owner asked for this so they don't have to send daily photos in chat.
 - (none yet: the owner still needs to create the Supabase + Vercel accounts; steps are in README.md)
 
 ## Stages
-1. Tasks + check-off: **built, not deployed**
-2. Photos: **built, not deployed** (`src/features/photos/`, migration `0003_photos.sql`)
-3. Reminders (push)
-4. Streak, calendar, weekly score, excuse log + missed-reason prompt, Sunday review
-5. Weight log (as the first modular tracker)
-6. Stakes
+All built and tested in demo mode on 2026-11-16 (night). Not deployed: needs the owner's Supabase + Vercel accounts.
+1. Tasks + check-off
+2. Photos (`src/features/photos`)
+3. Reminders (`tick` function + `src/features/reminders`)
+4. Streak, calendar, weekly score, excuse log, missed-reason gate, Sunday review (`src/features/stats`)
+5. Trackers: Weight log (`src/features/trackers`). Add a tracker = one object in `registry.ts`.
+6. Stakes (`tick` function + Settings)
 
 ## Photos (stage 2)
 - Live camera only (getUserMedia), no file picker. Every photo is a 3:4 portrait, center-cropped, longest side 1280px, JPEG stepped 0.8→0.5 until under ~350 KB.
@@ -96,6 +97,12 @@ The owner asked for this so they don't have to send daily photos in chat.
 - Private bucket `photos`, path `<user_id>/<YYYY-MM-DD>/<face|body>.jpg`; viewed only through 1-hour signed URLs. Today only (DB trigger + storage policies); retake = replace today's.
 - Extras: self-timer (3s/10s), "Align" overlay of the last photo, per-kind camera choice remembered on the device.
 - `photosRequirement(photosFrom, completeDays)` plugs photos into streak/score as an ExtraRequirement.
+
+## Gotchas when merging features
+- CSS class names are global. Prefix feature classes (e.g. `tk-` for trackers); `.detail` clashed once.
+- PostgREST upsert updates every column sent, so column-level UPDATE grants must include the conflict-key columns (`task_logs` got `task_id`, `day`). Triggers block real changes to them.
+- `npm run e2e` runs one long story through a pinned clock. Jumping days triggers the missed-reason prompt; answer it with `answerGate()`. Photos count from `photos_from`, which the script seeds as Nov 23.
+- Features get the backend from `BackendContext` (`src/data/BackendContext.ts`) or a `backend` prop.
 
 ## Bugs & causes
 - Day boundary: the container's clock can be on a different LA day than the test clock. Always use `repo.today()`, never `dayOf()`, in UI code.
