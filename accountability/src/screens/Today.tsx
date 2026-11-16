@@ -6,6 +6,7 @@ import { prettyDay, weekStart, type Day } from '../lib/dates';
 import { canSkip, itemsFor, type DayItem, type Task, type TaskLog } from '../lib/schedule';
 import { errMsg, fmtTime } from './ui';
 import TrackerCards from '../features/trackers/TrackerCards';
+import { setBadge } from '../features/reminders/push';
 
 interface Props {
   repo: Repo;
@@ -24,6 +25,25 @@ export default function Today({ repo, backend, onError, onAddTask }: Props) {
   const [data, setData] = useState<Data | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [skipping, setSkipping] = useState<Task | null>(null);
+  const [photosDone, setPhotosDone] = useState<boolean | null>(null);
+  const [celebrate, setCelebrate] = useState(false);
+  const wasComplete = useRef<boolean | null>(null);
+
+  // Home Screen badge = what's still open today; celebrate the moment the day becomes complete.
+  useEffect(() => {
+    if (!data || photosDone === null) return;
+    const its = itemsFor(data.today, data.today, data.tasks, data.logs);
+    const open = its.filter((i) => i.state === 'open').length + (photosDone ? 0 : 1);
+    const complete = its.every((i) => i.state === 'done') && photosDone;
+    setBadge(open);
+    if (wasComplete.current === false && complete) {
+      setCelebrate(true);
+      const t = window.setTimeout(() => setCelebrate(false), 2600);
+      wasComplete.current = complete;
+      return () => window.clearTimeout(t);
+    }
+    wasComplete.current = complete;
+  }, [data, photosDone]);
   const busy = useRef(new Set<string>());
 
   const load = useCallback(async () => {
@@ -108,18 +128,29 @@ export default function Today({ repo, backend, onError, onAddTask }: Props) {
   }
 
   const items = itemsFor(data.today, data.today, data.tasks, data.logs);
-  const doneCount = items.filter((i) => i.state === 'done').length;
+  const photoCount = photosDone === null ? 0 : 1;
+  const doneCount = items.filter((i) => i.state === 'done').length + (photosDone ? 1 : 0);
+  const total = items.length + photoCount;
 
   return (
     <div className="screen">
       <header className="header">
         <h1>{prettyDay(data.today)}</h1>
         <p className="sub" data-testid="done-count">
-          {doneCount} of {items.length} done
+          {doneCount} of {total} done
         </p>
       </header>
 
-      <PhotoItem backend={backend} onError={onError} />
+      <PhotoItem backend={backend} onError={onError} onStatus={setPhotosDone} />
+      {celebrate && (
+        <div className="celebrate" role="status" data-testid="celebrate" onClick={() => setCelebrate(false)}>
+          <div className="celebrate-card">
+            <div className="celebrate-flame" aria-hidden="true">🔥</div>
+            <strong>Day complete</strong>
+            <span>Everything’s done. Streak safe.</span>
+          </div>
+        </div>
+      )}
 
       {items.length === 0 ? (
         <div className="empty">

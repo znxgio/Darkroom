@@ -5,7 +5,16 @@ import { settingsApi } from '../settings/api';
 import { photosApi, type TodayPhotos } from './api';
 import CaptureFlow from './CaptureFlow';
 
-export default function PhotoItem({ backend, onError }: { backend: Backend; onError?: (msg: string) => void }) {
+export default function PhotoItem({
+  backend,
+  onError,
+  onStatus,
+}: {
+  backend: Backend;
+  onError?: (msg: string) => void;
+  /** Tells the Today screen whether both photos are taken (null while loading). */
+  onStatus?: (done: boolean | null) => void;
+}) {
   const [have, setHave] = useState<TodayPhotos | null>(null);
   const [open, setOpen] = useState(false);
 
@@ -30,6 +39,9 @@ export default function PhotoItem({ backend, onError }: { backend: Backend; onEr
 
   const done = !!(have?.face && have?.body);
   const state = done ? 'done' : 'open';
+  useEffect(() => {
+    onStatus?.(have === null ? null : done);
+  }, [have, done, onStatus]);
   let meta = 'Face + body · takes a minute';
   if (done) meta = 'Both taken · tap to retake';
   else if (have?.face) meta = 'Face done · body next';

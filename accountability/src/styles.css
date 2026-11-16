@@ -2364,3 +2364,55 @@ h2 {
   font-size: 14px;
   color: var(--muted);
 }
+
+/* day-complete celebration */
+.celebrate {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  background: rgba(10, 11, 14, 0.55);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+  animation: celebrate-fade 2.6s ease forwards;
+}
+.celebrate-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 26px 34px;
+  border-radius: 22px;
+  background: var(--surface);
+  border: 1px solid var(--accent);
+  box-shadow: 0 0 40px rgba(244, 117, 33, 0.35);
+  animation: celebrate-pop 0.5s cubic-bezier(0.2, 1.4, 0.4, 1) both;
+}
+.celebrate-card strong {
+  font-size: 24px;
+}
+.celebrate-card span {
+  color: var(--muted);
+  font-size: 15px;
+}
+.celebrate-flame {
+  font-size: 56px;
+  line-height: 1;
+  animation: celebrate-flame 0.9s ease-in-out infinite alternate;
+}
+@keyframes celebrate-pop {
+  from { transform: scale(0.6); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+@keyframes celebrate-flame {
+  from { transform: scale(1) rotate(-4deg); }
+  to { transform: scale(1.12) rotate(4deg); }
+}
+@keyframes celebrate-fade {
+  0%, 80% { opacity: 1; }
+  100% { opacity: 0; visibility: hidden; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .celebrate, .celebrate-card, .celebrate-flame { animation: none; }
+}
