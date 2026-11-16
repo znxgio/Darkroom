@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import type { Backend } from '../data/backend';
 import type { Repo } from '../data/repo';
+import PhotoItem from '../features/photos/PhotoItem';
 import { prettyDay, weekStart, type Day } from '../lib/dates';
 import { canSkip, itemsFor, type DayItem, type Task, type TaskLog } from '../lib/schedule';
 import { errMsg, fmtTime } from './ui';
 
 interface Props {
   repo: Repo;
+  backend: Backend;
   onError: (msg: string) => void;
   onAddTask: () => void;
 }
@@ -16,7 +19,7 @@ interface Data {
   logs: TaskLog[];
 }
 
-export default function Today({ repo, onError, onAddTask }: Props) {
+export default function Today({ repo, backend, onError, onAddTask }: Props) {
   const [data, setData] = useState<Data | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [skipping, setSkipping] = useState<Task | null>(null);
@@ -114,6 +117,8 @@ export default function Today({ repo, onError, onAddTask }: Props) {
           {doneCount} of {items.length} done
         </p>
       </header>
+
+      <PhotoItem backend={backend} onError={onError} />
 
       {items.length === 0 ? (
         <div className="empty">

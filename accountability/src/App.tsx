@@ -4,12 +4,14 @@ import { makeBackend } from './config';
 import Login from './screens/Login';
 import Today from './screens/Today';
 import Tasks from './screens/Tasks';
+import PhotosScreen from './features/photos/PhotosScreen';
 
-type TabId = 'today' | 'tasks';
+type TabId = 'today' | 'tasks' | 'photos';
 
 // Add new tabs (Photos, Stats, Settings) here.
 const TABS: { id: TabId; label: string; icon: string }[] = [
   { id: 'today', label: 'Today', icon: '✓' },
+  { id: 'photos', label: 'Photos', icon: '◉' },
   { id: 'tasks', label: 'Tasks', icon: '☰' },
 ];
 
@@ -61,6 +63,7 @@ export default function App() {
         {tab === 'today' && (
           <Today
             repo={repo}
+            backend={backend}
             onError={showToast}
             onAddTask={() => {
               setOpenNewTask(true);
@@ -68,6 +71,7 @@ export default function App() {
             }}
           />
         )}
+        {tab === 'photos' && <PhotosScreen backend={backend} onError={showToast} />}
         {tab === 'tasks' && (
           <Tasks
             repo={repo}
