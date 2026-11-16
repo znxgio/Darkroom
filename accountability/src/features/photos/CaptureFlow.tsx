@@ -136,6 +136,8 @@ export default function CaptureFlow({ backend, onClose }: Props) {
     try {
       await api.save(cur.kind, cur.blob);
       changed.current = true;
+      // Score today's face photo in the background (on-device; never blocks the flow).
+      if (cur.kind === 'face') import('../face/analyze').then((m) => m.scoreToday(backend)).catch(() => {});
       const fresh = await api.today().catch(() => ({ ...have, [cur.kind]: cur.url }));
       setHave(fresh);
       const [next, ...rest] = queue;

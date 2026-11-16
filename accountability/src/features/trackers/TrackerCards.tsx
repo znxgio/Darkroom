@@ -107,6 +107,30 @@ function TrackerCard({
     if (await save(v)) setEditing(false);
   };
 
+  // Auto trackers (e.g. Face score) are never typed in: show the latest value or a hint.
+  if (def.auto && !todayEntry) {
+    return (
+      <div className="tracker-card tk-auto-empty" data-testid={`tracker-card-${def.key}`}>
+        <button type="button" className="tc-open" data-testid={`tracker-open-${def.key}`} onClick={onOpen}>
+          <span className="tc-name">{def.name}</span>
+          <span className="tc-body">
+            <span className="tc-main">
+              <span className="tc-change" data-testid={`tracker-last-${def.key}`}>
+                {prev
+                  ? `Last ${def.format(prev.value)}${unit} · ${cap(sinceLabel(prev.day, today))}`
+                  : 'No score yet'}
+              </span>
+              <span className="tk-auto-note">Updates when you take today's face photo</span>
+            </span>
+            <span className="chev" aria-hidden="true">
+              ›
+            </span>
+          </span>
+        </button>
+      </div>
+    );
+  }
+
   if (!todayEntry || editing) {
     return (
       <div className="tracker-card" data-testid={`tracker-card-${def.key}`}>
@@ -163,6 +187,7 @@ function TrackerCard({
                   ? changeText(change.delta, change.prevDay, today, def.decimals ?? 0, def.unit)
                   : 'First entry'}
               </span>
+              {def.auto && def.autoSource && <span className="tk-auto-note">{def.autoSource}</span>}
             </span>
             <Sparkline points={points.filter((p) => p.day >= addDays(today, -29))} />
             <span className="chev" aria-hidden="true">
@@ -173,6 +198,7 @@ function TrackerCard({
           <span className="tc-text">{def.format(todayEntry.value)}</span>
         )}
       </button>
+      {!def.auto && (
       <button
         type="button"
         className="tc-edit"
@@ -181,6 +207,7 @@ function TrackerCard({
       >
         Edit
       </button>
+      )}
       {error && <p className="tracker-error">{error}</p>}
     </div>
   );

@@ -29,12 +29,14 @@ export default function TrackerDetail({
   backend,
   onClose,
   onChanged,
+  backLabel = 'Today',
 }: {
   def: TrackerDef;
   api: TrackersApi;
   backend: Backend;
   onClose: () => void;
   onChanged: () => void;
+  backLabel?: string;
 }) {
   const { data, saving, error, save } = useTodayEntry(api, backend, def, FOREVER);
   const [range, setRange] = useState<RangeId>('30d');
@@ -103,7 +105,7 @@ export default function TrackerDetail({
     <div className="tk-detail" role="dialog" aria-modal="true" aria-label={def.name} data-testid="tracker-detail" ref={ref} tabIndex={-1}>
       <div className="tk-detail-bar">
         <button type="button" className="back-btn" data-testid="tracker-back" onClick={onClose}>
-          <span aria-hidden="true">‹</span> Today
+          <span aria-hidden="true">‹</span> {backLabel}
         </button>
         <h1 className="tk-detail-title">{def.name}</h1>
         <span className="back-spacer" />
@@ -160,7 +162,17 @@ export default function TrackerDetail({
 
             <h2 className="section-title">Today</h2>
             <div className="tracker-card">
-              {todayEntry && !editing ? (
+              {def.auto ? (
+                <div className="today-row">
+                  <span className="today-val" data-testid="detail-auto">
+                    {todayEntry ? def.format(todayEntry.value) : '—'}
+                    {todayEntry && def.unit && <small>{def.unit}</small>}
+                  </span>
+                  <span className="tk-auto-note">
+                    {todayEntry ? `Set automatically ${def.autoSource ?? ''}` : "Set automatically once today's photo is taken"}
+                  </span>
+                </div>
+              ) : todayEntry && !editing ? (
                 <div className="today-row">
                   <span className="today-val">
                     {def.format(todayEntry.value)}

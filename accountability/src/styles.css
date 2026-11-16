@@ -738,6 +738,20 @@ h2 {
   margin-bottom: 16px;
 }
 
+/* Four modes (Feed / Compare / Timelapse / Face) must fit at 320px. */
+.fx-modes .segmented button {
+  min-width: 0;
+  padding: 0 2px;
+  font-size: 15px;
+  white-space: nowrap;
+}
+
+@media (max-width: 359px) {
+  .fx-modes .segmented button {
+    font-size: 13px;
+  }
+}
+
 .photo-cta {
   width: 100%;
   display: flex;

@@ -5,6 +5,8 @@ import { mkdirSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 // Uses the machine's Playwright if installed globally, else a local one.
 const { chromium } = createRequire(import.meta.url)('playwright');
+// Synthetic face landmarks (generic mesh, no real person) for the Face view.
+import { syntheticFace } from '../tests/fixtures/faceSynth.mjs';
 
 // Another checkout may already be serving 4179: pick a free one with E2E_PORT=4501 npm run e2e.
 const PORT = Number(process.env.E2E_PORT) || 4179;
@@ -378,6 +380,84 @@ await tid('tl-play').click();
 await page.waitForFunction(() => document.querySelector('[data-testid=tl-play]')?.getAttribute('aria-label') === 'Play', null, { timeout: 5000 });
 check((await tid('tl-scrub').inputValue()) === '1', 'Timelapse plays through to the end');
 await page.screenshot({ path: 'screenshots/photos-timelapse.png' });
+
+console.log('Flow: Face analysis (on-device model; the fake camera shows no face)');
+{
+  const t0 = Date.now();
+  await tid('photos-face').click();
+  await tid('face-view').waitFor();
+  await tid('face-noface').waitFor({ timeout: 120000 });
+  console.log(`  (model load + analysis took ${Date.now() - t0} ms)`);
+  check(true, 'Fake-camera photo: "No face found" state renders');
+  const cached = await page.evaluate(() => JSON.parse(localStorage.getItem('accountability-test:face-cache') || '{}'));
+  check(cached['2026-11-23']?.r?.status === 'noface', 'The real model ran on the photo (result cached as no face)');
+  check((await tid('face-score').count()) === 0, 'No score without a face');
+  check(!(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)), 'Face (no face): no horizontal scroll at 390px');
+  await page.screenshot({ path: 'screenshots/face-noface.png', fullPage: true });
+  const faceEntry = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem('accountability-test:trackers') || '[]').find((e) => e.tracker_key === 'face_score'),
+  );
+  check(!faceEntry, 'No face score saved for a photo without a face');
+}
+
+console.log('Flow: Face view with synthetic landmarks');
+{
+  const W = 960;
+  const H = 1280;
+  const faces = {
+    '2026-11-22': syntheticFace({ W, H, tilt: 3.2, yaw: 2, scale: 26 }),
+    '2026-11-23': syntheticFace({ W, H, tilt: 6.1, roll: 4, scale: 27 }),
+  };
+  await ctx.addInitScript((f) => {
+    window.__FACE_TEST__ = f;
+  }, faces);
+  await page.reload();
+  await tid('tab-photos').click();
+  await tid('photos-face').click();
+  await tid('face-score').waitFor({ timeout: 30000 });
+  await page.waitForFunction(() => !document.querySelector('[data-testid=face-delta]')?.textContent?.includes('Comparing'));
+  const score = Number(await tid('face-score-value').textContent());
+  check(score >= 0 && score <= 100, `Harmony score shown (${score})`);
+  check((await tid('face-strengths').locator('li').count()) === 3, '3 strengths');
+  check((await tid('face-improve').locator('li').count()) === 3, '3 could-improve items');
+  check((await tid('face-metric-canthal').textContent()).includes('+6.1°'), 'Canthal tilt +6.1° (roll corrected)');
+  check((await tid('face-delta').textContent()).includes('Nov 22'), `Change vs the previous photo (${await tid('face-delta').textContent()})`);
+  check((await tid('face-metric-canthal').locator('.fx-m-delta.real').textContent()).includes('+2.9°'), 'Canthal change +2.9° flagged as real');
+  check((await tid('face-honesty').textContent()).includes('not science'), 'Honesty note shown');
+  check((await page.locator('[data-testid=face-overlay] line').count()) >= 10, 'Landmark overlay lines drawn');
+  await page.waitForTimeout(400);
+  await page.screenshot({ path: 'screenshots/face.png' });
+  await page.screenshot({ path: 'screenshots/face-full.png', fullPage: true });
+  check(!(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)), 'Face: no horizontal scroll at 390px');
+  await tid('face-overlay-toggle').click();
+  check((await tid('face-overlay').count()) === 0, 'Overlay toggles off');
+  await tid('face-overlay-toggle').click();
+  await tid('face-compare-select').selectOption('');
+  check((await tid('face-delta').textContent()).includes('First score'), 'Compare with "Nothing" clears the change');
+  await tid('face-compare-select').selectOption('2026-11-22');
+  await page.waitForFunction(() => document.querySelector('[data-testid=face-delta]')?.textContent?.includes('Nov 22'));
+  const saved = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem('accountability-test:trackers') || '[]').find((e) => e.tracker_key === 'face_score'),
+  );
+  check(saved?.day === '2026-11-23' && saved.value.v === score && JSON.stringify(saved.value).length < 4096, "Today's score saved as the face_score tracker");
+  await tid('face-history').click();
+  await tid('tracker-detail').waitFor();
+  check((await tid('detail-auto').textContent()).includes(String(score)), "Score history opens with today's score");
+  check((await tid('detail-edit').count()) === 0, 'Face score cannot be edited by hand');
+  await page.waitForTimeout(300);
+  await page.screenshot({ path: 'screenshots/face-history.png' });
+  await tid('tracker-back').click();
+  await page.setViewportSize({ width: 320, height: 640 });
+  await page.waitForTimeout(100);
+  check(!(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)), 'Face: no horizontal scroll at 320px');
+  await page.screenshot({ path: 'screenshots/face-320.png', fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await tid('tab-today').click();
+  await tid('tracker-value-face_score').waitFor();
+  check((await tid('tracker-value-face_score').textContent()).includes(String(score)), 'Today: Face score card shows the score');
+  check((await tid('tracker-edit-face_score').count()) === 0, 'Today: Face score card has no Edit button');
+  await page.screenshot({ path: 'screenshots/face-today-card.png', fullPage: true });
+}
 
 console.log('Flow: camera permission denied');
 {

@@ -111,6 +111,14 @@ All built and tested in demo mode on 2026-11-16 (night). Not deployed: needs the
 - Extras: self-timer (3s/10s), "Align" overlay of the last photo, per-kind camera choice remembered on the device.
 - `photosRequirement(photosFrom, completeDays)` plugs photos into streak/score as an ExtraRequirement.
 
+## Face analysis (Photos → Face)
+- On-device only: `@mediapipe/tasks-vision` face landmarker (478 points). Photos never leave the phone for this.
+- Self-hosted: model committed at `public/mediapipe/face_landmarker-f16-v1.task`; wasm copied from node_modules by `scripts/copy-mediapipe.mjs` (runs before dev/build, git-ignored). Version pinned in package.json, `src/features/face/constants.ts` and `public/sw.js` (a unit test checks they match). First load ≈ 13 MB, then cached by the service worker.
+- Math: `metrics.ts` (roll-corrected by the iris line, small yaw/pitch undone with the mesh depth), ranges in `ranges.ts`, scoring/compare in `score.ts`. Tests use the generic canonical mesh (`tests/fixtures/faceSynth.mjs`), never photos.
+- Eye spacing and ESR ranges are shifted to the mesh's own scale (its average face reads 1.43 / 0.41).
+- Today's score is saved as the auto tracker `face_score` (`{v, m}`); past days are computed on the fly and cached in localStorage (`<prefix>:face-cache`, bump `CACHE_VERSION` when formulas change).
+- Browser check: `window.__FACE_TEST__ = {day: landmarks}` replaces the model with synthetic landmarks.
+
 ## Deploy checklist (from the pre-deploy code review, 2026-11-16)
 - Deploy both functions with verify_jwt OFF explicitly (Management API: `verify_jwt: false`; CLI: `--no-verify-jwt`). config.toml only applies to `supabase functions deploy`.
 - Functions use SUPABASE_SERVICE_ROLE_KEY, falling back to SUPABASE_SECRET_KEYS (newer projects).

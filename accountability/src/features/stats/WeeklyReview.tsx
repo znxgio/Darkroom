@@ -35,8 +35,11 @@ export default function WeeklyReview({ backend, data, week, onWeek, onBack, onSa
 
   useEffect(() => {
     setNote(saved);
-    setJustSaved(false);
   }, [week, saved]);
+  // Only a week change hides "✓ Saved" (saving itself changes `saved`).
+  useEffect(() => {
+    setJustSaved(false);
+  }, [week]);
 
   const canPrev = week > weekStart(data.first);
   const canNext = week < weekStart(today);

@@ -62,6 +62,10 @@ export interface TrackerDef {
   /** Value for display, without the unit. */
   format(value: TrackerValue): string;
   chart?: 'line' | 'none';
+  /** Filled in by the app (e.g. from today's photo), never typed in by hand. */
+  auto?: boolean;
+  /** For auto trackers: where the value comes from, shown on the card. */
+  autoSource?: string;
   entryComponent?: ComponentType<EntryComponentProps>;
   summaryComponent?: ComponentType<SummaryComponentProps>;
 }
@@ -83,7 +87,7 @@ type NumberOpts = {
   decimals: number;
   step?: number;
   placeholder?: string;
-} & Partial<Pick<TrackerDef, 'chart' | 'entryComponent' | 'summaryComponent'>>;
+} & Partial<Pick<TrackerDef, 'chart' | 'auto' | 'autoSource' | 'entryComponent' | 'summaryComponent'>>;
 
 export function numberTracker(o: NumberOpts): TrackerDef {
   const round = (n: number) => Number(n.toFixed(o.decimals));
@@ -152,6 +156,17 @@ export const TRACKERS: TrackerDef[] = [
     max: 700,
     decimals: 1,
     placeholder: '0.0',
+  }),
+  // Harmony score from the daily face photo (src/features/face). Saved automatically when
+  // today's face photo is analyzed; value { v: score, m: compact metrics }.
+  numberTracker({
+    key: 'face_score',
+    name: 'Face score',
+    min: 0,
+    max: 100,
+    decimals: 0,
+    auto: true,
+    autoSource: "from today's photo",
   }),
 ];
 
