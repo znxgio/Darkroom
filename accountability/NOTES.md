@@ -122,5 +122,20 @@ All built and tested in demo mode on 2026-11-16 (night). Not deployed: needs the
 - `scripts/test-sql.sh`: as root, Postgres must be stopped with `runuser -u postgres`, or the server is left running.
 
 ## Open to-dos
-- Owner: create Supabase + Vercel accounts and deploy (README.md).
-- Stage 4: nightly close-day job (pg_cron) + `day_results`.
+- **Owner (morning):** approve the push (Accept edits → "push"); create the Supabase + Vercel accounts; give Claude a Supabase access token through the secure form. Then Claude deploys (README "What Claude does").
+- **Owner decision:** Stakes email provider (recommended: Brevo, free). Stakes stays off until then.
+- After deploy: run the smoke test in the "Deploy checklist" and test on the iPhone (push needs the Home Screen app).
+- Small UI leftovers from the click-through: calendar cells are 31–41px (under 44px tap size), a few small buttons are 36px tall, task name field is single-line.
+- Ideas not built yet:
+  - a weekly summary email to yourself
+  - more trackers (sleep, steps, notes): one registry entry each
+  - a streak "milestone" badge (7/30/100 days)
+  - a Home Screen widget isn't possible for web apps on iOS; the icon badge covers part of it
+
+## Night of 2026-11-16: what happened
+- Built all 6 stages with helpers in parallel (photos, stats, weight), plus reminders, Stakes, settings and Claude photo access myself.
+- Advisor reviews:
+  - stage-1 schema review: closed the history-rewrite holes
+  - pre-deploy code review: service_role grants, key fallback, logging photo access before signing, settings race
+- A Sonnet click-through found only UI polish items, which were fixed.
+- Extras added: day-complete celebration, Home Screen badge, photo timelapse, weight on Compare, evening check-in. The photos helper added a self-timer and an "Align" overlay.
