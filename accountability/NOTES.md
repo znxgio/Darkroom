@@ -36,7 +36,23 @@ Read this first in any new session.
   - today: done, skip (reason required) or undo
   - past days: locked, except recording a miss and filling in its reason once
   - future days: nothing
-- **Tasks with history are archived, never deleted.** `archived_on` stops a task counting from that day on.
+- **Tasks can't rewrite history** (database trigger `guard_task`, added after an advisor review):
+  - once a task has started, its schedule is frozen; editing the schedule archives it and creates a new version from tomorrow
+  - name, goal time and critical can change any time
+  - archiving takes effect tomorrow (today still counts) and can't be undone
+  - only a task added today with nothing logged can be deleted (to fix mistakes)
+  - a one-time task can be moved only while its date is still upcoming
+- **Once-a-week (any day) tasks**: only a "done" resolves the week; skipping is allowed only on Sunday.
+- **Reminders**: each task fires once at its goal time if not done or skipped; photos fire at `photo_reminder_time` (default 8 AM); an evening check-in at `nudge_time` (default 9 PM) lists what's still open. A once-a-week task reminds only on Sunday (last chance).
+- **Home Screen badge** shows how many items are still open (Badging API, iOS 16.4+ Home Screen apps).
+- **Stakes**:
+  - checked every minute by the `tick` function; fires when yesterday AND the day before both had a miss
+  - only days after Stakes was switched on count (`stakes_since`)
+  - photos count as critical
+  - a long slump emails at most once every 2 missed days
+  - you get a push when Stakes fires
+- **Stakes email provider: not chosen yet.** I couldn't confirm Gmail sending (SMTP) works from Supabase functions, so the code supports Brevo (free, 300/day, sends to anyone from a verified single sender address) or Resend (needs a paid domain to email other people). Recommend Brevo; confirm with the owner before signing up.
+- **The rules exist in TypeScript (`schedule.ts`) and SQL (`task_counts_on`).** Both run against `tests/fixtures/schedule-cases.json`; add a case there whenever a rule changes.
 - **Streak**: consecutive green days. Gray days (nothing scheduled) don't break it. Today counts once it's complete; a skip today sets it to 0.
 - **Weekly score**: done ÷ counted. Items still open today are left out.
 - **Planned**: a nightly "close the day" job will freeze each day's result into a `day_results` table, so later task edits never rewrite history. Until stage 4, past days are computed from tasks + logs.
@@ -45,6 +61,14 @@ Read this first in any new session.
 ## Data model
 - `tasks`, `task_logs` (stage 1). Planned: `photos`, `day_results`, `weekly_reviews`, `tracker_entries` (generic: tracker_key, day, value jsonb), `push_subscriptions`, `reminders_sent`, `settings`.
 - The rules are written twice: TypeScript (`src/lib/schedule.ts`) for the UI and SQL for server jobs. Keep them in sync; tests cover both.
+
+## Server pieces
+- Migrations live in `supabase/migrations/` (apply in order).
+- The Edge Function is `supabase/functions/tick`, deployed with `verify_jwt = false`; it checks the cron secret or the user's token itself.
+- Scheduler: `supabase/setup/cron.sql` (fill in placeholders when running it; never commit the filled-in copy).
+- Secrets go in Supabase function secrets: CRON_SECRET, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, VAPID_SUBJECT, EMAIL_PROVIDER, EMAIL_API_KEY, EMAIL_FROM.
+- Vercel env vars: VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY, VITE_VAPID_PUBLIC_KEY.
+- Deno for checking the function: `npm i deno` in a scratch folder, then `deno check` from a folder with `{"nodeModulesDir":"auto"}` (the app's package.json confuses it).
 
 ## Setup done
 - (none yet: the owner still needs to create the Supabase + Vercel accounts; steps are in README.md)
@@ -58,6 +82,8 @@ Read this first in any new session.
 6. Stakes
 
 ## Bugs & causes
+- Day boundary: the container's clock can be on a different LA day than the test clock. Always use `repo.today()`, never `dayOf()`, in UI code.
+- Git push from the agent was blocked by the auto-mode safety check (commits work). The owner may need to allow pushes.
 - `scripts/test-sql.sh`: as root, Postgres must be stopped with `runuser -u postgres`, or the server is left running.
 
 ## Open to-dos
