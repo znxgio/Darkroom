@@ -4,12 +4,15 @@ import { makeBackend } from './config';
 import Login from './screens/Login';
 import Today from './screens/Today';
 import Tasks from './screens/Tasks';
+import Progress from './features/stats/Progress';
+import MissGate from './features/stats/MissGate';
 
-type TabId = 'today' | 'tasks';
+type TabId = 'today' | 'progress' | 'tasks';
 
 // Add new tabs (Photos, Stats, Settings) here.
 const TABS: { id: TabId; label: string; icon: string }[] = [
   { id: 'today', label: 'Today', icon: '✓' },
+  { id: 'progress', label: 'Progress', icon: '↗' },
   { id: 'tasks', label: 'Tasks', icon: '☰' },
 ];
 
@@ -21,6 +24,8 @@ export default function App() {
   const [tab, setTab] = useState<TabId>('today');
   const [openNewTask, setOpenNewTask] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  // Bumped when the missed-reason gate finishes, so screens reload fresh data.
+  const [dataVersion, setDataVersion] = useState(0);
   const toastTimer = useRef<number | undefined>(undefined);
 
   const showToast = useCallback((msg: string) => {
@@ -57,6 +62,7 @@ export default function App() {
       {repo.mode === 'demo' && (
         <div className="demo-banner">Demo mode — data stays on this phone only</div>
       )}
+      <MissGate backend={backend} onResolved={() => setDataVersion((v) => v + 1)} />
       <main className="main">
         {tab === 'today' && (
           <Today
@@ -68,6 +74,7 @@ export default function App() {
             }}
           />
         )}
+        {tab === 'progress' && <Progress key={dataVersion} backend={backend} onError={showToast} />}
         {tab === 'tasks' && (
           <Tasks
             repo={repo}
