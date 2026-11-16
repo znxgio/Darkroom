@@ -70,6 +70,15 @@ Read this first in any new session.
 - Vercel env vars: VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY, VITE_VAPID_PUBLIC_KEY.
 - Deno for checking the function: `npm i deno` in a scratch folder, then `deno check` from a folder with `{"nodeModulesDir":"auto"}` (the app's package.json confuses it).
 
+## How a Claude session views the owner's photos
+The owner asked for this so they don't have to send daily photos in chat.
+- Two locks: the function secret `PHOTO_ACCESS_KEY` (32+ random characters) AND Settings → "Let Claude view my photos" (default off). Every access is logged in `photo_access_log` and shown in Settings.
+- In a session:
+  1. Ask for the key with the `request_credential` tool: host `<project>.supabase.co`, header `x-photo-key`. Never ask for it in chat.
+  2. Run `PHOTO_ACCESS_URL=https://<project>.supabase.co/functions/v1/photo-access node scripts/claude-photos.mjs --latest 7 --out <scratchpad>/photos`.
+  3. Read the saved `.jpg` files. Never commit them, and never copy them anywhere public.
+- The function returns each day as day, day_number, face/body links (15-minute signed URLs) and weight on that day.
+
 ## Setup done
 - (none yet: the owner still needs to create the Supabase + Vercel accounts; steps are in README.md)
 

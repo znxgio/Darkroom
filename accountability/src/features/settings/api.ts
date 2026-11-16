@@ -13,12 +13,13 @@ export interface Settings {
   nudge_time: string | null; // 'HH:MM'
   my_name: string | null;
   stakes_since: Day | null;
+  claude_photo_access: boolean;
 }
 
 export type SettingsPatch = Partial<Omit<Settings, 'photos_from' | 'stakes_since'>>;
 
 const COLS =
-  'photos_from,photo_reminder_time,stakes_enabled,stakes_scope,stakes_name,stakes_email,stakes_channel,nudge_time,my_name,stakes_since';
+  'photos_from,photo_reminder_time,stakes_enabled,stakes_scope,stakes_name,stakes_email,stakes_channel,nudge_time,my_name,stakes_since,claude_photo_access';
 
 function norm(r: any): Settings {
   const hm = (v: unknown) => (v ? String(v).slice(0, 5) : null);
@@ -66,6 +67,7 @@ export function settingsApi(b: Backend) {
           nudge_time: '21:00',
           my_name: null,
           stakes_since: null,
+          claude_photo_access: false,
         };
         store.write(s);
       }
@@ -82,3 +84,22 @@ export function settingsApi(b: Backend) {
 }
 
 export type SettingsApi = ReturnType<typeof settingsApi>;
+
+export interface PhotoAccess {
+  at: string;
+  from_day: Day | null;
+  to_day: Day | null;
+  photo_count: number;
+}
+
+/** When Claude last viewed the photos (cloud only). */
+export async function photoAccessLog(b: Backend, limit = 5): Promise<PhotoAccess[]> {
+  if (!b.supabase) return [];
+  const { data, error } = await b.supabase
+    .from('photo_access_log')
+    .select('at,from_day,to_day,photo_count')
+    .order('at', { ascending: false })
+    .limit(limit);
+  if (error) return [];
+  return data as PhotoAccess[];
+}

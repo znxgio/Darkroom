@@ -21,6 +21,8 @@ end $$;
 select pg_temp.expect_fail($$update settings set photos_from = '2026-11-20'$$, 'permission denied');
 update settings set stakes_enabled = true, stakes_email = 'friend@example.com', photo_reminder_time = '09:00';
 select pg_temp.expect_fail($$update settings set stakes_email = 'not-an-email'$$, 'check constraint');
+update settings set claude_photo_access = true;
+select pg_temp.expect_fail($$insert into photo_access_log (user_id) values ('11111111-1111-1111-1111-111111111111')$$, 'permission denied');
 set test.uid = '22222222-2222-2222-2222-222222222222';
 do $$ begin
   if (select count(*) from settings) <> 0 then raise exception 'RLS leak on settings'; end if;

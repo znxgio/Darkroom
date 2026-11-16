@@ -9,7 +9,7 @@ import {
   sendTestPush,
   type PushStatus,
 } from '../reminders/push';
-import { settingsApi, type Settings, type SettingsPatch } from './api';
+import { photoAccessLog, settingsApi, type PhotoAccess, type Settings, type SettingsPatch } from './api';
 
 interface Props {
   backend: Backend;
@@ -31,6 +31,7 @@ export default function SettingsScreen({ backend, onToast, onSignOut }: Props) {
   const [s, setS] = useState<Settings | null>(null);
   const [push, setPush] = useState<PushStatus | null>(null);
   const [busy, setBusy] = useState(false);
+  const [access, setAccess] = useState<PhotoAccess[]>([]);
   // Stakes text fields are saved together (button), not per keystroke.
   const [draft, setDraft] = useState({ my_name: '', stakes_name: '', stakes_email: '' });
 
@@ -40,6 +41,7 @@ export default function SettingsScreen({ backend, onToast, onSignOut }: Props) {
       setS(v);
       setDraft({ my_name: v.my_name ?? '', stakes_name: v.stakes_name ?? '', stakes_email: v.stakes_email ?? '' });
       setPush(await pushStatus(backend).catch(() => 'unsupported' as const));
+      setAccess(await photoAccessLog(backend));
     } catch (e) {
       onToast(`Couldn't load settings: ${errMsg(e)}`);
     }
@@ -217,6 +219,38 @@ export default function SettingsScreen({ backend, onToast, onSignOut }: Props) {
           <button className="link-btn" disabled={busy} onClick={() => run(() => sendStakesPreview(backend), 'Preview sent to your own email')}>
             Email me a preview of what they’d get
           </button>
+        )}
+      </section>
+
+      <section className="card-section">
+        <div className="toggle-row">
+          <span>
+            <h2>Let Claude view my photos</h2>
+            <small className="hint">
+              Instead of sending photos in chat, a Claude session can look at your dated daily photos (read-only, with a
+              private key). Off by default; switch off any time.
+            </small>
+          </span>
+          <input
+            type="checkbox"
+            className="switch"
+            data-testid="claude-access"
+            checked={s.claude_photo_access}
+            onChange={(e) => save({ claude_photo_access: e.target.checked }, e.target.checked ? 'Claude can view your photos' : 'Photo access is off')}
+          />
+        </div>
+        {access.length > 0 ? (
+          <ul className="access-log">
+            {access.map((a) => (
+              <li key={a.at}>
+                {new Date(a.at).toLocaleString('en-US', { timeZone: 'America/Los_Angeles', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
+                {' · '}
+                {a.photo_count} photos{a.from_day ? ` (${a.from_day}${a.to_day && a.to_day !== a.from_day ? ` → ${a.to_day}` : ''})` : ''}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="muted small">Claude hasn’t viewed any photos yet.</p>
         )}
       </section>
 
