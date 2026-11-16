@@ -5,12 +5,14 @@ import Login from './screens/Login';
 import Today from './screens/Today';
 import Tasks from './screens/Tasks';
 import SettingsScreen from './features/settings/SettingsScreen';
+import PhotosScreen from './features/photos/PhotosScreen';
 
-type TabId = 'today' | 'tasks' | 'settings';
+type TabId = 'today' | 'photos' | 'tasks' | 'settings';
 
 // Add new tabs (Photos, Stats, Settings) here.
 const TABS: { id: TabId; label: string; icon: string }[] = [
   { id: 'today', label: 'Today', icon: '✓' },
+  { id: 'photos', label: 'Photos', icon: '◉' },
   { id: 'tasks', label: 'Tasks', icon: '☰' },
   { id: 'settings', label: 'Settings', icon: '⚙' },
 ];
@@ -63,6 +65,7 @@ export default function App() {
         {tab === 'today' && (
           <Today
             repo={repo}
+            backend={backend}
             onError={showToast}
             onAddTask={() => {
               setOpenNewTask(true);
@@ -70,6 +73,7 @@ export default function App() {
             }}
           />
         )}
+        {tab === 'photos' && <PhotosScreen backend={backend} onError={showToast} />}
         {tab === 'tasks' && (
           <Tasks
             repo={repo}

@@ -84,15 +84,23 @@ The owner asked for this so they don't have to send daily photos in chat.
 
 ## Stages
 1. Tasks + check-off: **built, not deployed**
-2. Photos
+2. Photos: **built, not deployed** (`src/features/photos/`, migration `0003_photos.sql`)
 3. Reminders (push)
 4. Streak, calendar, weekly score, excuse log + missed-reason prompt, Sunday review
 5. Weight log (as the first modular tracker)
 6. Stakes
 
+## Photos (stage 2)
+- Live camera only (getUserMedia), no file picker. Every photo is a 3:4 portrait, center-cropped, longest side 1280px, JPEG stepped 0.8→0.5 until under ~350 KB.
+- Front camera: preview is mirrored and the saved photo is mirrored the same way (what you see is what you get).
+- Private bucket `photos`, path `<user_id>/<YYYY-MM-DD>/<face|body>.jpg`; viewed only through 1-hour signed URLs. Today only (DB trigger + storage policies); retake = replace today's.
+- Extras: self-timer (3s/10s), "Align" overlay of the last photo, per-kind camera choice remembered on the device.
+- `photosRequirement(photosFrom, completeDays)` plugs photos into streak/score as an ExtraRequirement.
+
 ## Bugs & causes
 - Day boundary: the container's clock can be on a different LA day than the test clock. Always use `repo.today()`, never `dayOf()`, in UI code.
-- Git push from the agent was blocked by the auto-mode safety check (commits work). The owner may need to allow pushes.
+- Git push is blocked in Auto mode. To push, the owner switches to "Accept edits" and approves; commits work in Auto.
+- `npm run e2e` uses port 4179; set `E2E_PORT` when another preview server already holds it (otherwise the check silently tests the other build).
 - `scripts/test-sql.sh`: as root, Postgres must be stopped with `runuser -u postgres`, or the server is left running.
 
 ## Open to-dos
