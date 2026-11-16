@@ -5,6 +5,7 @@ import { prettyDay, type Day } from '../../lib/dates';
 import { Segmented, errMsg } from '../../screens/ui';
 import { photosApi, type PhotoDay, type PhotoKind } from './api';
 import { dayNumber, daysApart } from './labels';
+import { trackersApi } from '../trackers/api';
 
 export default function Compare({
   backend,
@@ -21,6 +22,7 @@ export default function Compare({
   const [b, setB] = useState<Day | null>(null);
   const [kind, setKind] = useState<PhotoKind>('body');
   const [shots, setShots] = useState<PhotoDay[]>([]);
+  const [weights, setWeights] = useState<Record<Day, number | null>>({});
 
   useEffect(() => {
     let alive = true;
@@ -52,6 +54,25 @@ export default function Compare({
     };
   }, [api, a, b, onError]);
 
+  // Weight on each compared day (if logged), to put the photos in context.
+  useEffect(() => {
+    if (!a || !b) return;
+    let alive = true;
+    const t = trackersApi(backend);
+    Promise.all([a, b].map((d) => t.get('weight', d).catch(() => null))).then((rows) => {
+      if (!alive) return;
+      const w: Record<Day, number | null> = {};
+      [a, b].forEach((d, i) => {
+        const v = (rows[i]?.value as { v?: number } | undefined)?.v;
+        w[d] = typeof v === 'number' ? v : null;
+      });
+      setWeights(w);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [backend, a, b]);
+
   if (!all) return <p className="muted center">Loading…</p>;
   if (all.length < 2) {
     return (
@@ -67,6 +88,9 @@ export default function Compare({
     [b, setB, 'compare-b'],
   ];
   const gap = a && b ? daysApart(a, b) : 0;
+  const wa = a ? weights[a] : null;
+  const wb = b ? weights[b] : null;
+  const wDiff = wa != null && wb != null ? Math.round((wb - wa) * 10) / 10 : null;
 
   return (
     <div className="compare" data-testid="compare">
@@ -92,6 +116,11 @@ export default function Compare({
                   <span className="muted small">{shot ? `No ${kind} photo` : ''}</span>
                 )}
                 {num !== null && <span className="compare-num">Day {num}</span>}
+                {day && weights[day] != null && (
+                  <span className="compare-weight" data-testid={`${tid}-weight`}>
+                    {weights[day]} lb
+                  </span>
+                )}
               </div>
               <label className="compare-pick">
                 <span className="sr-only">{tid === 'compare-a' ? 'Before' : 'After'}</span>
@@ -109,6 +138,12 @@ export default function Compare({
       </div>
       <p className="compare-gap" data-testid="compare-gap">
         {gap === 0 ? 'Same day' : `${gap} day${gap === 1 ? '' : 's'} apart`}
+        {wDiff !== null && gap !== 0 && (
+          <span className="compare-wdiff">
+            {' · '}
+            {wDiff === 0 ? 'same weight' : `${wDiff > 0 ? '+' : '−'}${Math.abs(wDiff)} lb`}
+          </span>
+        )}
       </p>
     </div>
   );

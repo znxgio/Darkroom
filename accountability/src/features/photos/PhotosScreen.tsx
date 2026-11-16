@@ -7,13 +7,14 @@ import { settingsApi } from '../settings/api';
 import { photosApi, type PhotoDay, type PhotoKind } from './api';
 import CaptureFlow, { CameraIcon } from './CaptureFlow';
 import Compare from './Compare';
+import Timelapse from './Timelapse';
 import { dayNumber, relativeLabel } from './labels';
 import Viewer from './Viewer';
 
 const PAGE = 10;
 
 export default function PhotosScreen({ backend, onError }: { backend: Backend; onError: (msg: string) => void }) {
-  const [mode, setMode] = useState<'feed' | 'compare'>('feed');
+  const [mode, setMode] = useState<'feed' | 'compare' | 'timelapse'>('feed');
   const [start, setStart] = useState<Day | null>(null);
   const [today, setToday] = useState<Day | null>(null);
   const [version, setVersion] = useState(0);
@@ -45,6 +46,7 @@ export default function PhotosScreen({ backend, onError }: { backend: Backend; o
           options={[
             { value: 'feed', label: 'Feed', testid: 'photos-feed' },
             { value: 'compare', label: 'Compare', testid: 'photos-compare' },
+            { value: 'timelapse', label: 'Timelapse', testid: 'photos-timelapse' },
           ]}
           value={mode}
           onChange={setMode}
@@ -60,8 +62,10 @@ export default function PhotosScreen({ backend, onError }: { backend: Backend; o
             onError={onError}
             onChanged={() => setVersion((v) => v + 1)}
           />
-        ) : (
+        ) : mode === 'compare' ? (
           <Compare backend={backend} start={start} onError={onError} />
+        ) : (
+          <Timelapse backend={backend} start={start} onError={onError} />
         ))}
     </div>
   );

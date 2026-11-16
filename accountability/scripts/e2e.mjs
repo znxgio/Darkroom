@@ -371,6 +371,13 @@ const imgSize = await page.evaluate(async () => {
   return (await (await fetch(src)).blob()).size;
 });
 check(imgSize > 0 && imgSize < 350 * 1024, `Saved photo is small (${Math.round(imgSize / 1024)} KB)`);
+await tid('photos-timelapse').click();
+await tid('tl-img').waitFor();
+check((await tid('tl-scrub').inputValue()) === '1', 'Timelapse starts on the latest day');
+await tid('tl-play').click();
+await page.waitForFunction(() => document.querySelector('[data-testid=tl-play]')?.getAttribute('aria-label') === 'Play', null, { timeout: 5000 });
+check((await tid('tl-scrub').inputValue()) === '1', 'Timelapse plays through to the end');
+await page.screenshot({ path: 'screenshots/photos-timelapse.png' });
 
 console.log('Flow: camera permission denied');
 {
