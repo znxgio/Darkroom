@@ -1,7 +1,7 @@
 // Pure rules for "what's due when" and "how did a day go".
 // Mirrored in SQL (supabase/migrations) for the nightly day-close job;
 // both are checked against tests/fixtures/schedule-cases.json.
-import { Day, addDays, daysBetween, weekEnd, weekStart, weekday } from './dates';
+import { Day, addDays, daysBetween, prettyDay, weekEnd, weekStart, weekday } from './dates';
 
 export type Pattern = 'daily' | 'weekdays' | 'weekly_day' | 'weekly_any';
 
@@ -223,7 +223,7 @@ export function weeklyScore(
 
 export function describeSchedule(t: Task): string {
   const names = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-  if (t.kind === 'one_time') return `Once · ${t.one_time_date}`;
+  if (t.kind === 'one_time') return `Once · ${t.one_time_date ? prettyDay(t.one_time_date) : ''}`;
   switch (t.pattern) {
     case 'daily':
       return 'Every day';

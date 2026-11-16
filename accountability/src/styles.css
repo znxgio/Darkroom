@@ -468,8 +468,8 @@ h2 {
 
 .option.on {
   border-color: var(--accent);
-  background: #1b2a48;
-  color: #cfe0ff;
+  background: var(--accent-bg);
+  color: var(--accent-2);
 }
 
 .chips {
@@ -506,8 +506,21 @@ h2 {
 }
 
 .time-row input {
+  flex: 0 0 auto;
+  min-width: 136px;
+}
+.time-row > span {
   flex: 1;
   min-width: 0;
+}
+@media (max-width: 360px) {
+  .time-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .time-row input {
+    width: 100%;
+  }
 }
 
 .toggle-row {
@@ -551,7 +564,10 @@ h2 {
 }
 
 .switch:checked {
-  background: var(--green);
+  background: var(--accent);
+}
+.switch:disabled {
+  opacity: 0.35;
 }
 
 .switch:checked::after {
@@ -600,9 +616,11 @@ h2 {
   left: 16px;
   right: 16px;
   bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 12px);
-  background: #3a1d1d;
-  color: #ffd6d3;
-  border: 1px solid #6b2b2b;
+  background: #23262e;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--accent);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
   border-radius: 12px;
   padding: 12px 14px;
   z-index: 40;
@@ -2182,7 +2200,11 @@ h2 {
 
 .fchip {
   flex: none;
-  min-height: 36px;
+  max-width: 60vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-height: 44px;
   padding: 6px 14px;
   border-radius: 999px;
   border: 1px solid var(--border);
@@ -2495,4 +2517,12 @@ h2 {
 }
 @media (prefers-reduced-motion: reduce) {
   .celebrate, .celebrate-card, .celebrate-flame { animation: none; }
+}
+
+/* review note: show the whole line while typing */
+#review-note {
+  width: 100%;
+  resize: none;
+  font: inherit;
+  font-size: 17px;
 }

@@ -154,7 +154,7 @@ export default function Today({ repo, backend, onError, onAddTask }: Props) {
 
       {items.length === 0 ? (
         <div className="empty">
-          <p>Nothing scheduled today</p>
+          <p>No tasks today</p>
           <button type="button" className="btn primary" onClick={onAddTask}>
             + Add a task
           </button>

@@ -88,7 +88,7 @@ export default function Tasks({ repo, onError, startWithNew, onStartedNew, onSig
                 <span className="item-name">{t.name}</span>
                 <span className="item-meta">
                   <span>{describeSchedule(t)}</span>
-                  {t.goal_time && <span>· {fmtTime(t.goal_time)}</span>}
+                  {t.goal_time && <span>{fmtTime(t.goal_time)}</span>}
                   {t.critical && <span className="badge critical">Critical</span>}
                   {today && t.start_date > today && <span className="badge soon">Starts tomorrow</span>}
                 </span>

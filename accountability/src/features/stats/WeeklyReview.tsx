@@ -112,10 +112,10 @@ export default function WeeklyReview({ backend, data, week, onWeek, onBack, onSa
         </label>
         {win === 'open' ? (
           <>
-            <input
+            <textarea
               id="review-note"
               data-testid="review-note"
-              type="text"
+              rows={3}
               maxLength={REVIEW_MAX}
               placeholder="One thing, one line"
               value={note}
