@@ -1,0 +1,6 @@
+# Only the bits this project needs. The tick function checks its own secret / user token.
+[functions.tick]
+verify_jwt = false
+
+[functions.photo-access]
+verify_jwt = false
