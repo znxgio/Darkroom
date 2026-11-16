@@ -7,3 +7,4 @@ dist
 test-results
 screenshots
 tsconfig.tsbuildinfo
+public/mediapipe/wasm-*

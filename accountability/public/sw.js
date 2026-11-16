@@ -1,6 +1,9 @@
 // Service worker: lets the Home Screen app open fast / offline (app shell only).
 // Data is never cached here — it always comes live from the server.
 const CACHE = 'shell-v2';
+// Face model + wasm (~13 MB, versioned paths): cached once so the Face view works offline.
+// Keep the version in sync with src/features/face/constants.ts (a unit test checks).
+const MP_CACHE = 'mediapipe-0.10.21';
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(['/', '/manifest.webmanifest'])));
@@ -9,7 +12,7 @@ self.addEventListener('install', (e) => {
 
 self.addEventListener('activate', (e) => {
   e.waitUntil(
-    caches.keys().then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)))),
+    caches.keys().then((keys) => Promise.all(keys.filter((k) => k !== CACHE && k !== MP_CACHE).map((k) => caches.delete(k)))),
   );
   self.clients.claim();
 });
@@ -28,6 +31,22 @@ self.addEventListener('fetch', (e) => {
           return res;
         })
         .catch(() => caches.match('/')),
+    );
+    return;
+  }
+  if (url.pathname.startsWith('/mediapipe/')) {
+    // Versioned file names: cache first. Only full 200 responses are stored.
+    e.respondWith(
+      caches.open(MP_CACHE).then((c) =>
+        c.match(req).then(
+          (hit) =>
+            hit ||
+            fetch(req).then((res) => {
+              if (res.status === 200) c.put(req, res.clone()).catch(() => {});
+              return res;
+            }),
+        ),
+      ),
     );
     return;
   }

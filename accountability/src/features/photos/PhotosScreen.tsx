@@ -1,5 +1,5 @@
-// Photos tab: dated feed (newest first) and Compare.
-import { useCallback, useEffect, useRef, useState } from 'react';
+// Photos tab: dated feed (newest first), Compare, Timelapse and Face.
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import type { Backend } from '../../data/backend';
 import { prettyDay, type Day } from '../../lib/dates';
 import { Segmented, errMsg } from '../../screens/ui';
@@ -12,9 +12,11 @@ import { dayNumber, relativeLabel } from './labels';
 import Viewer from './Viewer';
 
 const PAGE = 10;
+// Face analysis (and its model) only loads when the Face view is opened.
+const FaceView = lazy(() => import('../face/FaceView'));
 
 export default function PhotosScreen({ backend, onError }: { backend: Backend; onError: (msg: string) => void }) {
-  const [mode, setMode] = useState<'feed' | 'compare' | 'timelapse'>('feed');
+  const [mode, setMode] = useState<'feed' | 'compare' | 'timelapse' | 'face'>('feed');
   const [start, setStart] = useState<Day | null>(null);
   const [today, setToday] = useState<Day | null>(null);
   const [version, setVersion] = useState(0);
@@ -41,12 +43,13 @@ export default function PhotosScreen({ backend, onError }: { backend: Backend; o
       <header className="header">
         <h1>Photos</h1>
       </header>
-      <div className="photos-mode">
+      <div className="photos-mode fx-modes">
         <Segmented
           options={[
             { value: 'feed', label: 'Feed', testid: 'photos-feed' },
             { value: 'compare', label: 'Compare', testid: 'photos-compare' },
             { value: 'timelapse', label: 'Timelapse', testid: 'photos-timelapse' },
+            { value: 'face', label: 'Face', testid: 'photos-face' },
           ]}
           value={mode}
           onChange={setMode}
@@ -64,8 +67,12 @@ export default function PhotosScreen({ backend, onError }: { backend: Backend; o
           />
         ) : mode === 'compare' ? (
           <Compare backend={backend} start={start} onError={onError} />
-        ) : (
+        ) : mode === 'timelapse' ? (
           <Timelapse backend={backend} start={start} onError={onError} />
+        ) : (
+          <Suspense fallback={<p className="muted center">Loading…</p>}>
+            <FaceView backend={backend} start={start} onError={onError} />
+          </Suspense>
         ))}
     </div>
   );

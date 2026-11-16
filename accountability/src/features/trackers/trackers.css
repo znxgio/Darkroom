@@ -672,3 +672,16 @@
   color: #6b7282;
   font-size: 13px;
 }
+
+/* Auto trackers (filled in by the app, e.g. Face score from today's photo) */
+.tk-auto-note {
+  font-size: 13px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tk-auto-empty .tc-name {
+  color: var(--muted);
+}
