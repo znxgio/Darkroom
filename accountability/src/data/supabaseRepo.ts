@@ -31,13 +31,14 @@ function check<T>(res: { data: T; error: any }): T {
 }
 
 export function supabaseRepo(sb: SupabaseClient): Repo {
-  let todayCache: { day: Day; at: number } | null = null;
+  let todayCache: { day: Day; at: number; local: Day } | null = null;
 
   async function today(): Promise<Day> {
-    if (todayCache && Date.now() - todayCache.at < 60_000) return todayCache.day;
+    // Cache for a minute, but never across LA midnight.
+    if (todayCache && Date.now() - todayCache.at < 60_000 && dayOf() === todayCache.local) return todayCache.day;
     const { data, error } = await sb.rpc('today_la');
     const day = error || !data ? dayOf() : String(data);
-    todayCache = { day, at: Date.now() };
+    todayCache = { day, at: Date.now(), local: dayOf() };
     return day;
   }
 

@@ -98,6 +98,17 @@ All built and tested in demo mode on 2026-11-16 (night). Not deployed: needs the
 - Extras: self-timer (3s/10s), "Align" overlay of the last photo, per-kind camera choice remembered on the device.
 - `photosRequirement(photosFrom, completeDays)` plugs photos into streak/score as an ExtraRequirement.
 
+## Deploy checklist (from the pre-deploy code review, 2026-11-16)
+- Deploy both functions with verify_jwt OFF explicitly (Management API: `verify_jwt: false`; CLI: `--no-verify-jwt`). config.toml only applies to `supabase functions deploy`.
+- Functions use SUPABASE_SERVICE_ROLE_KEY, falling back to SUPABASE_SECRET_KEYS (newer projects).
+- Migrations grant service_role what the server functions need; the SQL tests run `claim_*` as service_role to prove it.
+- Turn off sign-ups right after creating the owner; set PHOTO_OWNER_ID for photo-access.
+- Smoke test after deploy:
+  - curl tick with x-cron-secret → `{reminders:0,…}` with no errors
+  - curl photo-access with the key → 403 while the toggle is off
+  - in the app: take/retake photos, check off a task, Settings → Send a test push
+- Known and accepted: changing a task's "critical" flag changes how past days count for Stakes. A task created after its goal time sends its reminder right away. A reminder is marked sent before the push goes out, so a failed push isn't retried.
+
 ## Gotchas when merging features
 - CSS class names are global. Prefix feature classes (e.g. `tk-` for trackers); `.detail` clashed once.
 - PostgREST upsert updates every column sent, so column-level UPDATE grants must include the conflict-key columns (`task_logs` got `task_id`, `day`). Triggers block real changes to them.

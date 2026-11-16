@@ -1,10 +1,15 @@
 \set ON_ERROR_STOP 1
 \o /dev/null
--- Runs as the server (postgres) — claim_* are server-only functions.
+-- Server-only functions: setup runs as postgres, claim_* checks also pass as service_role (below).
 create or replace function pg_temp.expect(cond boolean, what text) returns void language plpgsql as $$
 begin
   if cond is distinct from true then raise exception 'expectation failed: %', what; end if;
 end $$;
+
+-- Seed the uploaded files (photo rows require the file to exist first).
+insert into storage.objects (bucket_id, name) values
+  ('photos', '44444444-4444-4444-4444-444444444444/2026-11-17/body.jpg'),
+  ('photos', '44444444-4444-4444-4444-444444444444/2026-11-17/face.jpg');
 
 -- Fresh user for these tests
 insert into auth.users values ('44444444-4444-4444-4444-444444444444');
@@ -94,3 +99,14 @@ reset role;
 
 \o
 \echo 'reminders + stakes SQL tests passed'
+\o /dev/null
+-- The deployed function calls these as service_role: they must work with only the migration's grants.
+set role service_role;
+select count(*) from public.claim_reminders('2026-11-30 17:00:00+00');
+select count(*) from public.claim_stakes('2026-11-30 17:00:00+00');
+select public.finish_stakes('44444444-4444-4444-4444-444444444444', '2026-11-19', true, 'ok');
+select count(*) from public.push_subscriptions;
+insert into public.photo_access_log (user_id, photo_count) values ('44444444-4444-4444-4444-444444444444', 0);
+reset role;
+\o
+\echo 'service_role can run the server functions'

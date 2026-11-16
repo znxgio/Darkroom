@@ -40,6 +40,10 @@ begin
      (new.user_id::text || '/' || pg_catalog.to_char(new.day, 'YYYY-MM-DD') || '/' || new.kind || '.jpg') then
     raise exception 'Wrong photo path' using errcode = 'P0001';
   end if;
+  -- The file must be uploaded first, so "done" can't be faked with an empty row.
+  if not exists (select 1 from storage.objects o where o.bucket_id = 'photos' and o.name = new.path) then
+    raise exception 'Upload the photo first' using errcode = 'P0001';
+  end if;
   new.created_at := pg_catalog.now();
   return new;
 end

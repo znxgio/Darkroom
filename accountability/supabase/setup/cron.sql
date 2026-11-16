@@ -5,6 +5,8 @@
 create extension if not exists pg_cron;
 create extension if not exists pg_net;
 
+-- Re-runnable: replaces the secrets if they already exist.
+delete from vault.secrets where name in ('project_url', 'cron_secret');
 select vault.create_secret('<PROJECT_URL>', 'project_url');
 select vault.create_secret('<CRON_SECRET>', 'cron_secret');
 

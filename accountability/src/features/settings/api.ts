@@ -34,9 +34,12 @@ export function settingsApi(b: Backend) {
         const { data, error } = await sb.from('settings').select(COLS).maybeSingle();
         if (error) throw new Error(error.message);
         if (data) return norm(data);
-        const ins = await sb.from('settings').insert({}).select(COLS).single();
+        // Two screens can ask at once on first launch: ignore the duplicate, then read.
+        const ins = await sb.from('settings').upsert({}, { onConflict: 'user_id', ignoreDuplicates: true });
         if (ins.error) throw new Error(ins.error.message);
-        return norm(ins.data);
+        const again = await sb.from('settings').select(COLS).single();
+        if (again.error) throw new Error(again.error.message);
+        return norm(again.data);
       },
       async update(patch: SettingsPatch): Promise<Settings> {
         const { data: u } = await sb.auth.getUser();

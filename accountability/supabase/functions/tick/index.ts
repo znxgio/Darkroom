@@ -14,6 +14,17 @@ import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2';
 import webpush from 'npm:web-push@3.6.7';
 
 const env = (k: string) => Deno.env.get(k) ?? '';
+// Older projects expose SUPABASE_SERVICE_ROLE_KEY; newer ones only the secret key list.
+function serviceKey(): string {
+  const legacy = env('SUPABASE_SERVICE_ROLE_KEY');
+  if (legacy) return legacy;
+  try {
+    const keys = JSON.parse(env('SUPABASE_SECRET_KEYS') || '{}');
+    return keys.default ?? Object.values(keys)[0] ?? '';
+  } catch {
+    return '';
+  }
+}
 
 const cors = {
   'Access-Control-Allow-Origin': '*',
@@ -168,6 +179,11 @@ async function runTick(sb: SupabaseClient) {
     } catch (e) {
       await sb.rpc('finish_stakes', { p_user: s.user_id, p_day: s.day2, p_ok: false, p_detail: String(e) });
       out.errors.push(`stakes: ${String(e)}`);
+      await pushToUser(sb, s.user_id, {
+        title: 'Stakes email failed',
+        body: 'You missed 2 days in a row, but the email could not be sent. Check Settings → Stakes.',
+        tag: 'stakes',
+      }).catch(() => {});
     }
   }
   return out;
@@ -177,7 +193,7 @@ if (import.meta.main) Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors });
   if (req.method !== 'POST') return json({ error: 'method' }, 405);
 
-  const sb = createClient(env('SUPABASE_URL'), env('SUPABASE_SERVICE_ROLE_KEY'), {
+  const sb = createClient(env('SUPABASE_URL'), serviceKey(), {
     auth: { persistSession: false },
   });
   if (env('VAPID_PUBLIC_KEY') && env('VAPID_PRIVATE_KEY')) {

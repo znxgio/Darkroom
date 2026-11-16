@@ -17,3 +17,10 @@ alter table public.photo_access_log enable row level security;
 create policy "own access log" on public.photo_access_log for select to authenticated using (user_id = auth.uid());
 revoke all on public.photo_access_log from anon, authenticated;
 grant select on public.photo_access_log to authenticated;
+
+do $$ begin
+  if exists (select from pg_roles where rolname = 'service_role') then
+    grant select, insert on public.photo_access_log to service_role;
+    grant usage on sequence public.photo_access_log_id_seq to service_role;
+  end if;
+end $$;

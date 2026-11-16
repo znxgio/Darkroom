@@ -7,6 +7,17 @@
 import { createClient } from 'npm:@supabase/supabase-js@2';
 
 const env = (k: string) => Deno.env.get(k) ?? '';
+// Older projects expose SUPABASE_SERVICE_ROLE_KEY; newer ones only the secret key list.
+function serviceKey(): string {
+  const legacy = env('SUPABASE_SERVICE_ROLE_KEY');
+  if (legacy) return legacy;
+  try {
+    const keys = JSON.parse(env('SUPABASE_SECRET_KEYS') || '{}');
+    return keys.default ?? Object.values(keys)[0] ?? '';
+  } catch {
+    return '';
+  }
+}
 const json = (b: unknown, status = 200) =>
   new Response(JSON.stringify(b, null, 2), { status, headers: { 'content-type': 'application/json' } });
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
@@ -24,7 +35,7 @@ if (import.meta.main) Deno.serve(async (req) => {
   if (!key || key.length < 32) return json({ error: 'photo access is not set up' }, 404);
   if (!safeEqual(req.headers.get('x-photo-key') ?? '', key)) return json({ error: 'unauthorized' }, 401);
 
-  const sb = createClient(env('SUPABASE_URL'), env('SUPABASE_SERVICE_ROLE_KEY'), { auth: { persistSession: false } });
+  const sb = createClient(env('SUPABASE_URL'), serviceKey(), { auth: { persistSession: false } });
 
   // Single-user app: the owner is the one account with settings (or PHOTO_OWNER_ID if set).
   let owner = env('PHOTO_OWNER_ID');
@@ -57,6 +68,15 @@ if (import.meta.main) Deno.serve(async (req) => {
   if (error) return json({ error: error.message }, 500);
 
   const paths = (rows ?? []).map((r) => r.path);
+  const loggedDays = [...new Set((rows ?? []).map((r) => r.day))].sort();
+  // Log BEFORE handing out any link; no log, no photos.
+  const { error: logErr } = await sb.from('photo_access_log').insert({
+    user_id: owner,
+    from_day: loggedDays[0] ?? null,
+    to_day: loggedDays[loggedDays.length - 1] ?? null,
+    photo_count: paths.length,
+  });
+  if (logErr) return json({ error: 'could not log access; refusing' }, 500);
   const signed = paths.length ? (await sb.storage.from('photos').createSignedUrls(paths, 900)).data ?? [] : [];
   const urlFor = new Map(signed.map((x) => [x.path, x.signedUrl]));
 
@@ -80,11 +100,5 @@ if (import.meta.main) Deno.serve(async (req) => {
     };
   });
 
-  await sb.from('photo_access_log').insert({
-    user_id: owner,
-    from_day: dayList[0] ?? null,
-    to_day: dayList[dayList.length - 1] ?? null,
-    photo_count: paths.length,
-  });
   return json({ note: 'Links expire in 15 minutes.', days: out });
 });

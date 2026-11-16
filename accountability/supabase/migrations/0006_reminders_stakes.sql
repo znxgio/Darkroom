@@ -243,5 +243,9 @@ do $$ begin
     grant execute on function public.claim_reminders(timestamptz) to service_role;
     grant execute on function public.claim_stakes(timestamptz) to service_role;
     grant execute on function public.finish_stakes(uuid, date, boolean, text) to service_role;
+    grant execute on function public.missed_items(uuid, date) to service_role;
+    grant execute on function public.photos_done(uuid, date) to service_role;
+    grant usage on schema public to service_role;
+    grant select, insert, update, delete on all tables in schema public to service_role;
   end if;
 end $$;

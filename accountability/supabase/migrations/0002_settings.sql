@@ -18,7 +18,7 @@ create or replace function public.guard_settings() returns trigger
 language plpgsql set search_path = '' as $$
 begin
   if tg_op = 'INSERT' then
-    if new.photos_from < public.today_la() then new.photos_from := public.today_la(); end if;
+    new.photos_from := public.today_la(); -- never earlier (erasing nothing) or later (skipping days)
   elsif new.photos_from is distinct from old.photos_from then
     raise exception 'The photos start date can''t be changed' using errcode = 'P0001';
   end if;

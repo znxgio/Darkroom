@@ -18,6 +18,19 @@ do $$ begin
   end if;
 end $$;
 
+-- Seed the uploaded files (photo rows require the file to exist first).
+insert into storage.objects (bucket_id, name) values
+  ('photos', '11111111-1111-1111-1111-111111111111/2026-11-14/body.jpg'),
+  ('photos', '11111111-1111-1111-1111-111111111111/2026-11-15/body.jpg'),
+  ('photos', '11111111-1111-1111-1111-111111111111/2026-11-15/face.jpg'),
+  ('photos', '11111111-1111-1111-1111-111111111111/2026-11-16/body.jpg'),
+  ('photos', '11111111-1111-1111-1111-111111111111/2026-11-16/face.jpg'),
+  ('photos', '11111111-1111-1111-1111-111111111111/2026-11-17/body.jpg'),
+  ('photos', '11111111-1111-1111-1111-111111111111/2026-11-17/face.jpg'),
+  ('photos', '22222222-2222-2222-2222-222222222222/2026-11-16/body.jpg'),
+  ('photos', '22222222-2222-2222-2222-222222222222/2026-11-16/face.jpg');
+select pg_temp.expect_fail($$insert into photos (day, kind, path) values ('2026-11-16', 'body', '22222222-2222-2222-2222-222222222222/2026-11-16/body.jpg')$$, '');
+
 set role authenticated;
 set test.uid = '11111111-1111-1111-1111-111111111111';
 
@@ -53,12 +66,12 @@ select pg_temp.expect_fail($$insert into photos (day, kind, path)
   values ('2026-11-16', 'body', '22222222-2222-2222-2222-222222222222/2026-11-16/body.jpg')$$, 'Wrong photo path');
 select pg_temp.expect_fail($$update photos set path = 'x.jpg' where day = '2026-11-16' and kind = 'face'$$, 'Wrong photo path');
 select pg_temp.expect_fail($$insert into photos (day, kind, path)
-  values ('2026-11-16', 'feet', '11111111-1111-1111-1111-111111111111/2026-11-16/feet.jpg')$$, 'check constraint');
+  values ('2026-11-16', 'feet', '11111111-1111-1111-1111-111111111111/2026-11-16/feet.jpg')$$, 'Upload the photo first'); -- rejected either way (trigger runs before the kind check)
 
 -- Can't write rows for someone else.
 select pg_temp.expect_fail($$insert into photos (user_id, day, kind, path)
   values ('22222222-2222-2222-2222-222222222222', '2026-11-16', 'body',
-          '22222222-2222-2222-2222-222222222222/2026-11-16/body.jpg')$$, 'row-level security');
+          '22222222-2222-2222-2222-222222222222/2026-11-16/body.jpg')$$, 'Upload the photo first'); -- that user's file isn't visible to me, so it fails before RLS (also enforced)
 
 -- Delete: past blocked, today ok.
 select pg_temp.expect_fail($$delete from photos where day = '2026-11-15'$$, 'locked');
@@ -66,6 +79,10 @@ delete from photos where day = '2026-11-16' and kind = 'body';
 insert into photos (kind, path) values ('body', '11111111-1111-1111-1111-111111111111/2026-11-16/body.jpg');
 
 -- Storage: own folder, today's day folder, face/body.jpg only.
+-- Storage policy checks below start from an empty bucket (the seed was only for the photo rows above).
+reset role;
+delete from storage.objects;
+set role authenticated;
 insert into storage.objects (bucket_id, name) values ('photos', '11111111-1111-1111-1111-111111111111/2026-11-16/face.jpg');
 update storage.objects set owner = owner where name = '11111111-1111-1111-1111-111111111111/2026-11-16/face.jpg';
 select pg_temp.expect_fail($$insert into storage.objects (bucket_id, name)
