@@ -1,5 +1,5 @@
-import { createClient, type SupabaseClient } from '@supabase/supabase-js';
-import type { Repo } from './data/repo';
+import { createClient } from '@supabase/supabase-js';
+import type { Backend } from './data/backend';
 import { memoryRepo } from './data/memoryRepo';
 import { supabaseRepo } from './data/supabaseRepo';
 
@@ -10,21 +10,25 @@ declare global {
   }
 }
 
-export function makeRepo(): { repo: Repo; supabase: SupabaseClient | null } {
+export function makeBackend(): Backend {
   if (typeof window !== 'undefined' && window.__TEST_NOW__) {
-    const now = window.__TEST_NOW__;
+    const pinned = window.__TEST_NOW__;
+    const now = () => new Date(pinned);
     return {
-      repo: memoryRepo({ clock: () => new Date(now), storageKey: 'accountability-test' }),
+      repo: memoryRepo({ clock: now, storageKey: 'accountability-test' }),
       supabase: null,
+      now,
+      storagePrefix: 'accountability-test',
     };
   }
   const url = import.meta.env.VITE_SUPABASE_URL as string | undefined;
   const key = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
+  const now = () => new Date();
   if (url && key) {
     const supabase = createClient(url, key, {
       auth: { persistSession: true, autoRefreshToken: true },
     });
-    return { repo: supabaseRepo(supabase), supabase };
+    return { repo: supabaseRepo(supabase), supabase, now, storagePrefix: 'accountability' };
   }
-  return { repo: memoryRepo(), supabase: null };
+  return { repo: memoryRepo(), supabase: null, now, storagePrefix: 'accountability-demo' };
 }

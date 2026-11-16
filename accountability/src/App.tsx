@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Session } from '@supabase/supabase-js';
-import { makeRepo } from './config';
+import { makeBackend } from './config';
 import Login from './screens/Login';
 import Today from './screens/Today';
 import Tasks from './screens/Tasks';
@@ -14,7 +14,8 @@ const TABS: { id: TabId; label: string; icon: string }[] = [
 ];
 
 export default function App() {
-  const { repo, supabase } = useMemo(makeRepo, []);
+  const backend = useMemo(makeBackend, []);
+  const { repo, supabase } = backend;
   const [session, setSession] = useState<Session | null>(null);
   const [authReady, setAuthReady] = useState(!supabase);
   const [tab, setTab] = useState<TabId>('today');
