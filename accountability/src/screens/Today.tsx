@@ -7,6 +7,34 @@ import { canSkip, itemsFor, type DayItem, type Task, type TaskLog } from '../lib
 import { errMsg, fmtTime } from './ui';
 import TrackerCards from '../features/trackers/TrackerCards';
 import { setBadge } from '../features/reminders/push';
+import { loadStats } from '../features/stats/load';
+import { streak } from '../lib/schedule';
+
+const MILESTONES = [3, 7, 14, 30, 50, 75, 100, 150, 200, 365, 500, 730, 1000];
+
+function ProgressRing({ done, total }: { done: number; total: number }) {
+  const r = 22;
+  const c = 2 * Math.PI * r;
+  const pct = total ? done / total : 0;
+  const complete = total > 0 && done === total;
+  return (
+    <svg className={`ring${complete ? ' complete' : ''}`} width="56" height="56" viewBox="0 0 56 56" aria-hidden="true">
+      <circle cx="28" cy="28" r={r} className="ring-track" />
+      <circle
+        cx="28"
+        cy="28"
+        r={r}
+        className="ring-fill"
+        strokeDasharray={c}
+        strokeDashoffset={c * (1 - pct)}
+        transform="rotate(-90 28 28)"
+      />
+      <text x="28" y="33" textAnchor="middle" className="ring-text">
+        {complete ? '✓' : `${Math.round(pct * 100)}%`}
+      </text>
+    </svg>
+  );
+}
 
 interface Props {
   repo: Repo;
@@ -26,7 +54,7 @@ export default function Today({ repo, backend, onError, onAddTask }: Props) {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [skipping, setSkipping] = useState<Task | null>(null);
   const [photosDone, setPhotosDone] = useState<boolean | null>(null);
-  const [celebrate, setCelebrate] = useState(false);
+  const [celebrate, setCelebrate] = useState<{ title: string; sub: string; big: boolean } | null>(null);
   const wasComplete = useRef<boolean | null>(null);
 
   // Home Screen badge = what's still open today; celebrate the moment the day becomes complete.
@@ -37,10 +65,27 @@ export default function Today({ repo, backend, onError, onAddTask }: Props) {
     const complete = its.every((i) => i.state === 'done') && photosDone;
     setBadge(open);
     if (wasComplete.current === false && complete) {
-      setCelebrate(true);
-      const t = window.setTimeout(() => setCelebrate(false), 2600);
       wasComplete.current = complete;
-      return () => window.clearTimeout(t);
+      let t: number | undefined;
+      let alive = true;
+      // Streak including today; milestones get a bigger moment.
+      loadStats(backend)
+        .then((st) => streak(st.today, st.tasks, st.logs, st.extras, st.first))
+        .catch(() => 0)
+        .then((n) => {
+          if (!alive) return;
+          const big = MILESTONES.includes(n);
+          setCelebrate({
+            title: big ? `${n}-day streak!` : 'Day complete',
+            sub: big ? 'Milestone unlocked. Keep the chain going.' : n > 1 ? `Everything’s done · ${n}-day streak` : 'Everything’s done. Streak safe.',
+            big,
+          });
+          t = window.setTimeout(() => setCelebrate(null), big ? 4000 : 2600);
+        });
+      return () => {
+        alive = false;
+        window.clearTimeout(t);
+      };
     }
     wasComplete.current = complete;
   }, [data, photosDone]);
@@ -135,19 +180,29 @@ export default function Today({ repo, backend, onError, onAddTask }: Props) {
   return (
     <div className="screen">
       <header className="header">
-        <h1>{prettyDay(data.today)}</h1>
-        <p className="sub" data-testid="done-count">
-          {doneCount} of {total} done
-        </p>
+        <div className="today-head">
+          <div>
+            <h1>{prettyDay(data.today)}</h1>
+            <p className="sub" data-testid="done-count">
+              {doneCount} of {total} done
+            </p>
+          </div>
+          <ProgressRing done={doneCount} total={total} />
+        </div>
       </header>
 
       <PhotoItem backend={backend} onError={onError} onStatus={setPhotosDone} />
       {celebrate && (
-        <div className="celebrate" role="status" data-testid="celebrate" onClick={() => setCelebrate(false)}>
+        <div
+          className={`celebrate${celebrate.big ? ' big' : ''}`}
+          role="status"
+          data-testid="celebrate"
+          onClick={() => setCelebrate(null)}
+        >
           <div className="celebrate-card">
-            <div className="celebrate-flame" aria-hidden="true">🔥</div>
-            <strong>Day complete</strong>
-            <span>Everything’s done. Streak safe.</span>
+            <div className="celebrate-flame" aria-hidden="true">{celebrate.big ? '🏆' : '🔥'}</div>
+            <strong>{celebrate.title}</strong>
+            <span>{celebrate.sub}</span>
           </div>
         </div>
       )}

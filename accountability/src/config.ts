@@ -2,6 +2,7 @@ import { createClient } from '@supabase/supabase-js';
 import type { Backend } from './data/backend';
 import { memoryRepo } from './data/memoryRepo';
 import { supabaseRepo } from './data/supabaseRepo';
+import { authStorage } from './data/authStorage';
 
 declare global {
   interface Window {
@@ -26,7 +27,7 @@ export function makeBackend(): Backend {
   const now = () => new Date();
   if (url && key) {
     const supabase = createClient(url, key, {
-      auth: { persistSession: true, autoRefreshToken: true },
+      auth: { persistSession: true, autoRefreshToken: true, storage: authStorage },
     });
     return { repo: supabaseRepo(supabase), supabase, now, storagePrefix: 'accountability' };
   }

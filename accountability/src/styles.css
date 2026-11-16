@@ -2526,3 +2526,71 @@ h2 {
   font: inherit;
   font-size: 17px;
 }
+
+/* login: remember me */
+.remember-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 44px;
+}
+.remember-row span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* today: progress ring + milestone */
+.today-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.ring {
+  flex: none;
+}
+.ring-track {
+  fill: none;
+  stroke: var(--surface-2);
+  stroke-width: 6;
+}
+.ring-fill {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 6;
+  stroke-linecap: round;
+  transition: stroke-dashoffset 0.5s ease, stroke 0.3s;
+}
+.ring.complete .ring-fill {
+  stroke: var(--green);
+}
+.ring-text {
+  fill: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+}
+.ring.complete .ring-text {
+  fill: var(--green);
+  font-size: 18px;
+}
+.celebrate.big .celebrate-card {
+  border-color: #ffd166;
+  box-shadow: 0 0 60px rgba(255, 209, 102, 0.45);
+}
+.celebrate.big .celebrate-card strong {
+  font-size: 28px;
+  background: linear-gradient(90deg, #ffd166, var(--accent));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.login-logo {
+  display: block;
+  border-radius: 18px;
+  margin: 8px 0 12px;
+  box-shadow: 0 0 30px rgba(244, 117, 33, 0.25);
+}
+.login-tag {
+  margin: -6px 0 18px;
+}
