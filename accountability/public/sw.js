@@ -1,7 +1,6 @@
 // Service worker: lets the Home Screen app open fast / offline (app shell only).
 // Data is never cached here — it always comes live from the server.
-// Push notification handlers are added in the reminders stage.
-const CACHE = 'shell-v1';
+const CACHE = 'shell-v2';
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(['/', '/manifest.webmanifest'])));
@@ -46,4 +45,44 @@ self.addEventListener('fetch', (e) => {
       ),
     );
   }
+});
+
+// ---- Reminders (web push) ----
+self.addEventListener('push', (e) => {
+  let msg = { title: 'Daily', body: '' };
+  try {
+    msg = e.data ? e.data.json() : msg;
+  } catch {
+    msg.body = e.data ? e.data.text() : '';
+  }
+  const tasks = [
+    self.registration.showNotification(msg.title || 'Daily', {
+      body: msg.body || '',
+      tag: msg.tag || undefined,
+      icon: '/icons/icon-192.png',
+      badge: '/icons/icon-192.png',
+      data: { url: msg.url || '/' },
+    }),
+  ];
+  // Home Screen icon badge = things still open today (supported on iOS 16.4+ Home Screen apps).
+  if (typeof msg.badge === 'number' && self.navigator && 'setAppBadge' in self.navigator) {
+    tasks.push(msg.badge > 0 ? self.navigator.setAppBadge(msg.badge) : self.navigator.clearAppBadge());
+  }
+  e.waitUntil(Promise.all(tasks).catch(() => {}));
+});
+
+self.addEventListener('notificationclick', (e) => {
+  e.notification.close();
+  const url = (e.notification.data && e.notification.data.url) || '/';
+  e.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((wins) => {
+      for (const w of wins) {
+        if ('focus' in w) {
+          w.postMessage({ type: 'open', url });
+          return w.focus();
+        }
+      }
+      return self.clients.openWindow(url);
+    }),
+  );
 });

@@ -1,0 +1,27 @@
+{
+  "_doc": "Shared cases for countsOn (TS) and task_counts_on (SQL). 2026-11-16 is a Monday; 2026-11-22 a Sunday.",
+  "tasks": [
+    { "id": "00000000-0000-0000-0000-00000000000a", "name": "daily", "kind": "recurring", "pattern": "daily", "weekdays": [], "one_time_date": null, "start_date": "2026-11-10", "archived_on": null },
+    { "id": "00000000-0000-0000-0000-00000000000b", "name": "monfri", "kind": "recurring", "pattern": "weekdays", "weekdays": [1,2,3,4,5], "one_time_date": null, "start_date": "2026-11-10", "archived_on": null },
+    { "id": "00000000-0000-0000-0000-00000000000c", "name": "sunday", "kind": "recurring", "pattern": "weekly_day", "weekdays": [0], "one_time_date": null, "start_date": "2026-11-10", "archived_on": null },
+    { "id": "00000000-0000-0000-0000-00000000000d", "name": "anyday", "kind": "recurring", "pattern": "weekly_any", "weekdays": [], "one_time_date": null, "start_date": "2026-11-10", "archived_on": null },
+    { "id": "00000000-0000-0000-0000-00000000000e", "name": "once", "kind": "one_time", "pattern": null, "weekdays": [], "one_time_date": "2026-11-18", "start_date": "2026-11-10", "archived_on": null },
+    { "id": "00000000-0000-0000-0000-00000000000f", "name": "archived", "kind": "recurring", "pattern": "daily", "weekdays": [], "one_time_date": null, "start_date": "2026-11-10", "archived_on": "2026-11-18" },
+    { "id": "00000000-0000-0000-0000-000000000010", "name": "anyday2", "kind": "recurring", "pattern": "weekly_any", "weekdays": [], "one_time_date": null, "start_date": "2026-11-10", "archived_on": null }
+  ],
+  "logs": [
+    { "task": "anyday", "day": "2026-11-18", "status": "done" },
+    { "task": "anyday", "day": "2026-11-20", "status": "done" },
+    { "task": "anyday2", "day": "2026-11-22", "status": "skipped" }
+  ],
+  "cases": [
+    ["daily", "2026-11-09", false], ["daily", "2026-11-10", true], ["daily", "2026-11-22", true],
+    ["monfri", "2026-11-16", true], ["monfri", "2026-11-21", false], ["monfri", "2026-11-22", false],
+    ["sunday", "2026-11-22", true], ["sunday", "2026-11-16", false],
+    ["anyday", "2026-11-16", false], ["anyday", "2026-11-18", true], ["anyday", "2026-11-20", false], ["anyday", "2026-11-22", false],
+    ["anyday", "2026-11-29", true], ["anyday", "2026-11-23", false],
+    ["anyday2", "2026-11-18", false], ["anyday2", "2026-11-22", true],
+    ["once", "2026-11-18", true], ["once", "2026-11-17", false],
+    ["archived", "2026-11-17", true], ["archived", "2026-11-18", false]
+  ]
+}

@@ -12,6 +12,7 @@ $RUN "$PGBIN/pg_ctl" -D "$DIR" -o "-p $PORT -k $DIR -c listen_addresses=''" -w s
 P="psql -h $DIR -p $PORT -U postgres -v ON_ERROR_STOP=1 -q"
 $P -c 'create database t' >/dev/null
 $P -d t -f tests/sql/stub_supabase.sql
-for f in supabase/migrations/*.sql; do $P -d t -f "$f"; done
+for f in ${MIGRATIONS_DIR:-supabase/migrations}/*.sql; do $P -d t -f "$f"; done
 $P -d t -f tests/sql/after_migrations.sql
 for f in tests/sql/test_*.sql; do echo "== $f"; $P -d t -f "$f"; done
+node scripts/fixture-to-sql.mjs > "$DIR/fixture.sql" && $P -d t -f "$DIR/fixture.sql"

@@ -10,15 +10,19 @@ export interface Settings {
   stakes_name: string | null;
   stakes_email: string | null;
   stakes_channel: 'email';
+  nudge_time: string | null; // 'HH:MM'
+  my_name: string | null;
+  stakes_since: Day | null;
 }
 
-export type SettingsPatch = Partial<Omit<Settings, 'photos_from'>>;
+export type SettingsPatch = Partial<Omit<Settings, 'photos_from' | 'stakes_since'>>;
 
 const COLS =
-  'photos_from,photo_reminder_time,stakes_enabled,stakes_scope,stakes_name,stakes_email,stakes_channel';
+  'photos_from,photo_reminder_time,stakes_enabled,stakes_scope,stakes_name,stakes_email,stakes_channel,nudge_time,my_name,stakes_since';
 
 function norm(r: any): Settings {
-  return { ...r, photo_reminder_time: r.photo_reminder_time ? String(r.photo_reminder_time).slice(0, 5) : null };
+  const hm = (v: unknown) => (v ? String(v).slice(0, 5) : null);
+  return { ...r, photo_reminder_time: hm(r.photo_reminder_time), nudge_time: hm(r.nudge_time) };
 }
 
 export function settingsApi(b: Backend) {
@@ -59,13 +63,18 @@ export function settingsApi(b: Backend) {
           stakes_name: null,
           stakes_email: null,
           stakes_channel: 'email',
+          nudge_time: '21:00',
+          my_name: null,
+          stakes_since: null,
         };
         store.write(s);
       }
       return s;
     },
     async update(patch: SettingsPatch): Promise<Settings> {
-      const s = { ...(await this.get()), ...patch };
+      const cur = await this.get();
+      const s = { ...cur, ...patch };
+      if (patch.stakes_enabled && !cur.stakes_enabled) s.stakes_since = await b.repo.today();
       store.write(s);
       return s;
     },

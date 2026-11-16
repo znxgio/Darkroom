@@ -620,3 +620,38 @@ h2 {
   background: rgba(90, 140, 255, 0.15);
   color: #8fb0ff;
 }
+
+/* settings */
+.card-section {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 16px;
+  margin: 0 0 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.card-section h2 {
+  margin: 0;
+  font-size: 18px;
+}
+.card-section.stakes.armed {
+  border-color: rgba(255, 90, 82, 0.55);
+  box-shadow: 0 0 0 1px rgba(255, 90, 82, 0.2) inset;
+}
+.btn-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.small {
+  font-size: 14px;
+  margin: 0;
+}
+.settings .time-row span,
+.settings .toggle-row span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}

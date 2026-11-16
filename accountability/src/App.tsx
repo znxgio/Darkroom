@@ -4,13 +4,15 @@ import { makeBackend } from './config';
 import Login from './screens/Login';
 import Today from './screens/Today';
 import Tasks from './screens/Tasks';
+import SettingsScreen from './features/settings/SettingsScreen';
 
-type TabId = 'today' | 'tasks';
+type TabId = 'today' | 'tasks' | 'settings';
 
 // Add new tabs (Photos, Stats, Settings) here.
 const TABS: { id: TabId; label: string; icon: string }[] = [
   { id: 'today', label: 'Today', icon: '✓' },
   { id: 'tasks', label: 'Tasks', icon: '☰' },
+  { id: 'settings', label: 'Settings', icon: '⚙' },
 ];
 
 export default function App() {
@@ -77,6 +79,7 @@ export default function App() {
             onSignOut={signOut}
           />
         )}
+        {tab === 'settings' && <SettingsScreen backend={backend} onToast={showToast} onSignOut={signOut} />}
       </main>
       {toast && (
         <div className="toast" role="alert" onClick={() => setToast(null)}>
