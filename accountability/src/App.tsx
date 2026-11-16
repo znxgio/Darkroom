@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Session } from '@supabase/supabase-js';
 import { makeBackend } from './config';
+import { BackendContext } from './data/BackendContext';
 import Login from './screens/Login';
 import Today from './screens/Today';
 import Tasks from './screens/Tasks';
@@ -53,6 +54,7 @@ export default function App() {
     : undefined;
 
   return (
+    <BackendContext.Provider value={backend}>
     <div className="app">
       {repo.mode === 'demo' && (
         <div className="demo-banner">Demo mode — data stays on this phone only</div>
@@ -101,5 +103,6 @@ export default function App() {
         ))}
       </nav>
     </div>
+    </BackendContext.Provider>
   );
 }
