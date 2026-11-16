@@ -79,8 +79,21 @@ The owner asked for this so they don't have to send daily photos in chat.
   3. Read the saved `.jpg` files. Never commit them, and never copy them anywhere public.
 - The function returns each day as day, day_number, face/body links (15-minute signed URLs) and weight on that day.
 
-## Setup done
-- (none yet: the owner still needs to create the Supabase + Vercel accounts; steps are in README.md)
+## Setup done (2026-11-16)
+- **Supabase**:
+  - project ref `olczwxdvclpowxfqrsks` (region us-east-1, created there by mistake; fine)
+  - all 7 migrations applied through the Management API
+  - sign-ups disabled; owner user created by the owner in the dashboard
+- **Function secrets set**: VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, VAPID_SUBJECT, CRON_SECRET, PHOTO_ACCESS_KEY, PHOTO_OWNER_ID. No EMAIL_* yet, so Stakes email isn't set up.
+- **Functions** `tick` and `photo-access` deployed with verify_jwt=false. Smoke test passed (tick returns no errors; both refuse calls without their secret).
+- **pg_cron**: `tick-every-minute` and `tidy-logs` scheduled; vault holds project_url and cron_secret.
+- **Supabase access token**: saved as a network credential for api.supabase.com on the Default environment (expires in 7 days).
+- **Vercel**:
+  - project `daily` (team peezy4), root dir `accountability`, framework vite
+  - the 3 VITE_ env vars set for all environments
+  - public production URL: https://daily-eight-ebon.vercel.app (the -peezy4 URLs are behind Vercel login)
+  - GitHub auto-deploy not connected yet: needs the Vercel GitHub app on the repo. Until then, deploy with `vercel deploy --prod` from the repo root, after `vercel login`.
+- PR #2 merged the app into `main`.
 
 ## Stages
 All built and tested in demo mode on 2026-11-16 (night). Not deployed: needs the owner's Supabase + Vercel accounts.
