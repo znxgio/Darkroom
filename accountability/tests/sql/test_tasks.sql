@@ -59,9 +59,15 @@ select pg_temp.expect_fail($$update task_logs set reason = 'changed' where day =
 select pg_temp.expect_fail($$update task_logs set status = 'done' where day = '2026-11-14'$$, 'Past days are locked');
 select pg_temp.expect_fail($$delete from task_logs where day = '2026-11-14'$$, 'Past days are locked');
 
--- an entry can't be moved to another day or task (column grants block it too)
-select pg_temp.expect_fail($$update task_logs set day = '2026-11-13' where day = '2026-11-16'$$, 'permission denied');
-select pg_temp.expect_fail($$update task_logs set task_id = 'aaaaaaaa-0000-0000-0000-000000000002' where day = '2026-11-16'$$, 'permission denied');
+-- an entry can't be moved to another day or task
+select pg_temp.expect_fail($$update task_logs set day = '2026-11-13' where day = '2026-11-16'$$, 'can''t be moved');
+select pg_temp.expect_fail($$update task_logs set task_id = 'aaaaaaaa-0000-0000-0000-000000000002' where day = '2026-11-16'$$, 'can''t be moved');
+-- PostgREST-style upserts work for today (insert, then update via conflict)
+insert into task_logs (task_id, day, status, reason) values ('aaaaaaaa-0000-0000-0000-000000000003', '2026-11-16', 'done', null)
+  on conflict (task_id, day) do update set task_id = excluded.task_id, day = excluded.day, status = excluded.status, reason = excluded.reason;
+insert into task_logs (task_id, day, status, reason) values ('aaaaaaaa-0000-0000-0000-000000000003', '2026-11-16', 'skipped', 'busy')
+  on conflict (task_id, day) do update set task_id = excluded.task_id, day = excluded.day, status = excluded.status, reason = excluded.reason;
+delete from task_logs where task_id = 'aaaaaaaa-0000-0000-0000-000000000003';
 
 -- weekly_any: no skipping before Sunday
 select pg_temp.expect_fail($$insert into task_logs (task_id, day, status, reason) values ('aaaaaaaa-0000-0000-0000-000000000002', '2026-11-16', 'skipped', 'busy')$$, 'only be skipped on Sunday');

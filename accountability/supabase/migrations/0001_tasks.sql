@@ -199,7 +199,9 @@ grant select, insert, delete on public.tasks to authenticated;
 grant update (name, goal_time, critical, sort, one_time_date, archived_on, pattern, weekdays, kind, start_date)
   on public.tasks to authenticated;
 grant select, insert, delete on public.task_logs to authenticated;
-grant update (status, reason) on public.task_logs to authenticated;
+-- task_id/day must be updatable for PostgREST upserts (ON CONFLICT DO UPDATE sets every sent column);
+-- the guard trigger still refuses any real change to them.
+grant update (task_id, day, status, reason) on public.task_logs to authenticated;
 
 -- The app reads "today" from the server so a wrong phone clock can't matter.
 revoke execute on function public.today_la() from public, anon;

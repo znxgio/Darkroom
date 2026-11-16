@@ -6,19 +6,29 @@ import { createRequire } from 'node:module';
 // Uses the machine's Playwright if installed globally, else a local one.
 const { chromium } = createRequire(import.meta.url)('playwright');
 
+// Another checkout may already be serving 4179: pick a free one with E2E_PORT=4501 npm run e2e.
 const PORT = Number(process.env.E2E_PORT) || 4179;
 const BASE = `http://localhost:${PORT}`;
 mkdirSync('screenshots', { recursive: true });
 
 const server = spawn('npx', ['vite', 'preview', '--port', String(PORT), '--strictPort'], {
   stdio: 'ignore',
+  detached: true, // own process group, so stop() also ends vite (not just npx)
   env: { ...process.env, VITE_SUPABASE_URL: '', VITE_SUPABASE_ANON_KEY: '' },
 });
-const stop = () => server.kill();
+let serverExited = false;
+server.on('exit', () => (serverExited = true));
+const stop = () => {
+  try {
+    process.kill(-server.pid);
+  } catch {}
+};
 process.on('exit', stop);
 
 async function waitForServer() {
   for (let i = 0; i < 60; i++) {
+    // --strictPort exits if the port is taken; never test someone else's server.
+    if (serverExited) throw new Error(`port ${PORT} is in use; rerun with E2E_PORT=<free port>`);
     try {
       const r = await fetch(BASE);
       if (r.ok) return;
@@ -74,6 +84,19 @@ const tid = (id) => page.getByTestId(id);
 
 console.log('Flow: create tasks');
 await page.goto(BASE);
+// Daily photos start counting on Mon Nov 23 in this script (the photo flows begin then);
+// the earlier days test tasks alone.
+await page.evaluate(() =>
+  localStorage.setItem(
+    'accountability-test:settings',
+    JSON.stringify({
+      photos_from: '2026-11-23', photo_reminder_time: '08:00', stakes_enabled: false, stakes_scope: 'critical',
+      stakes_name: null, stakes_email: null, stakes_channel: 'email', nudge_time: '21:00', my_name: null,
+      stakes_since: null, claude_photo_access: false,
+    }),
+  ),
+);
+await page.reload();
 await tid('tab-tasks').click();
 
 async function addTask(name, setup) {
@@ -132,11 +155,107 @@ await setNow('2026-11-17T17:00:00Z');
 await tid('task-row-Gym').waitFor();
 check((await tid('task-row-Call bank').count()) === 0, 'One-time task gone the next day');
 check((await tid('done-count').textContent())?.trim().startsWith('0'), 'New day starts fresh (0 done)');
+check((await tid('miss-gate').count()) === 0, 'No missed-reason prompt when nothing was missed');
+
+/** Answers every missed-reason prompt; returns the titles it answered. */
+async function answerGate(reasonFor) {
+  const titles = [];
+  while ((await tid('miss-gate').count()) > 0) {
+    const title = (await tid('gate-title').textContent()) ?? '';
+    await tid('gate-reason').fill(reasonFor(title, titles.length));
+    await tid('gate-save').click();
+    await page.waitForFunction(
+      (prev) => document.querySelector('[data-testid=gate-title]')?.textContent !== prev,
+      title,
+    );
+    titles.push(title);
+  }
+  return titles;
+}
+
+console.log('Flow: two days later — the missed-reason prompt blocks the app');
+await setNow('2026-11-19T17:00:00Z'); // Wednesday; Tue + Wed went unchecked
+await tid('miss-gate').waitFor();
+check((await tid('gate-title').textContent())?.includes('Gym') && (await tid('gate-title').textContent())?.includes('Tue, Nov 17'), 'Prompt names the task and day');
+const covered = await page.evaluate(() => {
+  const el = document.querySelector('[data-testid=tab-progress]');
+  const r = el.getBoundingClientRect();
+  const top = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+  return !el.contains(top) && !!top?.closest('[data-testid=miss-gate]');
+});
+check(covered, 'Prompt covers the whole app (tab bar unreachable)');
+check(await tid('gate-save').isDisabled(), 'Prompt needs a reason (save disabled when empty)');
+await page.waitForTimeout(300);
+await page.screenshot({ path: 'screenshots/gate.png' });
+await page.reload();
+await tid('miss-gate').waitFor();
+check(true, 'Prompt comes back after reload until answered');
+const gateReasons = ['Overslept, too tired', 'Too tired after work', 'Work ran late', 'Fell asleep early, tired'];
+const answered = await answerGate((_t, i) => gateReasons[i] ?? 'Busy');
+check(answered.length === 4, `Asked about each of the 4 misses (${answered.length})`);
+await page.reload();
+await tid('task-row-Gym').waitFor();
+check((await tid('miss-gate').count()) === 0, 'Prompt gone once every miss has a reason');
+await tid('task-row-Gym').click();
+await tid('task-row-Read 10 pages').click();
+
+console.log('Flow: Progress tab');
+await tid('tab-progress').click();
+await tid('streak').waitFor();
+check((await tid('streak').textContent()) === '1', 'Streak is 1 (today complete after misses)');
+check((await tid('best-streak').textContent()) === '1', 'Best streak is 1');
+check((await tid('cal-2026-11-17').getAttribute('data-color')) === 'red', 'Calendar: missed day is red');
+check((await tid('cal-2026-11-19').getAttribute('data-color')) === 'green', 'Calendar: complete day is green');
+check((await tid('cal-2026-11-20').count()) === 0, 'Calendar: future days are blank');
+check((await tid('week-score').textContent())?.includes('4 of 9'), `Weekly score counts done/counted (${await tid('week-score').textContent()})`);
+check((await tid('last-week-score').textContent())?.includes('—'), 'No data last week');
+check((await tid('patterns').textContent())?.includes('tired'), 'Patterns pick up a common word');
+await page.screenshot({ path: 'screenshots/progress.png', fullPage: true });
+await tid('filter-Gym').click();
+const excuseTexts = await tid('excuse-list').locator('li').allTextContents();
+check(excuseTexts.length === 2 && excuseTexts.every((t) => t.includes('Gym')), 'Excuse log filters by task');
+await tid('cal-2026-11-17').click();
+await tid('day-sheet').waitFor();
+await page.waitForTimeout(300); // let the sheet finish sliding in
+check((await tid('detail-Gym').getAttribute('data-state')) === 'missed', 'Day sheet: Gym missed');
+check((await tid('detail-Gym').textContent())?.includes('Overslept'), 'Day sheet shows the reason');
+await page.screenshot({ path: 'screenshots/day-sheet.png' });
+await tid('day-sheet-close').click();
+
+console.log('Flow: Thu + Sat done, nothing to explain');
+await setNow('2026-11-20T17:00:00Z');
+await tid('task-row-Gym').waitFor();
+check((await tid('miss-gate').count()) === 0, 'No prompt after a complete day');
+await tid('task-row-Gym').click();
+await tid('task-row-Read 10 pages').click();
+await setNow('2026-11-21T17:00:00Z');
+await tid('task-row-Read 10 pages').click();
 
 console.log('Flow: Sunday shows weekly task, not Gym');
 await setNow('2026-11-22T18:00:00Z');
 await tid('task-row-Clean apartment').waitFor();
 check((await tid('task-row-Gym').count()) === 0, 'Weekday task hidden on Sunday');
+
+console.log('Flow: Sunday review');
+await tid('tab-progress').click();
+await tid('streak').waitFor();
+check((await tid('streak').textContent()) === '3', 'Streak is 3 (Wed–Sat, today in progress)');
+check((await tid('open-review').getAttribute('class'))?.includes('hl'), 'Review card highlighted on Sunday');
+await tid('open-review').click();
+await tid('review').waitFor();
+check((await tid('review-week').textContent())?.includes('Nov 16'), 'Review opens on this week');
+check((await tid('review-missed').count()) === 4, 'Review lists the 4 misses');
+check((await tid('review-skipped').count()) === 1, 'Review lists the skip');
+await tid('review-note').fill('Gym before work, phone away by 10');
+await tid('review-save').click();
+await tid('review-saved').waitFor();
+await page.screenshot({ path: 'screenshots/review.png', fullPage: true });
+await page.reload();
+await tid('tab-progress').click();
+await tid('open-review').click();
+check((await tid('review-note').inputValue()) === 'Gym before work, phone away by 10', 'Review note persisted');
+await tid('review-back').click();
+await tid('tab-today').click();
 
 console.log('Flow: edit schedule starts tomorrow; archive keeps today');
 page.on('dialog', (d) => d.accept());
@@ -205,6 +324,8 @@ await page.waitForSelector('[data-testid="photo-row"][data-state="done"]');
 check(true, 'Retake today works');
 await setNow('2026-11-23T18:00:00Z');
 await tid('photo-row').waitFor();
+await page.waitForTimeout(800); // the missed-reason prompt loads just after the page
+await answerGate(() => 'Long weekend');
 check((await tid('photo-row').getAttribute('data-state')) === 'open', 'New day: photo item open again');
 await takeBoth(false);
 
@@ -215,7 +336,7 @@ check(await tid('photo-day-2026-11-22').isVisible(), 'Feed shows both days (newe
 const order = await page.$$eval('[data-testid^="photo-day-"]', (els) => els.map((e) => e.dataset.testid));
 check(order[0] === 'photo-day-2026-11-23', 'Newest day first');
 check((await tid('photo-day-2026-11-23').getByTestId('photo-inset').count()) === 1, 'Day card has face inset');
-check((await tid('photo-day-2026-11-23').textContent()).includes('Day 8'), 'Day number shown (Day 8)');
+check((await tid('photo-day-2026-11-23').textContent()).includes('Day 2'), 'Day number shown (Day 2)');
 await page.waitForFunction(() => [...document.querySelectorAll('.pcard img')].every((i) => i.complete && i.naturalWidth > 0));
 await page.screenshot({ path: 'screenshots/photos-feed.png' });
 await tid('photo-day-2026-11-22').locator('.pcard-main').click();
@@ -262,8 +383,20 @@ console.log('Flow: camera permission denied');
   await c3.close();
 }
 
+console.log('Flow: next Sunday — answer the week, see last week\'s note');
+await setNow('2026-11-29T18:00:00Z');
+await tid('miss-gate').waitFor();
+const later = await answerGate(() => 'Travelling');
+check(later.length >= 2, `Prompt covers a whole week of misses (${later.length})`);
+await tid('tab-progress').click();
+await tid('open-review').click();
+await tid('last-note').waitFor();
+check((await tid('last-note').textContent())?.includes('Gym before work'), 'Review shows "Last week you said"');
+await page.screenshot({ path: 'screenshots/review-next.png', fullPage: true });
+await tid('review-back').click();
+
 console.log('Layout: no horizontal scroll');
-for (const tab of ['tab-today', 'tab-photos', 'tab-tasks']) {
+for (const tab of ['tab-today', 'tab-photos', 'tab-progress', 'tab-tasks', 'tab-settings']) {
   await tid(tab).click();
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
   check(!overflow, `${tab}: no horizontal scroll at 390px`);
@@ -272,6 +405,8 @@ const ctx2 = await browser.newContext({ viewport: { width: 320, height: 640 }, i
 const p2 = await ctx2.newPage();
 await p2.goto(BASE);
 await p2.getByTestId('tab-today').waitFor();
+await p2.getByTestId('tab-progress').click();
+await p2.getByText('Progress', { exact: true }).first().waitFor();
 check(!(await p2.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)), 'no horizontal scroll at 320px');
 
 check(errors.length === 0, `no page errors ${errors.length ? JSON.stringify(errors) : ''}`);
