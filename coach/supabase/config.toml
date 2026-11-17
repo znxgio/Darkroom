@@ -1,0 +1,4 @@
+# The critique function checks the user's login itself (so the browser's CORS preflight isn't blocked).
+# config.toml only applies to `supabase functions deploy`; with the Management API pass verify_jwt: false.
+[functions.critique]
+verify_jwt = false
