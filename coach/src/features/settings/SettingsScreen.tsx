@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { Repo, Settings, Spend } from '../../data/types';
 import { usd } from '../../lib/progress';
+import { TIER_KEYS, TIERS } from '../../../supabase/functions/_shared/critique';
 
 interface Props {
   repo: Repo;
@@ -40,6 +41,23 @@ export function SettingsScreen({ repo, settings, onChange, onSignOut, refreshKey
         <h2>Modes</h2>
         <Toggle label="Live coaching" sub="Real-time tips and score in the camera" on={settings.live_coaching} onChange={(v) => set('live_coaching', v)} />
         <Toggle label="AI critique" sub="Feedback on photos after you shoot" on={settings.ai_critique} onChange={(v) => set('ai_critique', v)} />
+        <div className={`setting setting-col${settings.ai_critique ? '' : ' is-disabled'}`}>
+          <div>
+            <b>Critique with</b>
+            <small>
+              Default for new photos (you can switch per photo). Free uses your own Claude app: you paste the answer back. The others
+              cost per critique and count toward the cap.
+            </small>
+          </div>
+          <div className="tiers" role="radiogroup" aria-label="Critique with">
+            {TIER_KEYS.map((k) => (
+              <button key={k} role="radio" aria-checked={settings.model_tier === k} className={settings.model_tier === k ? 'is-on' : ''} onClick={() => set('model_tier', k)} disabled={!settings.ai_critique}>
+                <b>{TIERS[k].label}</b>
+                <small>{TIERS[k].estimate}</small>
+              </button>
+            ))}
+          </div>
+        </div>
         <Toggle label="Editing tips" sub="Crop, exposure and color suggestions" on={settings.editing_tips} onChange={(v) => set('editing_tips', v)} disabled={!settings.ai_critique} />
         <div className="setting">
           <div>

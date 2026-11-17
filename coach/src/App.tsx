@@ -3,6 +3,7 @@ import type { Session } from '@supabase/supabase-js';
 import { makeBackend } from './config';
 import { DEFAULT_SETTINGS, type PhotoWithCritiques, type Settings } from './data/types';
 import { decodeFile, readExif, sizeOf } from './lib/image';
+import { progressStats } from './lib/progress';
 import { LiveScreen, type Capture } from './features/live/LiveScreen';
 import { ImportScreen } from './features/critique/ImportScreen';
 import { ShotSheet, type Shot } from './features/critique/ShotSheet';
@@ -103,7 +104,19 @@ function Main({ backend, signOut }: { backend: ReturnType<typeof makeBackend>; s
       const img = await decodeFile(file);
       const { w, h } = sizeOf(img);
       const { exif, takenAt } = await readExif(file);
-      setShot({ blob: file, url: URL.createObjectURL(file), source: 'import', width: w, height: h, liveScore: null, exif, takenAt, photoId });
+      const existing = photoId ? photos.find((p) => p.id === photoId) : undefined;
+      setShot({
+        blob: file,
+        url: URL.createObjectURL(file),
+        source: existing?.source ?? 'import',
+        width: w,
+        height: h,
+        liveScore: existing?.live_score ?? null,
+        exif: exif ?? existing?.exif ?? null,
+        takenAt,
+        photoId,
+        note: existing?.note ?? null,
+      });
     } catch (err) {
       setToast((err as Error).message);
     }
@@ -114,6 +127,7 @@ function Main({ backend, signOut }: { backend: ReturnType<typeof makeBackend>; s
   }
 
   const open = photos.find((p) => p.id === openId) ?? null;
+  const recurring = useMemo(() => progressStats(photos).habits.filter((h) => h.count >= 2).slice(0, 3).map((h) => h.label), [photos]);
   const visibleTabs = TABS.filter((t) => t.id !== 'critique' || settings.ai_critique);
   const current = visibleTabs.some((t) => t.id === tab) ? tab : 'shoot';
 
@@ -163,6 +177,7 @@ function Main({ backend, signOut }: { backend: ReturnType<typeof makeBackend>; s
           shot={shot}
           repo={repo}
           settings={settings}
+          recurring={recurring}
           onClose={() => setShot(null)}
           onSaved={reload}
           onOpenSettings={() => {

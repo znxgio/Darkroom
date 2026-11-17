@@ -24,7 +24,10 @@ Candid and everyday photos: friends, city scenes, lights, venues, raves and conc
   - The models load from storage.googleapis.com and are cached by the service worker.
   - When upgrading MediaPipe, bump `MODELS` in `public/sw.js` so phones drop the old wasm.
   - It tries GPU first and falls back to CPU.
-- **AI**: the current Opus-tier model (see `MODEL` in `supabase/functions/critique/index.ts`) on the beta Messages endpoint.
+- **AI**: three paid tiers plus Free (see `TIERS` in `supabase/functions/_shared/critique.ts`), on the beta Messages endpoint.
+  - The owner asked for this on 2026-11-17 after learning the API isn't covered by their Claude subscription.
+  - Cheap (cheapest model, ~0.1¢) is the default. Better (mid-tier, ~2¢) and Best (top model, ~3–4¢) are also available.
+  - The cheapest model has no server-side fallback, so it's sent without `fallbacks`.
   - Structured JSON output (`output_config.format`), effort `low` (Quick) or `medium` (Thorough).
   - Server-side refusal fallback (`fallbacks: "default"`). When a fallback model runs, cost is charged at the pricier model.
   - Pinned SDK `npm:@anthropic-ai/sdk@1.8.0` (Deno blocks packages less than 24h old).
@@ -43,11 +46,18 @@ Candid and everyday photos: friends, city scenes, lights, venues, raves and conc
 - **Recurring habits**: each critique has 0–3 issue tags from a fixed list (`supabase/functions/_shared/critique.ts`). The function tells the AI the person's top recurring habits so it can follow up. The Progress tab shows the habits, a "this week's focus" tip, the trend and the subscores.
 - **Linking to other apps later**: the SQL function `practice_summary(days)` returns photos, critiques, average score and last photo time for the signed-in user. Another app (e.g. the habit tracker) could call it later. Nothing links yet.
 
+- **Free mode (Claude app)**: the app copies a coaching prompt; you share the photo into your Claude app, paste the prompt, then copy Claude's reply back.
+  - The reply ends with a `DARKROOM-DATA` line plus JSON. `parseChatReply` reads it, tolerating code fences, braces inside strings and curly quotes.
+  - The app saves it itself. A row-security policy allows only `model = 'claude-app'`, `cost_usd = 0`, no ledger link, and only on your own photo. Paid critiques stay server-only.
+  - Free mode needs no API key at all.
+  - Unverified: whether the Claude iOS app appears in the share sheet for images. The steps include a fallback (attach the photo from the camera roll inside the Claude app).
+- **Cap check is per tier**: `worstCaseUsd(tier)` is priced at the tier's model or its fallback, whichever costs more. When Best is blocked, Cheap and Free usually still work, and the cap error offers "Ask in Claude app (free)".
+
 ## Data model
 - `photos`: thumb, source (import/live), size, EXIF camera info (never GPS), live score at capture, note
 - `critiques`: score, result JSON, tags, cost (written by the server only)
 - `api_usage`: the spending ledger (written by the server only; kept even if a photo is deleted)
-- `settings`: modes, editing tips, cap, depth, overlay defaults
+- `settings`: modes, editing tips, cap, depth, default critic (`model_tier`: free/cheap/better/best), overlay defaults
 
 ## Deploy checklist
 - Deploy `critique` with verify_jwt OFF (Management API: `verify_jwt: false`).
@@ -63,7 +73,7 @@ Candid and everyday photos: friends, city scenes, lights, venues, raves and conc
 - `.setting > div` styles also hit the segmented control (`.seg`), which stacked its buttons. Scoped to `:first-child`.
 
 ## Open to-dos
-- Owner: decide on going live (Supabase project, Anthropic key with credits, Vercel). Steps are in README.md.
+- Owner: decide on going live (Supabase project and Vercel; an Anthropic key only for paid tiers). Steps are in README.md.
 - Verify on the iPhone:
   - share sheet "Save Image" from the Home Screen app
   - the motion permission prompt

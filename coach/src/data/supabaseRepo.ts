@@ -45,7 +45,7 @@ export function supabaseRepo(sb: SupabaseClient, functionsUrl: string): Repo {
       if (error) throw error;
     },
 
-    async critique(photoId, image) {
+    async critique(photoId, image, tier) {
       const session = await uid();
       let res: Response;
       try {
@@ -55,7 +55,7 @@ export function supabaseRepo(sb: SupabaseClient, functionsUrl: string): Repo {
             Authorization: `Bearer ${session.access_token}`,
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify({ photo_id: photoId, image, media_type: 'image/jpeg' }),
+          body: JSON.stringify({ photo_id: photoId, image, media_type: 'image/jpeg', tier }),
         });
       } catch {
         throw new CritiqueError('No connection. Try again when you have signal.', 0);
@@ -68,6 +68,17 @@ export function supabaseRepo(sb: SupabaseClient, functionsUrl: string): Repo {
       return { critique: num(body.critique), spend: { spent: body.spent, cap: body.cap } };
     },
 
+    async saveChatCritique(photoId, result) {
+      const session = await uid();
+      const { data, error } = await sb
+        .from('critiques')
+        .insert({ user_id: session.user.id, photo_id: photoId, model: 'claude-app', score: result.score, result, tags: result.tags, cost_usd: 0 })
+        .select('*')
+        .single();
+      if (error) throw error;
+      return num(data as Critique);
+    },
+
     async getSettings() {
       const { data, error } = await sb.from('settings').select('*').maybeSingle();
       if (error) throw error;
@@ -78,6 +89,7 @@ export function supabaseRepo(sb: SupabaseClient, functionsUrl: string): Repo {
         editing_tips: data.editing_tips,
         monthly_cap_usd: Number(data.monthly_cap_usd),
         depth: data.depth,
+        model_tier: data.model_tier ?? DEFAULT_SETTINGS.model_tier,
         overlays: { ...DEFAULT_SETTINGS.overlays, ...(data.overlays ?? {}) },
       };
     },

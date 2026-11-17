@@ -47,7 +47,7 @@ const check = (cond, msg) => {
 
 const browser = await chromium.launch({ args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream'] });
 const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 1, hasTouch: true, isMobile: true });
-await ctx.grantPermissions(['camera'], { origin: BASE });
+await ctx.grantPermissions(['camera', 'clipboard-read', 'clipboard-write'], { origin: BASE });
 await ctx.addInitScript(() => {
   window.__TEST__ = true;
   const md = navigator.mediaDevices;
@@ -89,10 +89,13 @@ await page.getByRole('button', { name: 'Take photo' }).click();
 await page.locator('.sheet').waitFor();
 check(await page.getByRole('button', { name: 'Save to Photos' }).isVisible(), 'live shot offers Save to Photos');
 check(await page.locator('.shot-live').isVisible(), 'live score is attached to the shot');
-await page.getByRole('button', { name: 'Get critique' }).click();
+check((await page.getByRole('radio', { name: /Cheap/ }).getAttribute('aria-checked')) === 'true', 'Cheap is the default critic');
+await page.getByRole('radio', { name: /Best/ }).click();
+check((await page.getByRole('button', { name: /Get critique/ }).textContent()).includes('3–4¢'), 'button shows the Best estimate');
+await page.getByRole('button', { name: /Get critique/ }).click();
 await page.locator('.crit').waitFor();
 check(await page.locator('.edit-tips').isVisible(), 'critique shows editing tips');
-check((await page.locator('.crit-foot').textContent()).includes('Demo'), 'demo critique is labeled free');
+check((await page.locator('.crit-foot').textContent()).includes('Demo'), 'demo critique is labeled as demo');
 await shot('2-critique');
 await page.getByRole('button', { name: 'Done' }).click();
 const live = await page.evaluate(() => window.__streams.flatMap((s) => s.getTracks()).filter((t) => t.readyState === 'live').length);
@@ -132,29 +135,63 @@ await shot('4-progress');
 
 console.log('Settings + cap');
 await tab('Settings');
-check((await page.locator('.spend-top b').textContent()).includes('0.07'), 'running cost shows two demo critiques');
+check((await page.locator('.spend-top b').textContent()).includes('0.036'), 'running cost = one Best + one Cheap demo critique');
 await shot('5-settings');
 await page.getByLabel('Monthly cap in dollars').fill('0.1');
 await page.getByLabel('Monthly cap in dollars').press('Enter');
 await page.waitForTimeout(500);
 await tab('Critique');
 await page.locator('[data-testid=file]').setInputFiles('tests/fixture.jpg');
-await page.getByRole('button', { name: 'Get critique' }).click();
+await page.getByRole('radio', { name: /Best/ }).click();
+await page.getByRole('button', { name: /Get critique/ }).click();
 await page.locator('.error-box').waitFor();
-check((await page.locator('.error-box').textContent()).includes('cap'), 'cap blocks the next critique');
-await page.getByRole('button', { name: 'Open Settings' }).click();
-check(await page.locator('h1', { hasText: 'Settings' }).isVisible(), 'cap message links to Settings');
+check((await page.locator('.error-box').textContent()).includes('cap'), 'cap blocks a Best critique');
+
+console.log('Free mode (Claude app)');
+await page.getByRole('button', { name: 'Ask in Claude app (free)' }).click();
+await page.getByRole('button', { name: 'Copy prompt' }).click();
+await page.getByRole('button', { name: 'Copied ✓' }).waitFor();
+const clip = await page.evaluate(() => navigator.clipboard.readText());
+check(clip.includes('DARKROOM-DATA') && clip.includes('candid'), 'prompt copied to the clipboard');
+await page.getByRole('button', { name: 'Share photo' }).click();
+await page.waitForTimeout(300);
+await page.getByLabel("Claude's reply").fill('Nice moment.');
+await page.getByRole('button', { name: 'Save critique' }).click();
+check((await page.locator('.steps .error-text').textContent()).includes('DARKROOM-DATA'), 'a reply without data explains what to copy');
+const reply = 'Score: 7.5/10. Love the light.\n\nDARKROOM-DATA\n' + JSON.stringify({
+  score: 7.5, headline: 'Warm light, strong moment', scene: 'friends',
+  subscores: { composition: 7, light: 8, moment: 8, technical: 7 },
+  what_works: ['The window light'], fix: ['Trim the empty left side'], angles: ['Crouch a little'],
+  editing: { crop: '4:5', exposure: 'Leave it', color: 'Warmth -5' }, tags: ['placement'], next_shot: 'Get closer',
+});
+await page.evaluate((t) => navigator.clipboard.writeText(t), reply);
+await page.getByLabel("Claude's reply").fill('');
+await page.getByRole('button', { name: 'Paste Claude’s reply' }).click();
+await page.locator('.crit').waitFor();
+check((await page.locator('.crit-score b').textContent()) === '7.5', 'pasted Claude reply becomes a saved critique');
+check((await page.locator('.crit-foot').textContent()).includes('free'), 'labeled as free (Claude app)');
+await shot('6-free-mode');
+await page.getByRole('button', { name: 'Done' }).click();
+await tab('Settings');
+check((await page.locator('.spend-top b').textContent()).includes('0.036'), 'free critique adds nothing to spending');
 
 await page.getByLabel('Monthly cap in dollars').fill('5');
 await page.getByLabel('Monthly cap in dollars').press('Enter');
 await page.locator('.setting', { hasText: 'Editing tips' }).locator('input').uncheck();
 await tab('Critique');
 await page.locator('[data-testid=file]').setInputFiles('tests/fixture.jpg');
-await page.getByRole('button', { name: 'Get critique' }).click();
+await page.getByRole('button', { name: /Get critique/ }).click();
 await page.locator('.crit').waitFor();
 check(!(await page.locator('.edit-tips').isVisible()), 'editing tips hidden when turned off');
 await page.getByRole('button', { name: 'Done' }).click();
 
+await tab('Settings');
+await page.getByRole('radiogroup', { name: 'Critique with' }).getByRole('radio', { name: /Free/ }).click();
+await tab('Critique');
+await page.locator('[data-testid=file]').setInputFiles('tests/fixture.jpg');
+await page.locator('.sheet').waitFor();
+check(await page.getByRole('button', { name: 'Ask in my Claude app' }).isVisible(), 'Free as default → sheet offers Ask in my Claude app');
+await page.getByRole('button', { name: 'Close' }).click();
 await tab('Settings');
 await page.locator('.setting', { hasText: 'AI critique' }).locator('input').uncheck();
 check((await page.locator('nav.tabs button', { hasText: 'Critique' }).count()) === 0, 'Critique tab hides when AI critique is off');

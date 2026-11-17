@@ -19,10 +19,10 @@ npm run build && npm run e2e   # phone-width browser check
 
 ## Going live: what the owner does
 
-These steps are one-time. Steps 1 and 3 are free; step 2 costs money.
+These steps are one-time. Everything is free except step 2, which is **optional**: skip it and use Free mode (critiques through your own Claude app).
 
 1. **Supabase (free).** Say "go" and Claude creates a second free project called "Darkroom" next to "Daily". The free plan allows 2 active projects. Claude then sets up the database and the critique function.
-2. **Claude API key (paid, pay-as-you-go).**
+2. **Claude API key (optional, paid, pay-as-you-go).** Only needed for the Cheap/Better/Best critiques.
    1. Go to console.anthropic.com, then Billing, and add credits. A $5 minimum is typical.
    2. Under Limits, set a monthly spend limit, for example $10. This is a second safety net on top of the cap in the app.
    3. Create an API key.
@@ -44,9 +44,16 @@ These steps are one-time. Steps 1 and 3 are free; step 2 costs money.
 - Turn off sign-ups once the owner's user exists.
 
 ## Cost
-- Each critique uses the model named in `MODEL` in `supabase/functions/critique/index.ts`, priced at $4 per million input tokens and $20 per million output.
-- The photo goes in as a 1600px copy, about 2,500 tokens, so roughly 1¢ of input.
-- Output is about 1–2k tokens, roughly 2–4¢.
-- A typical **Quick** critique costs **about 2–4¢**. **Thorough** costs about 2×.
-- The server refuses a critique if the next one *could* push you over your monthly cap. One critique can never cost more than ~14¢ (6,000 output tokens max).
-- Supabase, Vercel and the on-device detection are free.
+You choose who critiques each photo. The default is set in Settings and you can switch per photo.
+
+| Option | How | Per critique | $5 gets you |
+|---|---|---|---|
+| Free | You ask in your own Claude app and paste the answer back | $0 | unlimited |
+| Cheap | The app asks the cheapest model | ~0.1¢ | ~5,000 |
+| Better | Mid-tier model | ~2¢ | ~250 |
+| Best | Top model | ~3–4¢ | ~125–150 |
+
+- These are estimates. The photo goes in as a 1600px copy (about 2,500 tokens).
+- **Thorough** depth makes paid critiques about 2× longer and pricier.
+- The server refuses a paid critique if that one *could* push you over your monthly cap. When Best is blocked, Cheap and Free usually still work.
+- Supabase, Vercel and the on-device camera coaching are free.

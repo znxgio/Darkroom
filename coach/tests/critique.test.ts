@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
+  chatPrompt,
+  parseChatReply,
+  REPLY_MARKER,
+  worstCaseUsd,
   cleanResult,
   costUsd,
   critiqueSchema,
@@ -82,9 +86,9 @@ describe('demo store spending cap', () => {
     const s = await repo.getSettings();
     await repo.saveSettings({ ...s, monthly_cap_usd: WORST_CASE_USD + DEMO_COST * 0.5 });
     const p = await repo.addPhoto({ source: 'import', thumb: 'x', width: 1, height: 1, exif: null, taken_at: null, live_score: null, note: null });
-    const first = await repo.critique(p.id, 'AAAA');
+    const first = await repo.critique(p.id, 'AAAA', 'best');
     expect(first.spend.spent).toBeCloseTo(DEMO_COST);
-    await expect(repo.critique(p.id, 'AAAA')).rejects.toMatchObject({ status: 402 });
+    await expect(repo.critique(p.id, 'AAAA', 'best')).rejects.toMatchObject({ status: 402 });
     expect((await repo.spend()).count_month).toBe(1);
   });
 });
@@ -137,5 +141,69 @@ describe('progress', () => {
     expect(s.best?.critiques[0].score).toBe(7);
     expect(s.streak).toBe(20);
     expect(TAG_KEYS.length).toBeGreaterThan(10);
+  });
+});
+
+describe('model tiers', () => {
+  it('worst case per critique: cheap ≪ better < best, all under 20¢', () => {
+    expect(worstCaseUsd('cheap')).toBeLessThan(0.005);
+    expect(worstCaseUsd('better')).toBeGreaterThan(worstCaseUsd('cheap'));
+    expect(worstCaseUsd('best')).toBeGreaterThan(worstCaseUsd('better'));
+    expect(worstCaseUsd('best')).toBeLessThan(0.2);
+    // typical cheap critique ≈ 0.1¢ → $5 lasts thousands
+    expect(costUsd(['claude-haiku-5-5'], 2500, 1500)).toBeLessThan(0.002);
+  });
+  it('cheap critiques still work when the month is nearly used up', async () => {
+    const mem = new Map<string, string>();
+    (globalThis as { localStorage?: unknown }).localStorage = {
+      getItem: (k: string) => mem.get(k) ?? null,
+      setItem: (k: string, v: string) => void mem.set(k, v),
+    };
+    const repo = memoryRepo({ storageKey: 't2' });
+    await repo.saveSettings({ ...(await repo.getSettings()), monthly_cap_usd: 0.05 });
+    const p = await repo.addPhoto({ source: 'import', thumb: 'x', width: 1, height: 1, exif: null, taken_at: null, live_score: null, note: null });
+    await expect(repo.critique(p.id, 'A', 'best')).rejects.toMatchObject({ status: 402 });
+    await expect(repo.critique(p.id, 'A', 'cheap')).resolves.toBeTruthy();
+  });
+});
+
+describe('free mode (your Claude app)', () => {
+  const data = {
+    score: 6.5,
+    headline: 'Great moment, crooked frame',
+    scene: 'venue',
+    subscores: { composition: 5, light: 7, moment: 8, technical: 6 },
+    what_works: ['The laugh'],
+    fix: ['Level the horizon'],
+    angles: ['Step left'],
+    editing: { crop: 'Crop 4:5', exposure: 'Leave it', color: 'Warmth −10' },
+    tags: ['horizon-tilt'],
+    next_shot: 'Use the level line',
+  };
+  it('the prompt asks for the data block and lists the tags', () => {
+    const p = chatPrompt({ editingTips: true, source: 'import', recurring: ['Headroom'] });
+    expect(p).toContain(REPLY_MARKER);
+    expect(p).toContain('horizon-tilt');
+    expect(p).toContain('"editing"');
+    expect(chatPrompt({ editingTips: false, source: 'import' })).not.toContain('"editing"');
+  });
+  it('reads the data out of a full pasted reply', () => {
+    const reply = `**Score: 6.5/10**\nWhat works: the laugh {really}.\n\n${REPLY_MARKER}\n${JSON.stringify(data)}\n`;
+    const r = parseChatReply(reply, true)!;
+    expect(r.score).toBe(6.5);
+    expect(r.tags).toEqual(['horizon-tilt']);
+    expect(r.editing?.crop).toBe('Crop 4:5');
+    expect(parseChatReply(reply, false)!.editing).toBeUndefined();
+  });
+  it('copes with a code fence, braces inside strings and curly quotes', () => {
+    const tricky = { ...data, fix: ['Cut the {bright} sign at top-left'] };
+    expect(parseChatReply('x ' + REPLY_MARKER + '\n```json\n' + JSON.stringify(tricky) + '\n```', true)!.fix[0]).toContain('{bright}');
+    const curly = (REPLY_MARKER + ' ' + JSON.stringify({ score: 7, headline: 'ok' })).replace(/"/g, '\u201c');
+    expect(parseChatReply(curly, true)?.score).toBe(7);
+  });
+  it('returns null when there is no usable data', () => {
+    expect(parseChatReply('Nice photo! 7/10', true)).toBeNull();
+    expect(parseChatReply(REPLY_MARKER + ' {"headline": "no score"}', true)).toBeNull();
+    expect(parseChatReply('', true)).toBeNull();
   });
 });

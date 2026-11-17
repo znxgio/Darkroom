@@ -7,16 +7,17 @@ import {
   cleanResult,
   costUsd,
   critiqueSchema,
+  isPaidTier,
   MAX_OUTPUT_TOKENS,
   monthStartLA,
   SYSTEM_PROMPT,
   TAGS,
+  TIERS,
+  type PaidTier,
   type Tag,
   userPrompt,
-  WORST_CASE_USD,
+  worstCaseUsd,
 } from '../_shared/critique.ts';
-
-const MODEL = 'claude-opus-5-5';
 
 const cors = {
   'Access-Control-Allow-Origin': Deno.env.get('ALLOWED_ORIGIN') ?? '*',
@@ -42,6 +43,8 @@ interface Body {
   photo_id: string;
   image: string; // base64 JPEG, no data: prefix
   media_type?: 'image/jpeg' | 'image/png' | 'image/webp';
+  /** cheap | better | best (defaults to the Settings choice) */
+  tier?: string;
 }
 
 Deno.serve(async (req) => {
@@ -80,6 +83,10 @@ Deno.serve(async (req) => {
   const cap = Number(settings?.monthly_cap_usd ?? 5);
   const editingTips = settings?.editing_tips ?? true;
   const effort = settings?.depth === 'thorough' ? 'medium' : 'low';
+  const tierKey: PaidTier = isPaidTier(body.tier) ? body.tier : isPaidTier(settings?.model_tier) ? settings.model_tier : 'cheap';
+  const tier = TIERS[tierKey];
+  const MODEL = tier.model;
+  const WORST_CASE_USD = worstCaseUsd(tierKey);
 
   const since = monthStartLA(new Date());
   const { data: spentRows, error: spendErr } = await admin
@@ -122,8 +129,8 @@ Deno.serve(async (req) => {
     response = await client.beta.messages.create({
       model: MODEL,
       max_tokens: MAX_OUTPUT_TOKENS,
-      betas: ['server-side-fallback-2026-07-01'],
-      fallbacks: 'default',
+      // If the model declines, a backup model finishes the job (not available on the cheapest tier)
+      ...(tier.fallback ? { betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default' as const } : {}),
       output_config: {
         effort,
         format: { type: 'json_schema', schema: critiqueSchema(editingTips) },
@@ -158,7 +165,7 @@ Deno.serve(async (req) => {
   }
 
   // ---- record cost first (even for refusals: they can still bill) ----
-  const models = [MODEL];
+  const models: string[] = [MODEL];
   if (response.model && response.model !== MODEL) models.push(response.model);
   const usage = response.usage;
   const inputTokens =

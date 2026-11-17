@@ -140,6 +140,7 @@ export const PRICES: Record<string, { input: number; output: number }> = {
   'claude-opus-4-8': { input: 5, output: 25 },
   'claude-sonnet-5-5': { input: 2, output: 10 },
   'claude-sonnet-5': { input: 2, output: 10 },
+  'claude-haiku-5-5': { input: 0.1, output: 0.5 },
 };
 const FALLBACK_PRICE = { input: 10, output: 50 };
 
@@ -158,9 +159,31 @@ export function costUsd(models: string[], inputTokens: number, outputTokens: num
   return (inputTokens * p.input + outputTokens * p.output) / 1_000_000;
 }
 
-/** Worst case for one critique (max_tokens of output + a big image). Used to stay under the cap. */
+/** Max output per critique (thinking included). */
 export const MAX_OUTPUT_TOKENS = 6000;
-export const WORST_CASE_USD = costUsd(['claude-opus-5-5'], 6000, MAX_OUTPUT_TOKENS);
+
+/**
+ * Which AI does the critique.
+ *  free:  you ask in your own Claude app (subscription), then paste the reply back. $0.
+ *  cheap/better/best: the app calls the API (pay as you go).
+ * `worstModels` = the model plus the fallback that may take over if it declines; the cap check
+ * prices a critique at the priciest of these.
+ */
+export const TIERS = {
+  free: { label: 'Free', sub: 'Your Claude app', estimate: '$0', model: null, fallback: false, worstModels: [] as string[] },
+  cheap: { label: 'Cheap', sub: 'Fast, basic', estimate: '~0.1¢', model: 'claude-haiku-5-5', fallback: false, worstModels: ['claude-haiku-5-5'] },
+  better: { label: 'Better', sub: 'Sharper eye', estimate: '~2¢', model: 'claude-sonnet-5-5', fallback: true, worstModels: ['claude-sonnet-5-5', 'claude-sonnet-5'] },
+  best: { label: 'Best', sub: 'Most detail', estimate: '~3–4¢', model: 'claude-opus-5-5', fallback: true, worstModels: ['claude-opus-5-5', 'claude-opus-4-8'] },
+} as const;
+export type Tier = keyof typeof TIERS;
+export type PaidTier = Exclude<Tier, 'free'>;
+export const TIER_KEYS = Object.keys(TIERS) as Tier[];
+export const isPaidTier = (t: unknown): t is PaidTier => t === 'cheap' || t === 'better' || t === 'best';
+
+/** Worst case for one critique on a tier (big image + max output). Used to stay under the cap. */
+export const worstCaseUsd = (tier: PaidTier) => costUsd([...TIERS[tier].worstModels], 6000, MAX_OUTPUT_TOKENS);
+/** Worst case on the priciest tier. */
+export const WORST_CASE_USD = worstCaseUsd('best');
 
 /** Clamp and tidy what came back, in case the model drifts. */
 export function cleanResult(raw: unknown, editingTips: boolean): CritiqueResult {
@@ -211,4 +234,85 @@ export function monthStartLA(now: Date): string {
     if (Number(dd) === 1 && Number(hh) % 24 === 0) return d.toISOString();
   }
   return new Date(Date.UTC(y, m - 1, 1, 8)).toISOString();
+}
+
+/** Marker the Claude app puts before the machine-readable part of its reply. */
+export const REPLY_MARKER = 'DARKROOM-DATA';
+
+/**
+ * Prompt for the free mode: you paste this into your Claude app together with the photo.
+ * It asks for a normal readable critique plus a data block the app can read back.
+ */
+export function chatPrompt(opts: {
+  editingTips: boolean;
+  exif?: Record<string, unknown> | null;
+  source: 'import' | 'live';
+  liveScore?: number | null;
+  note?: string | null;
+  recurring?: string[];
+}): string {
+  const fields = [
+    '"score": number 1-10',
+    '"headline": "one short sentence"',
+    `"scene": one of ${SCENES.map((x) => `"${x}"`).join(', ')}`,
+    '"subscores": {"composition": 1-10, "light": 1-10, "moment": 1-10, "technical": 1-10}',
+    '"what_works": ["..."]',
+    '"fix": ["..."]',
+    '"angles": ["..."]',
+    ...(opts.editingTips ? ['"editing": {"crop": "...", "exposure": "...", "color": "..."}'] : []),
+    `"tags": [0-3 of: ${TAG_KEYS.join(', ')}]`,
+    '"next_shot": "..."',
+  ];
+  return [
+    SYSTEM_PROMPT,
+    '',
+    userPrompt(opts),
+    '',
+    'Reply with the critique in plain words first (short sections: Score, What works, Fix, Angle & composition' +
+      (opts.editingTips ? ', Editing' : '') +
+      ', Next shot).',
+    `Then, at the very end, write a line with only ${REPLY_MARKER} and after it one JSON object (no code fence) with these fields:`,
+    '{' + fields.join(', ') + '}',
+  ].join('\n');
+}
+
+/** Reads the data block out of a pasted Claude reply. Returns null if there isn't a usable one. */
+export function parseChatReply(text: string, editingTips: boolean): CritiqueResult | null {
+  if (!text) return null;
+  const at = text.lastIndexOf(REPLY_MARKER);
+  const tail = at >= 0 ? text.slice(at + REPLY_MARKER.length) : text;
+  // the JSON object: from the first "{" to its matching "}"
+  const start = tail.indexOf('{');
+  if (start < 0) return null;
+  let depth = 0;
+  let inStr = false;
+  let esc = false;
+  for (let i = start; i < tail.length; i++) {
+    const ch = tail[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (ch === '\\') esc = true;
+      else if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"') inStr = true;
+    else if (ch === '{') depth++;
+    else if (ch === '}' && --depth === 0) {
+      const raw = tail.slice(start, i + 1);
+      let obj: unknown = null;
+      try {
+        obj = JSON.parse(raw);
+      } catch {
+        try {
+          // phones sometimes swap in curly quotes
+          obj = JSON.parse(raw.replace(/[\u201c\u201d]/g, '"'));
+        } catch {
+          return null;
+        }
+      }
+      if (typeof obj !== 'object' || obj == null || typeof (obj as { score?: unknown }).score !== 'number') return null;
+      return cleanResult(obj, editingTips);
+    }
+  }
+  return null;
 }

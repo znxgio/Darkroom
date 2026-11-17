@@ -66,3 +66,44 @@ do $$ begin
   exception when insufficient_privilege then null; end;
 end $$;
 reset role;
+
+-- ---- free mode (0002) ----
+set role authenticated;
+select set_config('test.uid', :'A', false);
+insert into photos (source, thumb) values ('import', 'data:x');
+-- a pasted Claude-app critique, $0: allowed
+insert into critiques (user_id, photo_id, model, score, result, tags, cost_usd)
+  select auth.uid(), id, 'claude-app', 7, '{}', '{}', 0 from photos limit 1;
+do $$ begin
+  begin
+    insert into critiques (user_id, photo_id, model, score, result, cost_usd)
+      select auth.uid(), id, 'claude-app', 7, '{}', 0.5 from photos limit 1;
+    raise exception 'FAIL: app saved a free critique with a cost';
+  exception when insufficient_privilege then null; end;
+  begin
+    insert into critiques (user_id, photo_id, model, score, result, cost_usd)
+      select auth.uid(), id, 'claude-opus-5-5', 9, '{}', 0 from photos limit 1;
+    raise exception 'FAIL: app saved a paid-model critique';
+  exception when insufficient_privilege then null; end;
+  begin
+    update settings set model_tier = 'gold';
+    raise exception 'FAIL: unknown tier accepted';
+  exception when check_violation then null; end;
+end $$;
+update settings set model_tier = 'free';
+-- B can't attach a free critique to A's photo, even knowing its id
+reset role;
+select set_config('test.photo', (select id::text from photos limit 1), false);
+set role authenticated;
+select set_config('test.uid', :'B', false);
+do $$ begin
+  begin
+    insert into critiques (user_id, photo_id, model, score, result, cost_usd)
+      values (auth.uid(), current_setting('test.photo')::uuid, 'claude-app', 7, '{}', 0);
+    raise exception 'FAIL: B attached a critique to A''s photo';
+  exception when insufficient_privilege then null; end;
+end $$;
+reset role;
+do $$ begin
+  if (select count(*) from critiques where photo_id in (select id from photos)) <> 1 then raise exception 'FAIL: expected exactly 1 free critique'; end if;
+end $$;

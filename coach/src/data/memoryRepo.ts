@@ -1,6 +1,6 @@
 // Demo mode: everything stays in this browser, and critiques are canned examples (free).
 // Used when no Supabase keys are set, and by the automated browser check.
-import { monthStartLA, TAG_KEYS, WORST_CASE_USD, type CritiqueResult } from '../../supabase/functions/_shared/critique';
+import { monthStartLA, TAG_KEYS, worstCaseUsd, type CritiqueResult, type PaidTier } from '../../supabase/functions/_shared/critique';
 import {
   CritiqueError,
   DEFAULT_SETTINGS,
@@ -18,8 +18,9 @@ interface Store {
   settings: Settings;
 }
 
-/** Pretend cost per demo critique, so the spending cap can be tried out. */
-export const DEMO_COST = 0.035;
+/** Pretend cost per demo critique (roughly the real per-tier cost), so the cap can be tried out. */
+export const DEMO_COSTS: Record<PaidTier, number> = { cheap: 0.001, better: 0.02, best: 0.035 };
+export const DEMO_COST = DEMO_COSTS.best;
 
 const uuid = () =>
   typeof crypto !== 'undefined' && 'randomUUID' in crypto
@@ -64,7 +65,8 @@ export function memoryRepo(opts: { storageKey?: string; now?: () => Date } = {})
     if (mem) return mem;
     try {
       const raw = localStorage.getItem(key);
-      mem = raw ? { ...empty(), ...JSON.parse(raw) } : empty();
+      const parsed = raw ? JSON.parse(raw) : null;
+      mem = parsed ? { ...empty(), ...parsed, settings: { ...DEFAULT_SETTINGS, ...parsed.settings } } : empty();
     } catch {
       mem = empty();
     }
@@ -106,12 +108,12 @@ export function memoryRepo(opts: { storageKey?: string; now?: () => Date } = {})
       st.critiques = st.critiques.filter((c) => c.photo_id !== id);
       write();
     },
-    async critique(photoId) {
+    async critique(photoId, _image, tier) {
       const st = read();
       if (!st.settings.ai_critique) throw new CritiqueError('AI critique is turned off in Settings.', 403);
       const spent = monthSpent(st);
       const cap = st.settings.monthly_cap_usd;
-      if (spent + WORST_CASE_USD > cap) {
+      if (spent + worstCaseUsd(tier) > cap) {
         throw new CritiqueError(
           `Monthly cap reached ($${spent.toFixed(2)} of $${cap.toFixed(2)}). Raise it in Settings or wait until the 1st.`,
           402,
@@ -129,12 +131,28 @@ export function memoryRepo(opts: { storageKey?: string; now?: () => Date } = {})
         score: result.score,
         result,
         tags: result.tags,
-        cost_usd: DEMO_COST,
+        cost_usd: DEMO_COSTS[tier],
       };
       st.critiques.push(c);
-      st.usage.push({ created_at, cost_usd: DEMO_COST });
+      st.usage.push({ created_at, cost_usd: DEMO_COSTS[tier] });
       write();
-      return { critique: c, spend: { spent: spent + DEMO_COST, cap } };
+      return { critique: c, spend: { spent: spent + DEMO_COSTS[tier], cap } };
+    },
+    async saveChatCritique(photoId, result) {
+      const st = read();
+      const c: Critique = {
+        id: uuid(),
+        photo_id: photoId,
+        created_at: now().toISOString(),
+        model: 'claude-app',
+        score: result.score,
+        result,
+        tags: result.tags,
+        cost_usd: 0,
+      };
+      st.critiques.push(c);
+      write();
+      return c;
     },
     async getSettings() {
       return { ...read().settings };

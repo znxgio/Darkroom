@@ -68,7 +68,7 @@ export function CritiqueView({ c, editingTips, spend }: { c: Critique; editingTi
       )}
 
       <footer className="crit-foot">
-        {c.model === 'demo' ? 'Demo critique (free)' : `Cost ${usd(c.cost_usd)}`}
+        {c.model === 'demo' ? `Demo critique (pretend ${usd(c.cost_usd)})` : c.model === 'claude-app' ? 'Via your Claude app (free)' : `Cost ${usd(c.cost_usd)}`}
         {spend ? ` · ${usd(spend.spent)} of ${usd(spend.cap)} this month` : ''}
         {' · '}
         {new Date(c.created_at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}

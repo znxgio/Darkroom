@@ -1,4 +1,4 @@
-import type { CritiqueResult } from '../../supabase/functions/_shared/critique';
+import type { CritiqueResult, PaidTier, Tier } from '../../supabase/functions/_shared/critique';
 
 export type Source = 'import' | 'live';
 
@@ -54,6 +54,8 @@ export interface Settings {
   editing_tips: boolean;
   monthly_cap_usd: number;
   depth: 'quick' | 'thorough';
+  /** who does critiques by default: your Claude app (free) or the API (cheap/better/best) */
+  model_tier: Tier;
   overlays: Overlays;
 }
 
@@ -63,6 +65,7 @@ export const DEFAULT_SETTINGS: Settings = {
   editing_tips: true,
   monthly_cap_usd: 5,
   depth: 'quick',
+  model_tier: 'cheap',
   overlays: { grid: true, level: true, center: false },
 };
 
@@ -100,7 +103,9 @@ export interface Repo {
   addPhoto(p: NewPhoto): Promise<Photo>;
   deletePhoto(id: string): Promise<void>;
   /** image: base64 JPEG (no prefix) sized for the AI. Throws CritiqueError. */
-  critique(photoId: string, image: string): Promise<{ critique: Critique; spend: { spent: number; cap: number } }>;
+  critique(photoId: string, image: string, tier: PaidTier): Promise<{ critique: Critique; spend: { spent: number; cap: number } }>;
+  /** Free mode: save a critique you got in your own Claude app ($0). */
+  saveChatCritique(photoId: string, result: CritiqueResult): Promise<Critique>;
   getSettings(): Promise<Settings>;
   saveSettings(s: Settings): Promise<void>;
   spend(): Promise<Spend>;
