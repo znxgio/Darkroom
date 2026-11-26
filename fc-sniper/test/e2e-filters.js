@@ -6,6 +6,7 @@ const path = require('path');
 
 const S = process.argv[2] || require('os').tmpdir();
 const SCRIPT = fs.readFileSync(path.join(__dirname, '..', 'fc-sniper.user.js'), 'utf8');
+const META_ENGINE = fs.readFileSync(require('path').join(__dirname, '..', 'src', 'meta-engine.js'), 'utf8');
 const results = [];
 const check = (name, ok, info = '') => results.push(`${ok ? 'PASS' : 'FAIL'}  ${name}${info ? `  — ${info}` : ''}`);
 
@@ -48,6 +49,7 @@ function installMock() {
   await p.route('http://fake.test/**', (r) => r.fulfill({ contentType: 'text/html', body: '<html><head><meta charset=utf-8></head><body style="background:#1d2b3a"></body></html>' }));
   await p.goto('http://fake.test/');
   await p.evaluate(installMock);
+  await p.addScriptTag({ content: META_ENGINE });
   await p.addScriptTag({ content: SCRIPT });
   await p.waitForSelector('#fcs');
   const log = () => p.evaluate(() => [...document.querySelectorAll('#fcs [data-r=log] div')].reverse().map((d) => d.textContent.replace(/^\d\d:\d\d:\d\d\s*/, '')));
@@ -137,6 +139,7 @@ function installMock() {
   await p.reload();
   await p.evaluate(installMock);
   await p.evaluate(() => { /* keep the restored config, not the mock's */ });
+  await p.addScriptTag({ content: META_ENGINE });
   await p.addScriptTag({ content: SCRIPT });
   await p.waitForSelector('#fcs');
   const after = await log();
