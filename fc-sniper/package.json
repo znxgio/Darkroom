@@ -4,7 +4,8 @@
   "private": true,
   "description": "Sniper, resell bot, pack opener, SBC solver and squad tools userscript for the EA SPORTS FC Ultimate Team Web App",
   "scripts": {
-    "test": "node --test test/core.test.js",
+    "test": "node --test test/core.test.js test/meta-engine.test.js",
+    "test:meta": "node --test test/meta-engine.test.js",
     "e2e": "node test/e2e.js && node test/e2e-list.js && node test/e2e-filters.js && node test/e2e-tasks.js && node test/e2e-trade.js && node test/e2e-war.js && node test/e2e-plan.js && node test/e2e-dry.js"
   }
 }
