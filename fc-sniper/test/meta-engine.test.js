@@ -9,6 +9,19 @@ const player = {
   playStyles: [{ name: 'Finesse Shot', plus: true }, 'Quick Step', 'Rapid']
 };
 
+test('legacy Darkroom player objects adapt without inventing live evidence', () => {
+  const adapted = meta.adaptPlayer({ id: 7, name: 'Legacy card', rating: 90,
+    stats: { pac: 91, sho: 88, pas: 75, dri: 89, def: 42, phy: 80 },
+    playStyles: [{ name: 'Finesse Shot', plus: true }] });
+  assert.equal(adapted.overall, 90);
+  assert.equal(adapted.attributes.pace, 91);
+  assert.equal(adapted.attributes.shooting, 88);
+  assert.equal(adapted.playStyles[0].plus, true);
+  const result = meta.evaluate(adapted, 'ST', [], { now: NOW });
+  assert.equal(result.proMetaScore, null);
+  assert.ok(result.warnings.some(x => /No current pro\\/community/.test(x)));
+});
+
 test('position groups normalize common positions', () => {
   assert.equal(meta.roleGroup('ST'), 'ST');
   assert.equal(meta.roleGroup('LW'), 'W');
