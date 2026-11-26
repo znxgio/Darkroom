@@ -186,7 +186,7 @@ test('evaluation refuses to blend different evidence metrics', () => {
 test('tactics finder ranks formations pro-first and keeps role usage distinct', () => {
   const observations = [
     { dimension: 'formation', key: '4-3-1-2', kind: 'pro', usageShare: 60, sampleSize: 30, source: 'pro-tracker', sourceReliability: 1, game: 'FC 27', patch: '1.3', platform: 'all', observedAt: new Date(NOW).toISOString(), tacticCode: 'CODE4312' },
-    { dimension: 'formation', key: '4-3-1-2', kind: 'community', usageShare: 30, sampleSize: 300, source: 'community-tracker', sourceReliability: 1, game: 'FC 27', patch: '1.3', platform: 'all', observedAt: new Date(NOW).toISOString() },
+    { dimension: 'formation', key: '4-3-1-2', kind: 'community', usageShare: 30, sampleSize: 300, source: 'community-tracker', sourceReliability: 1, game: 'FC 27', patch: '1.3', platform: 'all', observedAt: new Date(NOW).toISOString(), tacticCode: 'COMM4312', lineHeight: 60 },
     { dimension: 'formation', key: '4-2-1-3', kind: 'pro', usageShare: 40, sampleSize: 30, source: 'pro-tracker', sourceReliability: 1, game: 'FC 27', patch: '1.3', platform: 'all', observedAt: new Date(NOW).toISOString() },
     { dimension: 'formation', key: '4-2-1-3', kind: 'community', usageShare: 50, sampleSize: 300, source: 'community-tracker', sourceReliability: 1, game: 'FC 27', patch: '1.3', platform: 'all', observedAt: new Date(NOW).toISOString() },
     { dimension: 'role', key: 'Shadow Striker', position: 'CAM', focus: 'Attack', formation: '4-3-1-2', kind: 'pro', usageShare: 65, sampleSize: 30, source: 'pro-tracker', sourceReliability: 1, game: 'FC 27', patch: '1.3', platform: 'all', observedAt: new Date(NOW).toISOString() }
@@ -198,6 +198,9 @@ test('tactics finder ranks formations pro-first and keeps role usage distinct', 
   assert.equal(result.formations[0].communityUsageShare, 30);
   assert.equal(result.formations[0].metaUsageShare, 51);
   assert.equal(result.formations[0].tacticCode, 'CODE4312');
+  assert.equal(result.formations[0].proTacticCode, 'CODE4312');
+  assert.equal(result.formations[0].communityTacticCode, 'COMM4312');
+  assert.equal(result.formations[0].lineHeight, 61);
   assert.equal(result.roles[0].position, 'CAM');
   assert.equal(result.roles[0].key, 'Shadow Striker');
 });
