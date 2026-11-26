@@ -23,6 +23,10 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
+      - name: Install test dependencies
+        run: npm install --no-package-lock
+      - name: Install Chromium for Playwright
+        run: npx playwright install --with-deps chromium
       - name: Run unit tests
         run: npm test
       - name: Run mocked Web App end-to-end tests
