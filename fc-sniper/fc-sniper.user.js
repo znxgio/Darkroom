@@ -1761,7 +1761,7 @@
     };
     const out = {};
     const put = (name, value) => {
-      const key = aliases[String(name || '').replace(/[_-]/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase()];
+      const key = aliases[String(name || '').replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/[_-]/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase()];
       const n = Number(value && typeof value === 'object' ? (value.value ?? value.val ?? value.rating) : value);
       if (key && Number.isFinite(n) && n >= 1 && n <= 99) out[key] = n;
     };
