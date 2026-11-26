@@ -140,7 +140,7 @@ test('provider snapshots reject unregistered, future, stale, and duplicate data'
   assert.equal(meta.normalizeProviderSnapshot(base, {}, NOW).rejected[0].reason, 'unregistered-source');
   assert.equal(meta.normalizeProviderSnapshot({ ...base, generatedAt: new Date(NOW + 3600000).toISOString() }, registry, NOW).rejected[0].reason, 'future-snapshot');
   assert.equal(meta.normalizeProviderSnapshot({ ...base, generatedAt: new Date(NOW - 60 * 86400000).toISOString() }, registry, NOW).status, 'stale');
-  const dup = { ...base, evidence: [...base.evidence, ...base.evidence] };
+  const dup = { ...base, evidence: [...base.evidence, { ...base.evidence[0], observedAt: NOW }] };
   const normalized = meta.normalizeProviderSnapshot(dup, registry, NOW);
   assert.equal(normalized.evidence.length, 1);
   assert.equal(normalized.rejected[0].reason, 'duplicate-observation');
