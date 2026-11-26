@@ -1,6 +1,6 @@
 # Darkroom Meta Engine
 
-## Foundation milestone (0.1.0)
+## Foundation milestone (0.2.0)
 
 This is a provider-neutral, deterministic scoring core. It intentionally has **no network calls,
 credentials, EA Web App calls, browser globals, or automatic transactions**.
@@ -80,6 +80,8 @@ Each snapshot must include `sourceId`, `game`, `patch`, `platform`, `generatedAt
 - The market overlay displays the engine's player-quality estimate and confidence beside the legacy estimate.
 - This is intentionally read-only. It does not change searches, purchases, bids, listings, club state, or existing ranking decisions.
 - The existing legacy score remains active until the new engine has validated live evidence and passes side-by-side comparison.
+- Detailed attributes are extracted only when the EA object exposes explicit attribute names; undocumented numeric array positions are not guessed.
+- Imported evidence retains game, patch, platform, metric, player, and position context. Evaluation refuses to combine multiple game/patch/platform/metric contexts unless the caller selects one explicitly.
 
 ## Validation
 
