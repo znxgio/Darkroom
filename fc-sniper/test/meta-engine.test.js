@@ -163,3 +163,14 @@ test('provider snapshot validation rejects missing sample size and unsupported p
   assert.equal(normalized.evidence.length, 0);
   assert.equal(normalized.rejected.length, 2);
 });
+
+
+test('evaluation refuses to blend different evidence metrics', () => {
+  const evidence = [
+    { kind: 'pro', value: 90, source: 'pro', sourceReliability: 1, sampleSize: 10, metric: 'player-usage', observedAt: new Date(NOW).toISOString() },
+    { kind: 'community', value: 80, source: 'community', sourceReliability: 1, sampleSize: 10, metric: 'community-poll', observedAt: new Date(NOW).toISOString() }
+  ];
+  const result = meta.evaluate(player, 'ST', evidence, { now: NOW });
+  assert.equal(result.proMetaScore, null);
+  assert.ok(result.warnings.some(x => /Mixed metric evidence/.test(x)));
+});
