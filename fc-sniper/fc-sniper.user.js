@@ -2,7 +2,7 @@
 // @name         FC Sniper
 // @namespace    https://github.com/znxgio/darkroom
 // @version      2.6.0
-// @require      https://raw.githubusercontent.com/znxgio/Darkroom/f9c5179a42802469616b265b7df92011b6907de5/fc-sniper/src/meta-engine.js
+// @require      https://raw.githubusercontent.com/znxgio/Darkroom/17df0b939d2659e60bda172acd2d346ed01195f1/fc-sniper/src/meta-engine.js
 // @description  Sniper, pack opener, SBC solver and team upgrade advisor for the EA SPORTS FC Ultimate Team Web App, with built-in safety limits.
 // @match        https://www.ea.com/*ultimate-team/web-app*
 // @match        https://www.ea.com/ea-sports-fc/ultimate-team/web-app*
