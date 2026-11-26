@@ -27,7 +27,25 @@ Official references:
 
 **Decision:** Darkroom must not impersonate an approved partner, reverse-engineer partner access, collect EA credentials, or tell users that the Community API is directly available to this userscript. A user may choose to connect their EA account to an approved partner on that partner's own site; that does not grant Darkroom access to the partner's private API or stored data.
 
-### 3. FUTBIN is not an automated scraping source
+### 3. FUTWIZ is a secondary tactics and club-sync candidate
+
+FUTWIZ publishes a custom-tactics database with pro-labelled setups and also offers Squad Sync through EA's official Community API partner program. The squad-sync permission is specific to FUTWIZ's own integration and does not authorize Darkroom to call private FUTWIZ endpoints or reuse account data. The public tactics catalogue is useful for cross-checking named pro tactics, but its displayed records need patch/date validation before they can be treated as current FC 27 evidence.
+
+Public references:
+- https://www.futwiz.com/custom-tactics
+- https://www.futwiz.com/futwiz-sync
+
+**Decision:** secondary reference and prospective partner/contact only. Do not automate extraction or call undocumented endpoints without written permission or a documented feed.
+
+### 4. PaceFC is a promising pro-scene signal, not a machine feed
+
+PaceFC publishes tournament-focused pro squad and tactics observations, including named player usage and custom tactic codes. Its recent public posts are useful for identifying event-level pro evidence, but a social post or a top-eight sample is not a representative season-wide dataset. No documented API/feed or automated reuse permission was established in this review.
+
+Public reference: https://pacefc.gg/ (and its public social posts)
+
+**Decision:** use only as manually verified, event-scoped evidence until a structured feed and reuse permission are available. Preserve tournament, stage, date, player restrictions, sample size, and the original post/page URL. Never generalize a restricted tournament sample into an overall meta score.
+
+### 5. FUTBIN is not an automated scraping source
 
 FUTBIN's published Terms of Service section 13 prohibits data mining and web scraping without written permission, with a limited pricing-data exception for students and content creators who credit FUTBIN.
 
@@ -35,7 +53,7 @@ Reference: https://www.futbin.com/tos
 
 **Decision:** no FUTBIN scraper, automated page polling, or bulk extraction. Revisit only if written permission or an authorized feed is obtained, and confirm the precise scope of any exception before relying on it.
 
-### 4. FUTWIZ is an EA-approved Community API partner, not automatically a Darkroom provider
+### 6. FUTWIZ is an EA-approved Community API partner, not automatically a Darkroom provider
 
 EA names FUTWIZ as an approved partner, but that approval is for FUTWIZ's own authorized integration. It is not permission for Darkroom to call FUTWIZ private endpoints or reuse its data. No public, documented Darkroom developer feed was established during this review.
 
