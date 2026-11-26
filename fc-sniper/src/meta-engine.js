@@ -57,6 +57,28 @@
   const norm = s => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
   const dayMs = 86400000;
 
+  // Adapter for the normalized player shape already used by Darkroom's userscript.
+  // Face stats are useful quality inputs, but are not treated as live-meta evidence.
+  function adaptPlayer(player) {
+    const p = player || {};
+    const stats = p.stats || {};
+    const attributes = { ...(p.attributes || p.attrs || {}) };
+    const map = { pace: 'pac', shooting: 'sho', passing: 'pas', dribbling: 'dri', defending: 'def', physical: 'phy' };
+    for (const [target, source] of Object.entries(map)) {
+      if (attributes[target] == null && Number(stats[source]) > 0) attributes[target] = Number(stats[source]);
+    }
+    return {
+      id: p.id ?? p.defId ?? null,
+      name: p.name || null,
+      overall: Number(p.rating ?? p.overall) || 0,
+      attributes,
+      playStyles: (p.playStyles || []).map(x => typeof x === 'string' ? x : ({
+        name: x && (x.name || x.label || x.id) || '',
+        plus: !!(x && (x.plus || x.isPlus))
+      }))
+    };
+  }
+
   function roleGroup(position) {
     return ROLE_GROUP[String(position || '').toUpperCase()] || null;
   }
@@ -231,7 +253,7 @@
         warnings: p.warnings || [] })) };
   }
 
-  return Object.freeze({ VERSION, DEFAULTS, ROLE_WEIGHTS, ROLE_GROUP, roleGroup,
+  return Object.freeze({ VERSION, DEFAULTS, ROLE_WEIGHTS, ROLE_GROUP, roleGroup, adaptPlayer,
     scoreAttributes, playStyleBonus, normalizeEvidence, summarizeEvidence,
     evaluate, compareValue, snapshotMeta, decayWeight });
 });
