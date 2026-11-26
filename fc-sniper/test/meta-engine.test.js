@@ -219,3 +219,25 @@ test('tactics finder requires explicit context when patches conflict and rejects
   assert.ok(scoped.rejected.some(x => x.reason === 'stale-tactics-observation'));
   assert.ok(scoped.rejected.some(x => x.reason === 'future-tactics-observation'));
 });
+
+
+test('tactics snapshot validator assigns trusted source metadata and rejects invalid rows', () => {
+  const raw = { sourceId: 'pro-tactics', game: 'FC 27', patch: '1.3', platform: 'all',
+    generatedAt: new Date(NOW).toISOString(), tactics: [
+      { dimension: 'formation', key: '4-3-1-2', usageShare: 60, sampleSize: 30, observedAt: new Date(NOW).toISOString(), sourceReliability: 0.01 },
+      { dimension: 'role', key: 'Shadow Striker', position: 'CAM', focus: 'Attack', usageShare: 65, sampleSize: 20, observedAt: new Date(NOW).toISOString() },
+      { dimension: 'role', key: 'Unknown Role', position: '???', usageShare: 50, sampleSize: 10, observedAt: new Date(NOW).toISOString() },
+      { dimension: 'formation', key: '4-3-1-2', usageShare: 60, sampleSize: 30, observedAt: new Date(NOW).toISOString() }
+    ] };
+  const normalized = meta.normalizeTacticsSnapshot(raw, {
+    'pro-tactics': { kind: 'pro', reliability: 0.85, allowedDimensions: ['formation', 'role'] }
+  }, NOW);
+  assert.equal(normalized.status, 'ok');
+  assert.equal(normalized.observations.length, 2);
+  assert.equal(normalized.observations[0].sourceReliability, 0.85);
+  assert.equal(normalized.observations[0].kind, 'pro');
+  assert.ok(normalized.rejected.some(x => /dimension/.test(x.reason)));
+  const ranked = meta.rankTactics(normalized.observations, { now: NOW, game: 'FC 27', patch: '1.3', platform: 'all' });
+  assert.equal(ranked.formations[0].key, '4-3-1-2');
+  assert.equal(ranked.roles[0].key, 'Shadow Striker');
+});
