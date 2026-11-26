@@ -4,6 +4,7 @@ const { chromium, devices } = require('playwright');
 const fs = require('fs');
 const S = process.argv[2] || require('os').tmpdir();
 const SCRIPT = fs.readFileSync(require('path').join(__dirname, '..', 'fc-sniper.user.js'), 'utf8');
+const META_ENGINE = fs.readFileSync(require('path').join(__dirname, '..', 'src', 'meta-engine.js'), 'utf8');
 const DB = { Players: [
   { id: 231747, f: 'Kylian', l: 'Mbappé Lottin', c: 'Mbappé', r: 91 },
   { id: 239085, f: 'Erling', l: 'Haaland', r: 91 } ] };
@@ -48,6 +49,7 @@ async function page(b, mobile) {
       relistExpiredAuctions() { T.tidy++; return obs({ success: true }); },
       clearSoldItems() { T.tidy++; return obs({ success: true }); } } };
   });
+  await p.addScriptTag({ content: META_ENGINE });
   await p.addScriptTag({ content: SCRIPT });
   await p.waitForSelector('#fcs');
   return p;
