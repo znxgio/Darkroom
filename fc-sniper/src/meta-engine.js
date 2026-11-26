@@ -9,7 +9,7 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   'use strict';
 
-  const VERSION = '0.2.0';
+  const VERSION = '0.2.1';
   const DEFAULTS = Object.freeze({
     proWeight: 0.70,
     communityWeight: 0.30,
@@ -137,7 +137,7 @@
     const kind = item.kind === 'pro' || item.kind === 'community' ? item.kind : null;
     const value = Number(item.value);
     const reliability = Number(item.sourceReliability);
-    const observedAt = Date.parse(item.observedAt || '');
+    const observedAt = typeof item.observedAt === 'number' ? item.observedAt : Date.parse(item.observedAt || '');
     if (!kind || !Number.isFinite(value) || value < 0 || value > 100 ||
         !Number.isFinite(observedAt) || !Number.isFinite(reliability)) return null;
     return {
