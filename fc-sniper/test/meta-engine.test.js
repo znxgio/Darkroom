@@ -55,8 +55,8 @@ test('evidence validation rejects malformed and unsupported entries', () => {
 
 test('pro and community evidence stay separate and blend pro-first', () => {
   const evidence = [
-    { kind: 'pro', value: 95, source: 'tournament-data', sourceReliability: 1, sampleSize: 16, metric: 'selection', observedAt: new Date(NOW).toISOString() },
-    { kind: 'community', value: 60, source: 'community-poll', sourceReliability: 1, sampleSize: 100, metric: 'usage', observedAt: new Date(NOW).toISOString() }
+    { kind: 'pro', value: 95, source: 'tournament-data', sourceReliability: 1, sampleSize: 16, metric: 'meta-index', observedAt: new Date(NOW).toISOString() },
+    { kind: 'community', value: 60, source: 'community-poll', sourceReliability: 1, sampleSize: 100, metric: 'meta-index', observedAt: new Date(NOW).toISOString() }
   ];
   const result = meta.evaluate(player, 'ST', evidence, { now: NOW });
   assert.equal(result.proMetaScore, 95);
@@ -137,4 +137,29 @@ test('provider snapshots reject unregistered, future, stale, and duplicate data'
   const normalized = meta.normalizeProviderSnapshot(dup, registry, NOW);
   assert.equal(normalized.evidence.length, 1);
   assert.equal(normalized.rejected[0].reason, 'duplicate-observation');
+});
+
+
+test('evaluation refuses to blend evidence across patches without explicit context', () => {
+  const mixedPatch = [
+    { kind: 'pro', value: 90, source: 'pro', sourceReliability: 1, sampleSize: 10, metric: 'meta-index', game: 'FC 27', patch: '1.2', platform: 'PS5', observedAt: new Date(NOW).toISOString() },
+    { kind: 'community', value: 80, source: 'community', sourceReliability: 1, sampleSize: 10, metric: 'meta-index', game: 'FC 27', patch: '1.3', platform: 'PS5', observedAt: new Date(NOW).toISOString() }
+  ];
+  const blocked = meta.evaluate(player, 'ST', mixedPatch, { now: NOW });
+  assert.equal(blocked.proMetaScore, null);
+  assert.ok(blocked.warnings.some(x => /Mixed patch evidence/.test(x)));
+  const selected = meta.evaluate(player, 'ST', mixedPatch, { now: NOW, game: 'FC 27', patch: '1.3', platform: 'PS5', metric: 'meta-index' });
+  assert.equal(selected.proMetaScore, null);
+  assert.equal(selected.communityMetaScore, 80);
+});
+
+test('provider snapshot validation rejects missing sample size and unsupported positions', () => {
+  const base = { sourceId: 'pro-feed', game: 'FC 27', patch: '1.3', platform: 'PS5',
+    generatedAt: new Date(NOW).toISOString(), evidence: [
+      { playerId: 1, position: 'ST', kind: 'pro', metric: 'player-usage', value: 90, observedAt: new Date(NOW).toISOString() },
+      { playerId: 2, position: '???', kind: 'pro', metric: 'player-usage', value: 90, sampleSize: 10, observedAt: new Date(NOW).toISOString() }
+    ] };
+  const normalized = meta.normalizeProviderSnapshot(base, { 'pro-feed': { kind: 'pro', reliability: 0.8, allowedMetrics: ['player-usage'] } }, NOW);
+  assert.equal(normalized.evidence.length, 0);
+  assert.equal(normalized.rejected.length, 2);
 });
