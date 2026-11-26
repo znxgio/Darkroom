@@ -437,8 +437,14 @@
       const sourceCount = new Set([...g.pro, ...g.community].map(x => x.source)).size;
       const confidence = Math.round(100 * clamp(.7 * (1 - Math.exp(-weight / DEFAULTS.minConfidenceEvidence)) +
         .3 * clamp(sourceCount / 4, 0, 1), 0, 1));
+      const proTacticCode = g.pro.find(x => x.tacticCode)?.tacticCode || null;
+      const communityTacticCode = g.community.find(x => x.tacticCode)?.tacticCode || null;
+      const proLineHeight = g.pro.find(x => x.lineHeight != null)?.lineHeight ?? null;
+      const communityLineHeight = g.community.find(x => x.lineHeight != null)?.lineHeight ?? null;
       return { dimension: g.dimension, key: g.key, position: g.position, focus: g.focus,
-        formation: g.formation, tacticCode: g.tacticCode, lineHeight: g.lineHeight,
+        formation: g.formation, tacticCode: proTacticCode || communityTacticCode,
+        proTacticCode, communityTacticCode,
+        lineHeight: proLineHeight ?? communityLineHeight, proLineHeight, communityLineHeight,
         proUsageShare: pro.usageShare, communityUsageShare: community.usageShare,
         metaUsageShare: score === null ? null : round1(score), confidence,
         pro, community, latestAt: [pro.newestAt, community.newestAt].filter(Boolean).sort().pop() || null };
