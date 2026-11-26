@@ -1,0 +1,237 @@
+/* Darkroom Meta Engine — provider-neutral scoring core.
+ * No network, browser, EA account, or storage dependencies.
+ * Input evidence is normalized by adapters before it reaches this module.
+ */
+(function (root, factory) {
+  const api = factory();
+  if (typeof module === 'object' && module.exports) module.exports = api;
+  else root.DarkroomMetaEngine = api;
+})(typeof globalThis !== 'undefined' ? globalThis : this, function () {
+  'use strict';
+
+  const VERSION = '0.1.0';
+  const DEFAULTS = Object.freeze({
+    proWeight: 0.70,
+    communityWeight: 0.30,
+    proHalfLifeDays: 45,
+    communityHalfLifeDays: 30,
+    minConfidenceEvidence: 8,
+    maxEvidenceAgeDays: 180,
+    maxPlayStyleBonus: 4,
+    overallBlend: 0.20,
+  });
+
+  // These are transparent initial priors, not claims about a live meta.
+  // They are intentionally configurable and should later be calibrated against
+  // observed competitive outcomes and user feedback.
+  const ROLE_WEIGHTS = Object.freeze({
+    ST:  { pace: .18, shooting: .34, passing: .05, dribbling: .18, defending: 0, physical: .10, acceleration: .08, finishing: .07 },
+    W:   { pace: .22, shooting: .15, passing: .10, dribbling: .25, defending: 0, physical: .06, acceleration: .12, agility: .10 },
+    CAM: { pace: .08, shooting: .13, passing: .23, dribbling: .23, defending: 0, physical: .04, vision: .12, agility: .09, ballControl: .08 },
+    CM:  { pace: .06, shooting: .04, passing: .23, dribbling: .14, defending: .10, physical: .08, vision: .10, stamina: .10, interceptions: .08, ballControl: .07 },
+    CDM: { pace: .05, shooting: 0, passing: .13, dribbling: .04, defending: .28, physical: .16, interceptions: .12, defensiveAwareness: .10, stamina: .07, strength: .05 },
+    FB:  { pace: .18, shooting: 0, passing: .08, dribbling: .06, defending: .23, physical: .10, acceleration: .10, stamina: .10, interceptions: .08, crossing: .07 },
+    CB:  { pace: .14, shooting: 0, passing: .03, dribbling: .02, defending: .34, physical: .20, defensiveAwareness: .10, strength: .08, acceleration: .05, jumping: .04 },
+    GK:  { diving: .22, handling: .18, kicking: .10, reflexes: .24, speed: .08, positioning: .18 }
+  });
+
+  const ROLE_GROUP = Object.freeze({
+    ST: 'ST', CF: 'ST', LW: 'W', RW: 'W', LM: 'W', RM: 'W',
+    CAM: 'CAM', CM: 'CM', CDM: 'CDM', RB: 'FB', LB: 'FB',
+    RWB: 'FB', LWB: 'FB', CB: 'CB', GK: 'GK'
+  });
+
+  const PLAYSTYLE_PRIORS = Object.freeze({
+    ST: ['finesse shot', 'low driven shot', 'quick step', 'rapid', 'first touch', 'precision header'],
+    W: ['rapid', 'quick step', 'technical', 'finesse shot', 'first touch', 'incisive pass', 'whipped pass'],
+    CAM: ['technical', 'incisive pass', 'finesse shot', 'first touch', 'tiki taka', 'pinged pass'],
+    CM: ['incisive pass', 'pinged pass', 'tiki taka', 'relentless', 'intercept', 'press proven'],
+    CDM: ['intercept', 'anticipate', 'bruiser', 'pinged pass', 'press proven', 'relentless'],
+    FB: ['quick step', 'intercept', 'jockey', 'relentless', 'whipped pass', 'anticipate'],
+    CB: ['anticipate', 'intercept', 'bruiser', 'jockey', 'aerial fortress', 'block'],
+    GK: ['far reach', 'footwork', 'deflector', 'rush out', 'cross claimer']
+  });
+
+  const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
+  const round1 = n => Math.round(n * 10) / 10;
+  const norm = s => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+  const dayMs = 86400000;
+
+  function roleGroup(position) {
+    return ROLE_GROUP[String(position || '').toUpperCase()] || null;
+  }
+
+  function scoreAttributes(player, position, options = {}) {
+    const group = roleGroup(position);
+    if (!group) return { score: null, coverage: 0, method: 'unsupported-position', parts: [] };
+    const weights = options.roleWeights?.[group] || ROLE_WEIGHTS[group];
+    const attrs = player?.attributes || {};
+    const keys = Object.keys(weights);
+    const present = keys.filter(k => Number.isFinite(Number(attrs[k])) && attrs[k] > 0);
+    if (!present.length) {
+      const overall = Number(player?.overall);
+      return { score: Number.isFinite(overall) && overall > 0 ? overall : null,
+        coverage: overall > 0 ? 0.15 : 0, method: overall > 0 ? 'overall-fallback' : 'no-attributes',
+        parts: overall > 0 ? [{ key: 'overall', value: overall, weight: 1 }] : [] };
+    }
+    const totalWeight = keys.reduce((s, k) => s + weights[k], 0);
+    const availableWeight = present.reduce((s, k) => s + weights[k], 0);
+    const weighted = present.reduce((s, k) => s + Number(attrs[k]) * weights[k], 0) / availableWeight;
+    const coverage = totalWeight ? availableWeight / totalWeight : 0;
+    const overall = Number(player?.overall);
+    const blend = Number.isFinite(overall) && overall > 0 ? clamp(options.overallBlend ?? DEFAULTS.overallBlend, 0, .5) : 0;
+    const raw = weighted * (1 - blend) + (blend ? overall : 0) * blend;
+    return { score: round1(raw), coverage: round1(coverage), method: 'position-attributes',
+      parts: present.map(k => ({ key: k, value: Number(attrs[k]), weight: round1(weights[k] / availableWeight) })) };
+  }
+
+  function playStyleBonus(player, position, cap = DEFAULTS.maxPlayStyleBonus) {
+    const group = roleGroup(position);
+    const priors = PLAYSTYLE_PRIORS[group] || [];
+    const styles = (player?.playStyles || []).map(x => ({
+      name: norm(typeof x === 'string' ? x : x.name),
+      plus: typeof x === 'object' && !!(x.plus || x.isPlus)
+    }));
+    let bonus = 0;
+    const hits = [];
+    priors.forEach((name, i) => {
+      const found = styles.find(s => s.name === norm(name));
+      if (!found) return;
+      const base = Math.max(.25, 1 - i * .11);
+      const value = base * (found.plus ? 1.7 : 1);
+      bonus += value;
+      hits.push({ name, plus: found.plus, value: round1(value) });
+    });
+    return { bonus: round1(Math.min(cap, bonus)), hits };
+  }
+
+  function decayWeight(ageDays, halfLifeDays) {
+    if (!Number.isFinite(ageDays) || ageDays < 0) return 0;
+    return Math.pow(.5, ageDays / Math.max(1, halfLifeDays));
+  }
+
+  function normalizeEvidence(item) {
+    if (!item || typeof item !== 'object') return null;
+    const kind = item.kind === 'pro' || item.kind === 'community' ? item.kind : null;
+    const value = Number(item.value);
+    const reliability = Number(item.sourceReliability);
+    const observedAt = Date.parse(item.observedAt || '');
+    if (!kind || !Number.isFinite(value) || value < 0 || value > 100 ||
+        !Number.isFinite(observedAt) || !Number.isFinite(reliability)) return null;
+    return {
+      kind, value, source: String(item.source || 'unknown'),
+      sourceReliability: clamp(reliability, 0, 1),
+      observedAt, sampleSize: clamp(Number(item.sampleSize) || 1, 1, 1000000),
+      metric: String(item.metric || 'rating'), context: String(item.context || ''),
+      url: item.url ? String(item.url) : null
+    };
+  }
+
+  function summarizeEvidence(rawEvidence, now, options) {
+    const normalized = (rawEvidence || []).map(normalizeEvidence).filter(Boolean);
+    const summaries = {};
+    for (const kind of ['pro', 'community']) {
+      const halfLife = kind === 'pro' ? options.proHalfLifeDays : options.communityHalfLifeDays;
+      const entries = normalized.filter(e => e.kind === kind && (now - e.observedAt) / dayMs <= options.maxEvidenceAgeDays);
+      let numerator = 0, denominator = 0, rawSamples = 0, newest = 0;
+      const sources = new Set();
+      for (const e of entries) {
+        const age = Math.max(0, (now - e.observedAt) / dayMs);
+        const sampleFactor = Math.sqrt(e.sampleSize);
+        const weight = decayWeight(age, halfLife) * e.sourceReliability * sampleFactor;
+        numerator += e.value * weight;
+        denominator += weight;
+        rawSamples += e.sampleSize;
+        newest = Math.max(newest, e.observedAt);
+        sources.add(e.source);
+      }
+      summaries[kind] = {
+        score: denominator ? round1(numerator / denominator) : null,
+        evidenceWeight: round1(denominator),
+        sampleCount: rawSamples,
+        sourceCount: sources.size,
+        newestAt: newest ? new Date(newest).toISOString() : null
+      };
+    }
+    return summaries;
+  }
+
+  function confidenceOf(summaries, attributeCoverage) {
+    const totalWeight = summaries.pro.evidenceWeight + summaries.community.evidenceWeight;
+    const sourceCount = new Set([summaries.pro.sourceCount, summaries.community.sourceCount]).size;
+    const evidenceConfidence = 1 - Math.exp(-totalWeight / DEFAULTS.minConfidenceEvidence);
+    const independentSourceCount = Math.max(summaries.pro.sourceCount, summaries.community.sourceCount);
+    const sourceConfidence = clamp(independentSourceCount / 4, 0, 1);
+    const coverage = clamp(attributeCoverage || 0, 0, 1);
+    return Math.round(100 * clamp(.55 * evidenceConfidence + .25 * sourceConfidence + .20 * coverage, 0, 1));
+  }
+
+  function evaluate(player, position, rawEvidence = [], options = {}) {
+    const opts = { ...DEFAULTS, ...options };
+    const now = Number.isFinite(options.now) ? options.now : Date.now();
+    const group = roleGroup(position);
+    if (!group) return { playerId: player?.id ?? null, position, status: 'unsupported-position', score: null, confidence: 0 };
+    const attr = scoreAttributes(player, position, opts);
+    const ps = playStyleBonus(player, position, opts.maxPlayStyleBonus);
+    const quality = attr.score === null ? null : round1(clamp(attr.score + ps.bonus, 0, 99.9));
+    const evidence = summarizeEvidence(rawEvidence, now, opts);
+    const pro = evidence.pro.score;
+    const community = evidence.community.score;
+    const wPro = clamp(opts.proWeight, 0, 1);
+    const wCommunity = clamp(opts.communityWeight, 0, 1);
+    const sum = wPro + wCommunity || 1;
+    const evidenceScore = pro === null && community === null ? null :
+      (pro === null ? community : community === null ? pro : (pro * wPro + community * wCommunity) / sum);
+    // Competitive evidence is primary; player attributes remain a useful anchor,
+    // but never masquerade as evidence of live competitive usage.
+    const score = evidenceScore === null ? quality :
+      quality === null ? evidenceScore : round1(clamp(evidenceScore * .75 + quality * .25, 0, 100));
+    const confidence = confidenceOf(evidence, attr.coverage);
+    const newest = [evidence.pro.newestAt, evidence.community.newestAt].filter(Boolean).sort().pop() || null;
+    return {
+      engineVersion: VERSION, playerId: player?.id ?? null, playerName: player?.name || null,
+      position, roleGroup: group, status: score === null ? 'insufficient-data' : 'scored',
+      score: score === null ? null : round1(clamp(score, 0, 100)),
+      proMetaScore: pro, communityMetaScore: community,
+      playerQualityScore: quality, roleFitScore: attr.score,
+      playStyleBonus: ps.bonus, relevantPlayStyles: ps.hits,
+      confidence, evidence, latestEvidenceAt: newest,
+      evidenceFreshness: newest ? round1(Math.max(0, (now - Date.parse(newest)) / dayMs)) : null,
+      breakdown: { attributeMethod: attr.method, attributeCoverage: attr.coverage, attributeParts: attr.parts,
+        proWeight: opts.proWeight, communityWeight: opts.communityWeight,
+        evidenceShare: evidenceScore === null ? 0 : .75, qualityShare: evidenceScore === null ? 1 : .25 },
+      warnings: [
+        ...(evidenceScore === null ? ['No current pro/community evidence; score is a player-quality estimate, not a live-meta verdict.'] : []),
+        ...(attr.coverage < .5 ? ['Limited position-specific attribute coverage.'] : []),
+        ...(confidence < 40 ? ['Low confidence: treat this ranking as provisional.'] : [])
+      ]
+    };
+  }
+
+  function compareValue(candidate, target) {
+    const a = Number(candidate?.score), b = Number(target?.score);
+    const pa = Number(candidate?.price), pb = Number(target?.price);
+    if (![a, b, pa, pb].every(Number.isFinite) || pa <= 0 || pb <= 0)
+      return { comparable: false, reason: 'Missing score or valid market price.' };
+    const scoreGap = round1(a - b);
+    return { comparable: true, scoreGap, priceDifference: pb - pa,
+      savings: Math.max(0, pb - pa), scorePer100k: round1(a / pa * 100000),
+      valuePer100k: round1(b / pb * 100000),
+      similarPerformance: Math.abs(scoreGap) <= 3 };
+  }
+
+  function snapshotMeta({ game, platform, generatedAt = new Date().toISOString(), sourceStatuses = [], players = [] }) {
+    return { schemaVersion: 1, engineVersion: VERSION, game: String(game || ''),
+      platform: String(platform || 'all'), generatedAt,
+      sourceStatuses: sourceStatuses.map(s => ({ id: String(s.id), status: String(s.status),
+        updatedAt: s.updatedAt || null, detail: s.detail || null })),
+      players: players.map(p => ({ playerId: p.playerId, position: p.position,
+        score: p.score, confidence: p.confidence, proMetaScore: p.proMetaScore,
+        communityMetaScore: p.communityMetaScore, latestEvidenceAt: p.latestEvidenceAt,
+        warnings: p.warnings || [] })) };
+  }
+
+  return Object.freeze({ VERSION, DEFAULTS, ROLE_WEIGHTS, ROLE_GROUP, roleGroup,
+    scoreAttributes, playStyleBonus, normalizeEvidence, summarizeEvidence,
+    evaluate, compareValue, snapshotMeta, decayWeight });
+});
