@@ -1741,6 +1741,40 @@
     };
   }
 
+  // Extract only explicitly named numeric attributes. We intentionally do not guess
+  // the meaning of undocumented numeric array positions beyond the six face stats.
+  function readDetailedAttributes(raw) {
+    const aliases = {
+      pac: 'pace', pace: 'pace', acceleration: 'acceleration', sprint speed: 'sprintSpeed',
+      sho: 'shooting', shooting: 'shooting', finishing: 'finishing', shot power: 'shotPower',
+      long shots: 'longShots', volleys: 'volleys', penalties: 'penalties',
+      pas: 'passing', passing: 'passing', vision: 'vision', crossing: 'crossing',
+      free kick accuracy: 'freeKickAccuracy', short passing: 'shortPassing',
+      long passing: 'longPassing', curve: 'curve',
+      dri: 'dribbling', dribbling: 'dribbling', agility: 'agility', balance: 'balance',
+      reactions: 'reactions', ball control: 'ballControl', composure: 'composure',
+      def: 'defending', defending: 'defending', interceptions: 'interceptions',
+      heading accuracy: 'headingAccuracy', defensive awareness: 'defensiveAwareness',
+      standing tackle: 'standingTackle', sliding tackle: 'slidingTackle',
+      phy: 'physical', physical: 'physical', jumping: 'jumping', stamina: 'stamina',
+      strength: 'strength', aggression: 'aggression'
+    };
+    const out = {};
+    const put = (name, value) => {
+      const key = aliases[String(name || '').replace(/[_-]/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase()];
+      const n = Number(value && typeof value === 'object' ? (value.value ?? value.val ?? value.rating) : value);
+      if (key && Number.isFinite(n) && n >= 1 && n <= 99) out[key] = n;
+    };
+    if (Array.isArray(raw)) {
+      for (const entry of raw) if (entry && typeof entry === 'object') {
+        put(entry.name ?? entry.label ?? entry.attributeName ?? entry.typeName ?? entry.key, entry);
+      }
+    } else if (raw && typeof raw === 'object') {
+      for (const [key, value] of Object.entries(raw)) put(key, value);
+    }
+    return Object.keys(out).length ? out : null;
+  }
+
   /**
    * Face stats, skill moves and weak foot from a Web App item, whatever the
    * field names are in this version. Returns { stats|null, skillMoves, weakFoot }.
@@ -1748,7 +1782,8 @@
   function readStats(item) {
     const raw = item.attributes ?? item._attributes ?? item.attributeArray ?? (item._staticData && item._staticData.attributes);
     let stats = null;
-    if (Array.isArray(raw) && raw.length >= 6) {
+    const attributes = readDetailedAttributes(raw);
+    if (Array.isArray(raw) && raw.length >= 6 && raw.slice(0, 6).every((a) => typeof a === 'number' || (a && typeof a === 'object' && !a.name && !a.label && !a.attributeName && !a.typeName))) {
       const v = raw.slice(0, 6).map((a) => (typeof a === 'number' ? a : Number(a && (a.value ?? a.val ?? a.rating)) || 0));
       if (v.some((x) => x > 0)) stats = { pac: v[0], sho: v[1], pas: v[2], dri: v[3], def: v[4], phy: v[5] };
     }
@@ -1756,6 +1791,7 @@
     const ps = readPlayStyles(item);
     return {
       stats,
+      attributes,
       skillMoves: num(item.skillMoves, item._skillMoves, item.skillmoves),
       weakFoot: num(item.weakFoot, item._weakFoot, item.weakFootAbilityTypeCode, item.weakfoot),
       playStyles: ps.styles, // [{ id, name, plus }] — best guess at EA's field names until the probe confirms them
