@@ -9,7 +9,7 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   'use strict';
 
-  const VERSION = '0.1.0';
+  const VERSION = '0.2.0';
   const DEFAULTS = Object.freeze({
     proWeight: 0.70,
     communityWeight: 0.30,
