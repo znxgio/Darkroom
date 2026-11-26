@@ -89,7 +89,7 @@
     const weights = options.roleWeights?.[group] || ROLE_WEIGHTS[group];
     const attrs = player?.attributes || {};
     const keys = Object.keys(weights);
-    const present = keys.filter(k => Number.isFinite(Number(attrs[k])) && attrs[k] > 0);
+    const present = keys.filter(k => weights[k] > 0 && Number.isFinite(Number(attrs[k])) && attrs[k] > 0);
     if (!present.length) {
       const overall = Number(player?.overall);
       return { score: Number.isFinite(overall) && overall > 0 ? overall : null,
