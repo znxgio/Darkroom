@@ -77,7 +77,8 @@ Each snapshot must include `sourceId`, `game`, `patch`, `platform`, `generatedAt
 
 - The userscript loads the engine through a commit-pinned Tampermonkey `@require` dependency.
 - Existing EA player objects are adapted from Darkroom's normalized face stats and PlayStyles.
-- The market overlay displays the engine's player-quality estimate and confidence beside the legacy estimate.
+- The market overlay scores distinct players in each hand-viewed search result and displays their position-specific quality estimate and confidence beside the legacy price summary. It also flags cheaper, similar-fit cards within those results; these are provisional quality comparisons, not live-meta recommendations.
+- The Squad tab has an explicit, read-only action to score every club card by its best available position. It reads club/storage only and makes no market searches.
 - This is intentionally read-only. It does not change searches, purchases, bids, listings, club state, or existing ranking decisions.
 - The existing legacy score remains active until the new engine has validated live evidence and passes side-by-side comparison.
 - Detailed attributes are extracted only when the EA object exposes explicit attribute names; undocumented numeric array positions are not guessed.
