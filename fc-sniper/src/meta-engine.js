@@ -9,7 +9,7 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   'use strict';
 
-  const VERSION = '0.2.1';
+  const VERSION = '0.3.0';
   const DEFAULTS = Object.freeze({
     proWeight: 0.70,
     communityWeight: 0.30,
@@ -312,6 +312,53 @@
       platform: String(raw.platform), generatedAt: new Date(generatedAt).toISOString(), evidence, rejected };
   }
 
+  // Validates tactics distributions against the same trusted local source registry.
+  function normalizeTacticsSnapshot(raw, sourceRegistry, now = Date.now(), options = {}) {
+    const rejected = [];
+    const reject = (reason, item = null) => rejected.push({ reason, key: item?.key || item?.formation || null });
+    if (!raw || typeof raw !== 'object') return { status: 'rejected', observations: [], rejected: [{ reason: 'invalid-snapshot', key: null }] };
+    const sourceId = String(raw.sourceId || '');
+    const registry = Array.isArray(sourceRegistry)
+      ? sourceRegistry.find(x => x && x.id === sourceId)
+      : sourceRegistry?.[sourceId];
+    if (!registry || registry.enabled === false) return { status: 'rejected', observations: [], rejected: [{ reason: 'unregistered-source', key: null }] };
+    const generatedAt = Date.parse(raw.generatedAt || '');
+    if (!raw.game || !raw.patch || !raw.platform || !Number.isFinite(generatedAt)) {
+      return { status: 'rejected', observations: [], rejected: [{ reason: 'missing-snapshot-context', key: null }] };
+    }
+    const maxAgeDays = Number(options.maxSnapshotAgeDays ?? registry.maxAgeDays ?? 45);
+    const snapshotAge = (now - generatedAt) / dayMs;
+    if (snapshotAge < -5 / 1440) return { status: 'rejected', observations: [], rejected: [{ reason: 'future-snapshot', key: null }] };
+    if (snapshotAge > maxAgeDays) return { status: 'stale', observations: [], rejected: [{ reason: 'stale-snapshot', key: null }] };
+    const allowed = Array.isArray(registry.allowedDimensions) ? registry.allowedDimensions : null;
+    const seen = new Set();
+    const observations = [];
+    for (const item of Array.isArray(raw.tactics) ? raw.tactics : []) {
+      const dimension = String(item?.dimension || '');
+      const key = String(item?.key || item?.formation || item?.role || '').trim();
+      const position = item?.position ? String(item.position).toUpperCase() : null;
+      const usageShare = Number(item?.usageShare);
+      const sampleSize = Number(item?.sampleSize);
+      const observedAt = typeof item?.observedAt === 'number' ? item.observedAt : Date.parse(item?.observedAt || '');
+      if (!['formation', 'role', 'buildUp', 'defensiveLine'].includes(dimension) ||
+          (allowed && !allowed.includes(dimension)) || !key ||
+          (dimension === 'role' && !roleGroup(position))) { reject('invalid-or-disallowed-tactics-dimension', item); continue; }
+      if (!Number.isFinite(usageShare) || usageShare < 0 || usageShare > 100 ||
+          !Number.isFinite(sampleSize) || sampleSize < 1 || !Number.isFinite(observedAt) ||
+          observedAt > now + 5 * 60000) { reject('invalid-tactics-value-or-time', item); continue; }
+      if ((now - observedAt) / dayMs > Number(registry.maxAgeDays ?? maxAgeDays)) { reject('stale-tactics-observation', item); continue; }
+      const duplicateKey = [dimension, key, position || '', item.focus || '', item.formation || '', observedAt].join('|');
+      if (seen.has(duplicateKey)) { reject('duplicate-tactics-observation', item); continue; }
+      seen.add(duplicateKey);
+      observations.push({ ...item, dimension, key, position, usageShare, sampleSize, observedAt,
+        kind: registry.kind, source: sourceId, sourceReliability: Number(registry.reliability),
+        game: String(raw.game), patch: String(raw.patch), platform: String(raw.platform) });
+    }
+    return { status: observations.length ? 'ok' : 'empty', sourceId, game: String(raw.game),
+      patch: String(raw.patch), platform: String(raw.platform),
+      generatedAt: new Date(generatedAt).toISOString(), observations, rejected };
+  }
+
   // Ranks normalized formation/role/tactic usage observations without mixing
   // pro and community samples or incompatible game/patch/platform contexts.
   function rankTactics(rawObservations, options = {}) {
@@ -415,5 +462,5 @@
 
   return Object.freeze({ VERSION, DEFAULTS, ROLE_WEIGHTS, ROLE_GROUP, roleGroup, adaptPlayer,
     scoreAttributes, playStyleBonus, normalizeEvidence, summarizeEvidence,
-    evaluate, compareValue, normalizeProviderSnapshot, rankTactics, snapshotMeta, decayWeight });
+    evaluate, compareValue, normalizeProviderSnapshot, normalizeTacticsSnapshot, rankTactics, snapshotMeta, decayWeight });
 });
