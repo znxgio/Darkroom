@@ -1745,17 +1745,17 @@
   // the meaning of undocumented numeric array positions beyond the six face stats.
   function readDetailedAttributes(raw) {
     const aliases = {
-      pac: 'pace', pace: 'pace', acceleration: 'acceleration', sprint speed: 'sprintSpeed',
-      sho: 'shooting', shooting: 'shooting', finishing: 'finishing', shot power: 'shotPower',
+      pac: 'pace', pace: 'pace', acceleration: 'acceleration', 'sprint speed': 'sprintSpeed',
+      sho: 'shooting', shooting: 'shooting', finishing: 'finishing', 'shot power': 'shotPower',
       'long shots': 'longShots', volleys: 'volleys', penalties: 'penalties',
       pas: 'passing', passing: 'passing', vision: 'vision', crossing: 'crossing',
-      'free kick accuracy': 'freeKickAccuracy', short passing: 'shortPassing',
+      'free kick accuracy': 'freeKickAccuracy', 'short passing': 'shortPassing',
       'long passing': 'longPassing', curve: 'curve',
       dri: 'dribbling', dribbling: 'dribbling', agility: 'agility', balance: 'balance',
-      reactions: 'reactions', ball control: 'ballControl', composure: 'composure',
+      reactions: 'reactions', 'ball control': 'ballControl', composure: 'composure',
       def: 'defending', defending: 'defending', interceptions: 'interceptions',
-      'heading accuracy': 'headingAccuracy', defensive awareness: 'defensiveAwareness',
-      'standing tackle': 'standingTackle', sliding tackle: 'slidingTackle',
+      'heading accuracy': 'headingAccuracy', 'defensive awareness': 'defensiveAwareness',
+      'standing tackle': 'standingTackle', 'sliding tackle': 'slidingTackle',
       phy: 'physical', physical: 'physical', jumping: 'jumping', stamina: 'stamina',
       strength: 'strength', aggression: 'aggression'
     };
