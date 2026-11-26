@@ -3618,6 +3618,29 @@
         ? `<div><b>Players in these results · quality estimate only</b><small>${marketQualityRows.slice(0, 5).map(x =>
           `${esc(x.player.name)} ${x.player.rating || ''} · ${esc(x.position)} ${Math.round(x.quality.playerQualityScore)}/100 · ${x.quality.confidence}% · ${x.player.price ? fmt(x.player.price) + ' coins' : 'auction'}`).join('<br>')}</small></div>`
         : '';
+      const valuePairs = [];
+      const valueLib = typeof globalThis !== 'undefined' ? globalThis.DarkroomMetaEngine : null;
+      if (valueLib && typeof valueLib.compareValue === 'function') {
+        const priced = marketQualityRows.filter(x => x.player.price > 0);
+        for (const target of priced.slice().sort((a, b) => b.player.price - a.player.price).slice(0, 5)) {
+          const alternatives = priced.filter(x => x.position === target.position && x.player.id !== target.player.id && x.player.price < target.player.price)
+            .map(candidate => ({ candidate, comparison: valueLib.compareValue(
+              { score: candidate.quality.playerQualityScore, price: candidate.player.price },
+              { score: target.quality.playerQualityScore, price: target.player.price }
+            ) }))
+            .filter(x => x.comparison.comparable && x.comparison.similarPerformance && x.comparison.scoreGap >= -3)
+            .sort((a, b) => b.comparison.savings - a.comparison.savings);
+          if (alternatives.length) {
+            const bestAlt = alternatives[0];
+            valuePairs.push({ target, ...bestAlt });
+          }
+          if (valuePairs.length >= 3) break;
+        }
+      }
+      const valueHtml = valuePairs.length
+        ? `<div><b>Cheaper similar-fit options · provisional</b><small>${valuePairs.map(x =>
+          `${esc(x.candidate.player.name)} ${Math.round(x.candidate.quality.playerQualityScore)} vs ${esc(x.target.player.name)} ${Math.round(x.target.quality.playerQualityScore)} · save ${fmt(x.comparison.savings)} coins · ${x.comparison.scoreGap > 0 ? '+' : ''}${x.comparison.scoreGap} score`).join('<br>')}</small></div>`
+        : '';
       let el = document.getElementById('fcs-ovl');
       if (!el) {
         el = document.createElement('div'); el.id = 'fcs-ovl'; el.setAttribute('role', 'status');
@@ -3632,7 +3655,7 @@
       el.innerHTML = `<button data-x aria-label="Dismiss">×</button><b>🔎 ${esc(v.name)}${v.rating ? ` ${v.rating}` : ''}</b>`
         + `<div>${v.cheapest ? `cheapest Buy Now <b>${fmt(v.cheapest)}</b>` : 'cheapest Buy Now: none'} · ${verdict}</div>`
         + `<small>${hist}${v.bestPos ? ` · existing meta estimate ${v.meta} as ${esc(v.bestPos)}` : ''}${qualityText}</small>`
-        + marketQualityHtml;
+        + marketQualityHtml + valueHtml;
       el.classList.add('show');
       clearTimeout(this.timer);
       this.timer = setTimeout(() => el.classList.remove('show'), 12000);
