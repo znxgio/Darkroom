@@ -7340,7 +7340,7 @@
           case 'setup-fix': {
             const it = (this.setupItems || [])[Number(btn.dataset.i)];
             if (!it || !it.fix || engine.running || plan.active || jobs.current) { if (it && it.fix) this.log('Stop the bot / plan first, then tap the fix', 'warn'); return; }
-            if (it.fix.type === 'update') { w.open('https://raw.githubusercontent.com/znxgio/Darkroom/claude/ea-fc-sniping-bot-jdz6vq/fc-sniper/fc-sniper.user.js', '_blank'); return; }
+            if (it.fix.type === 'update') { w.open('https://raw.githubusercontent.com/znxgio/Darkroom/meta-engine/foundation/fc-sniper/fc-sniper.user.js', '_blank'); return; }
             if (it.fix.type === 'keep') engine.cfg.minCoins = it.fix.value;
             if (it.fix.type === 'bid') engine.cfg.bidSnipe = true;
             engine.save(); this.syncForm(); this.renderSetup();
@@ -8169,7 +8169,7 @@
       const cfg = engine.cfg;
       if (this.latest === undefined && !this.latestAsked) {
         this.latestAsked = true;
-        fetch(`https://raw.githubusercontent.com/znxgio/Darkroom/claude/ea-fc-sniping-bot-jdz6vq/fc-sniper/fc-sniper.user.js?t=${Date.now()}`, { cache: 'no-store', credentials: 'omit' })
+        fetch(`https://raw.githubusercontent.com/znxgio/Darkroom/meta-engine/foundation/fc-sniper/fc-sniper.user.js?t=${Date.now()}`, { cache: 'no-store', credentials: 'omit' })
           .then((r) => (r.ok ? r.text() : '')).then((t) => { const m = t.match(/@version\s+([\d.]+)/); this.latest = m ? m[1] : null; this.renderSetup(); })
           .catch(() => { this.latest = null; this.renderSetup(); });
       }
