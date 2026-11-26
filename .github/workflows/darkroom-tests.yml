@@ -1,18 +1,20 @@
 name: Darkroom tests
 
 on:
-  push:
-    branches:
-      - meta-engine/**
   pull_request:
     branches:
       - claude/ea-fc-sniping-bot-jdz6vq
       - main
   workflow_dispatch:
 
+concurrency:
+  group: darkroom-tests-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: fc-sniper
