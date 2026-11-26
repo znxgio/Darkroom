@@ -14,7 +14,7 @@ function installMock() {
   const obs = (res, ms = 5) => ({ observe(ctx, cb) { setTimeout(() => cb({ unobserve() {} }, res), ms); } });
   window.ItemPile = { CLUB: 1, PURCHASED: 3, TRANSFER: 5, STORAGE: 6 };
   window.UTSearchCriteriaDTO = function () {};
-  window.F = { coins: 100000, searches: [], bought: [] };
+  window.F = { coins: 100000, searches: [], bought: [], noHits: false };
   let tid = 1;
   const card = (rating, price, league = 13) => ({ id: tid, definitionId: 7000 + rating, rating, leagueId: league, _staticData: { name: `Gold ${rating}` },
     _auction: { tradeId: tid++, buyNowPrice: price } });
@@ -24,7 +24,7 @@ function installMock() {
       clearTransferMarketCache() {},
       searchTransferMarket(c) {
         F.searches.push({ level: c.level, rarities: c.rarities, league: c.league, pos: c._position, maxBuy: c.maxBuy, masked: c.maskedDefId });
-        const items = [card(83, 2000), card(85, 6000), card(87, 9000)].filter((x) => !c.maxBuy || x._auction.buyNowPrice <= c.maxBuy);
+        const items = (F.noHits ? [] : [card(83, 2000), card(85, 6000), card(87, 9000)]).filter((x) => !c.maxBuy || x._auction.buyNowPrice <= c.maxBuy);
         return obs({ success: true, data: { items } });
       },
       bid(item, price) { F.bought.push({ r: item.rating, price }); F.coins -= price; return obs({ success: true }); },
@@ -82,6 +82,10 @@ function installMock() {
   check('switched-off filter is not searched', !f.searches.some((x) => x.league === 53));
   check('snipe by rating: only the 85 is bought (not 83 or 87)', f.bought.length === 1 && f.bought[0].r === 85, JSON.stringify(f.bought));
   check('filter stays after a buy (not ticked off)', /Gold · Rare/.test(await p.textContent('#fcs [data-r=filters]')));
+  // Let the first one-buy session finish, then make the lock-guard check deterministic:
+  // an empty market prevents a fresh purchase toast from masking the lock explanation.
+  await p.waitForFunction(() => !document.querySelector('#fcs [data-a=toggle]').classList.contains('on'), null, { timeout: 30000 });
+  await p.evaluate(() => { window.F.noHits = true; });
 
   // Status strip on every tab, locked state + why-toast, no layout jump when the bot starts
   await p.click('#fcs [data-tab=settings]');
