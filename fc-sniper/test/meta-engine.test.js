@@ -185,7 +185,7 @@ test('evaluation refuses to blend different evidence metrics', () => {
 
 test('tactics finder ranks formations pro-first and keeps role usage distinct', () => {
   const observations = [
-    { dimension: 'formation', key: '4-3-1-2', kind: 'pro', usageShare: 60, sampleSize: 30, source: 'pro-tracker', sourceReliability: 1, game: 'FC 27', patch: '1.3', platform: 'all', observedAt: new Date(NOW).toISOString(), tacticCode: 'CODE4312' },
+    { dimension: 'formation', key: '4-3-1-2', kind: 'pro', usageShare: 60, sampleSize: 30, source: 'pro-tracker', sourceReliability: 1, game: 'FC 27', patch: '1.3', platform: 'all', observedAt: new Date(NOW).toISOString(), tacticCode: 'CODE4312', lineHeight: 61 },
     { dimension: 'formation', key: '4-3-1-2', kind: 'community', usageShare: 30, sampleSize: 300, source: 'community-tracker', sourceReliability: 1, game: 'FC 27', patch: '1.3', platform: 'all', observedAt: new Date(NOW).toISOString(), tacticCode: 'COMM4312', lineHeight: 60 },
     { dimension: 'formation', key: '4-2-1-3', kind: 'pro', usageShare: 40, sampleSize: 30, source: 'pro-tracker', sourceReliability: 1, game: 'FC 27', patch: '1.3', platform: 'all', observedAt: new Date(NOW).toISOString() },
     { dimension: 'formation', key: '4-2-1-3', kind: 'community', usageShare: 50, sampleSize: 300, source: 'community-tracker', sourceReliability: 1, game: 'FC 27', patch: '1.3', platform: 'all', observedAt: new Date(NOW).toISOString() },
