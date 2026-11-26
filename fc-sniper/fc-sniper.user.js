@@ -5613,7 +5613,7 @@
     summary: null,
     results: [], // [{ slotIndex, position, current, options: [...] }]
     metaRoster: null,
-    metaRosterAt: 0
+    metaRosterAt: 0,
 
     /** Read-only player quality estimates for every card in the club; no market searches. */
     async scoreClub() {
