@@ -9,7 +9,7 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   'use strict';
 
-  const VERSION = '0.3.0';
+  const VERSION = '0.3.1';
   const DEFAULTS = Object.freeze({
     proWeight: 0.70,
     communityWeight: 0.30,
@@ -185,7 +185,6 @@
 
   function confidenceOf(summaries, attributeCoverage) {
     const totalWeight = summaries.pro.evidenceWeight + summaries.community.evidenceWeight;
-    const sourceCount = new Set([summaries.pro.sourceCount, summaries.community.sourceCount]).size;
     const evidenceConfidence = 1 - Math.exp(-totalWeight / DEFAULTS.minConfidenceEvidence);
     const independentSourceCount = Math.max(summaries.pro.sourceCount, summaries.community.sourceCount);
     const sourceConfidence = clamp(independentSourceCount / 4, 0, 1);
@@ -288,7 +287,7 @@
     for (const item of Array.isArray(raw.evidence) ? raw.evidence : []) {
       const metric = String(item?.metric || '');
       const observedAt = Date.parse(item?.observedAt || '');
-      const key = [item?.playerId, item?.position, metric, item?.context || '', item?.observedAt || ''].join('|');
+      const key = [item?.playerId, item?.position, metric, item?.context || '', observedAt].join('|');
       if (!item || item.kind !== registry.kind || !['pro', 'community'].includes(item.kind)) { reject('source-kind-mismatch', item); continue; }
       if (!item.playerId || !item.position || !roleGroup(item.position) || !metric || (allowedMetrics && !allowedMetrics.includes(metric))) { reject('invalid-or-disallowed-metric-or-position', item); continue; }
       if (!Number.isFinite(Number(item.sampleSize)) || Number(item.sampleSize) < 1) { reject('invalid-sample-size', item); continue; }
