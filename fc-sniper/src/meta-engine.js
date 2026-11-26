@@ -322,6 +322,7 @@
       ? sourceRegistry.find(x => x && x.id === sourceId)
       : sourceRegistry?.[sourceId];
     if (!registry || registry.enabled === false) return { status: 'rejected', observations: [], rejected: [{ reason: 'unregistered-source', key: null }] };
+    if (!['pro', 'community'].includes(registry.kind) || !Number.isFinite(Number(registry.reliability)) || Number(registry.reliability) < 0 || Number(registry.reliability) > 1) return { status: 'rejected', observations: [], rejected: [{ reason: 'invalid-source-registry', key: null }] };
     const generatedAt = Date.parse(raw.generatedAt || '');
     if (!raw.game || !raw.patch || !raw.platform || !Number.isFinite(generatedAt)) {
       return { status: 'rejected', observations: [], rejected: [{ reason: 'missing-snapshot-context', key: null }] };
