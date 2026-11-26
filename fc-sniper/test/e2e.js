@@ -86,7 +86,9 @@ const idle = (p) => p.waitForFunction(() => !document.querySelector('#fcs [data-
   await p.waitForSelector('#fcs-ovl.show', { timeout: 3000 }).catch(() => {});
   const ovl = await p.evaluate(() => (document.getElementById('fcs-ovl') || {}).textContent || '');
   check('overlay on a user search', /cheapest Buy Now/.test(ovl) && /Mbapp/.test(ovl), ovl);
+  check('club player scores card is present and manual-only', await p.locator('#fcs [data-a=meta-club]').count() === 1 && (await p.textContent('#fcs [data-r=meta-club]')).includes('Read your club'), '');
   check('Meta Engine quality estimate is visible and caveated', ovl.includes('engine quality estimate') && ovl.includes('live evidence not connected'), ovl);
+  check('per-player market quality list is visible', ovl.includes('Players in these results') && ovl.includes('quality estimate only'), ovl);
   check('overlay colours under green (✅), over red (❌)', await p.evaluate(() => { const g = document.querySelector('#fcs-ovl b.g'); return !!g && /✅/.test(g.textContent) && getComputedStyle(g).color === 'rgb(61, 220, 132)'; }), '');
   await p.click('#fcs-ovl [data-x]');
   check('overlay dismiss', await p.evaluate(() => !document.getElementById('fcs-ovl').classList.contains('show')));
