@@ -312,6 +312,96 @@
       platform: String(raw.platform), generatedAt: new Date(generatedAt).toISOString(), evidence, rejected };
   }
 
+  // Ranks normalized formation/role/tactic usage observations without mixing
+  // pro and community samples or incompatible game/patch/platform contexts.
+  function rankTactics(rawObservations, options = {}) {
+    const now = Number.isFinite(options.now) ? options.now : Date.now();
+    const opts = { ...DEFAULTS, ...options };
+    const rejected = [];
+    const accepted = [];
+    for (const item of rawObservations || []) {
+      const dimension = String(item?.dimension || '');
+      const key = String(item?.key || item?.formation || item?.role || '').trim();
+      const position = item?.position ? String(item.position).toUpperCase() : null;
+      const usageShare = Number(item?.usageShare);
+      const sampleSize = Number(item?.sampleSize);
+      const observedAt = typeof item?.observedAt === 'number' ? item.observedAt : Date.parse(item?.observedAt || '');
+      const reliability = Number(item?.sourceReliability);
+      if (!['formation', 'role', 'buildUp', 'defensiveLine'].includes(dimension) ||
+          !key || !['pro', 'community'].includes(item?.kind) ||
+          (dimension === 'role' && !roleGroup(position)) ||
+          !Number.isFinite(usageShare) || usageShare < 0 || usageShare > 100 ||
+          !Number.isFinite(sampleSize) || sampleSize < 1 ||
+          !Number.isFinite(reliability) || reliability < 0 || reliability > 1 ||
+          !Number.isFinite(observedAt)) {
+        rejected.push({ reason: 'invalid-tactics-observation', key: key || null }); continue;
+      }
+      const age = (now - observedAt) / dayMs;
+      if (age < -5 / 1440) { rejected.push({ reason: 'future-tactics-observation', key }); continue; }
+      if (age > Number(opts.maxEvidenceAgeDays)) { rejected.push({ reason: 'stale-tactics-observation', key }); continue; }
+      accepted.push({ ...item, dimension, key, position, usageShare, sampleSize,
+        observedAt, source: String(item.source || 'unknown'), sourceReliability: reliability });
+    }
+    const contextWarnings = [];
+    const scoped = accepted.filter(item => {
+      for (const key of ['game', 'patch', 'platform']) {
+        if (options[key] != null && String(item[key] || '') !== String(options[key])) return false;
+      }
+      return true;
+    });
+    for (const key of ['game', 'patch', 'platform']) {
+      if (options[key] != null) continue;
+      const distinct = new Set(scoped.map(x => x[key]).filter(Boolean));
+      if (distinct.size > 1) contextWarnings.push('Mixed ' + key + ' tactics evidence; specify options.' + key + ' before ranking.');
+    }
+    const groups = new Map();
+    if (!contextWarnings.length) for (const item of scoped) {
+      const groupKey = [item.dimension, item.key, item.position || '', item.focus || '', item.formation || ''].join('|');
+      if (!groups.has(groupKey)) groups.set(groupKey, { dimension: item.dimension, key: item.key,
+        position: item.position, focus: item.focus || null, formation: item.formation || null,
+        tacticCode: item.tacticCode || null, lineHeight: item.lineHeight ?? null, pro: [], community: [] });
+      groups.get(groupKey)[item.kind].push(item);
+    }
+    const summarize = entries => {
+      if (!entries.length) return { usageShare: null, evidenceWeight: 0, sampleCount: 0, sourceCount: 0, newestAt: null };
+      let numerator = 0, denominator = 0, sampleCount = 0, newest = 0;
+      const sources = new Set();
+      for (const e of entries) {
+        const age = Math.max(0, (now - e.observedAt) / dayMs);
+        const halfLife = e.kind === 'pro' ? opts.proHalfLifeDays : opts.communityHalfLifeDays;
+        const weight = decayWeight(age, halfLife) * e.sourceReliability * Math.sqrt(e.sampleSize);
+        numerator += e.usageShare * weight;
+        denominator += weight;
+        sampleCount += e.sampleSize;
+        newest = Math.max(newest, e.observedAt);
+        sources.add(e.source);
+      }
+      return { usageShare: denominator ? round1(numerator / denominator) : null,
+        evidenceWeight: round1(denominator), sampleCount, sourceCount: sources.size,
+        newestAt: newest ? new Date(newest).toISOString() : null };
+    };
+    const rows = [...groups.values()].map(g => {
+      const pro = summarize(g.pro), community = summarize(g.community);
+      const wp = clamp(opts.proWeight, 0, 1), wc = clamp(opts.communityWeight, 0, 1), total = wp + wc || 1;
+      const score = pro.usageShare === null ? community.usageShare : community.usageShare === null ? pro.usageShare :
+        (pro.usageShare * wp + community.usageShare * wc) / total;
+      const weight = pro.evidenceWeight + community.evidenceWeight;
+      const sourceCount = new Set([...g.pro, ...g.community].map(x => x.source)).size;
+      const confidence = Math.round(100 * clamp(.7 * (1 - Math.exp(-weight / DEFAULTS.minConfidenceEvidence)) +
+        .3 * clamp(sourceCount / 4, 0, 1), 0, 1));
+      return { dimension: g.dimension, key: g.key, position: g.position, focus: g.focus,
+        formation: g.formation, tacticCode: g.tacticCode, lineHeight: g.lineHeight,
+        proUsageShare: pro.usageShare, communityUsageShare: community.usageShare,
+        metaUsageShare: score === null ? null : round1(score), confidence,
+        pro, community, latestAt: [pro.newestAt, community.newestAt].filter(Boolean).sort().pop() || null };
+    }).sort((a, b) => (b.metaUsageShare ?? -1) - (a.metaUsageShare ?? -1));
+    const by = dimension => rows.filter(x => x.dimension === dimension);
+    return { status: contextWarnings.length ? 'context-required' : rows.length ? 'ok' : 'empty',
+      context: { game: options.game || null, patch: options.patch || null, platform: options.platform || null },
+      formations: by('formation'), roles: by('role'), buildUpStyles: by('buildUp'),
+      defensiveStyles: by('defensiveLine'), rejected, warnings: contextWarnings };
+  }
+
   function snapshotMeta({ game, platform, generatedAt = new Date().toISOString(), sourceStatuses = [], players = [] }) {
     return { schemaVersion: 1, engineVersion: VERSION, game: String(game || ''),
       platform: String(platform || 'all'), generatedAt,
@@ -325,5 +415,5 @@
 
   return Object.freeze({ VERSION, DEFAULTS, ROLE_WEIGHTS, ROLE_GROUP, roleGroup, adaptPlayer,
     scoreAttributes, playStyleBonus, normalizeEvidence, summarizeEvidence,
-    evaluate, compareValue, normalizeProviderSnapshot, snapshotMeta, decayWeight });
+    evaluate, compareValue, normalizeProviderSnapshot, rankTactics, snapshotMeta, decayWeight });
 });
