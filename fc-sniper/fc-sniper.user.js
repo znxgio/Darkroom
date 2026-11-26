@@ -1,15 +1,15 @@
 // ==UserScript==
 // @name         FC Sniper
 // @namespace    https://github.com/znxgio/darkroom
-// @version      2.5.7
-// @require      https://raw.githubusercontent.com/znxgio/Darkroom/a6cde66d76df79a3a5dad7fb7a60b2072c183469/fc-sniper/src/meta-engine.js
+// @version      2.5.8
+// @require      https://raw.githubusercontent.com/znxgio/Darkroom/5897018f3fd04f05bb20b09fd5f79eeef12c85e7/fc-sniper/src/meta-engine.js
 // @description  Sniper, pack opener, SBC solver and team upgrade advisor for the EA SPORTS FC Ultimate Team Web App, with built-in safety limits.
 // @match        https://www.ea.com/*ultimate-team/web-app*
 // @match        https://www.ea.com/ea-sports-fc/ultimate-team/web-app*
 // @run-at       document-idle
 // @grant        none
 // @downloadURL  https://raw.githubusercontent.com/znxgio/Darkroom/meta-engine/foundation/fc-sniper/fc-sniper.user.js
-// @updateURL    https://raw.githubusercontent.com/znxgio/Darkroom/claude/ea-fc-sniping-bot-jdz6vq/fc-sniper/fc-sniper.user.js
+// @updateURL    https://raw.githubusercontent.com/znxgio/Darkroom/meta-engine/foundation/fc-sniper/fc-sniper.user.js
 // ==/UserScript==
 
 /*
@@ -2732,7 +2732,7 @@
 
   const w = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '2.5.7';
+  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '2.5.8';
   const errText = (e) => (e && e.message ? e.message : String(e));
   const fmt = (n) => Number(n || 0).toLocaleString();
 
