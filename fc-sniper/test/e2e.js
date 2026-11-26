@@ -86,6 +86,7 @@ const idle = (p) => p.waitForFunction(() => !document.querySelector('#fcs [data-
   await p.waitForSelector('#fcs-ovl.show', { timeout: 3000 }).catch(() => {});
   const ovl = await p.evaluate(() => (document.getElementById('fcs-ovl') || {}).textContent || '');
   check('overlay on a user search', /cheapest Buy Now/.test(ovl) && /Mbapp/.test(ovl), ovl);
+  check('Meta Engine quality estimate is visible and caveated', /engine quality estimate \\d+\\/100/.test(ovl) && /live evidence not connected/.test(ovl), ovl);
   check('overlay colours under green (✅), over red (❌)', await p.evaluate(() => { const g = document.querySelector('#fcs-ovl b.g'); return !!g && /✅/.test(g.textContent) && getComputedStyle(g).color === 'rgb(61, 220, 132)'; }), '');
   await p.click('#fcs-ovl [data-x]');
   check('overlay dismiss', await p.evaluate(() => !document.getElementById('fcs-ovl').classList.contains('show')));
