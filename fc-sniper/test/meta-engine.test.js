@@ -53,6 +53,13 @@ test('evidence validation rejects malformed and unsupported entries', () => {
   assert.equal(meta.normalizeEvidence({ kind: 'pro', value: 80, observedAt: 'not a date', sourceReliability: 1 }), null);
 });
 
+test('evidence normalization is idempotent for numeric timestamps', () => {
+  const first = meta.normalizeEvidence({ kind: 'pro', value: 80, sourceReliability: 1,
+    observedAt: new Date(NOW).toISOString() });
+  const second = meta.normalizeEvidence(first);
+  assert.equal(second.observedAt, NOW);
+});
+
 test('pro and community evidence stay separate and blend pro-first', () => {
   const evidence = [
     { kind: 'pro', value: 95, source: 'tournament-data', sourceReliability: 1, sampleSize: 16, metric: 'meta-index', observedAt: new Date(NOW).toISOString() },
