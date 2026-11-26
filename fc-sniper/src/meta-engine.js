@@ -145,7 +145,12 @@
       sourceReliability: clamp(reliability, 0, 1),
       observedAt, sampleSize: clamp(Number(item.sampleSize) || 1, 1, 1000000),
       metric: String(item.metric || 'rating'), context: String(item.context || ''),
-      url: item.url ? String(item.url) : null
+      url: item.url ? String(item.url) : null,
+      game: item.game ? String(item.game) : null,
+      patch: item.patch ? String(item.patch) : null,
+      platform: item.platform ? String(item.platform) : null,
+      playerId: item.playerId == null ? null : String(item.playerId),
+      position: item.position ? String(item.position).toUpperCase() : null
     };
   }
 
@@ -196,7 +201,22 @@
     const attr = scoreAttributes(player, position, opts);
     const ps = playStyleBonus(player, position, opts.maxPlayStyleBonus);
     const quality = attr.score === null ? null : round1(clamp(attr.score + ps.bonus, 0, 99.9));
-    const evidence = summarizeEvidence(rawEvidence, now, opts);
+    const normalizedInput = (rawEvidence || []).map(normalizeEvidence).filter(Boolean);
+    const evidenceContextWarnings = [];
+    const eligibleEvidence = normalizedInput.filter(e => {
+      for (const key of ['game', 'patch', 'platform', 'metric']) {
+        const requested = options[key];
+        if (requested != null && String(e[key] || '') !== String(requested)) return false;
+      }
+      return true;
+    });
+    for (const key of ['game', 'patch', 'platform', 'metric']) {
+      if (options[key] != null) continue;
+      const distinct = new Set(eligibleEvidence.map(e => e[key]).filter(Boolean));
+      if (distinct.size > 1) evidenceContextWarnings.push('Mixed ' + key + ' evidence; specify options.' + key + ' before scoring.');
+    }
+    const evidenceInput = evidenceContextWarnings.length ? [] : eligibleEvidence;
+    const evidence = summarizeEvidence(evidenceInput, now, opts);
     const pro = evidence.pro.score;
     const community = evidence.community.score;
     const wPro = clamp(opts.proWeight, 0, 1);
@@ -217,7 +237,7 @@
       proMetaScore: pro, communityMetaScore: community,
       playerQualityScore: quality, roleFitScore: attr.score,
       playStyleBonus: ps.bonus, relevantPlayStyles: ps.hits,
-      confidence, evidence, latestEvidenceAt: newest,
+      confidence, evidence, evidenceContext: { game: options.game || null, patch: options.patch || null, platform: options.platform || null, metric: options.metric || null }, latestEvidenceAt: newest,
       evidenceFreshness: newest ? round1(Math.max(0, (now - Date.parse(newest)) / dayMs)) : null,
       breakdown: { attributeMethod: attr.method, attributeCoverage: attr.coverage, attributeParts: attr.parts,
         proWeight: opts.proWeight, communityWeight: opts.communityWeight,
@@ -225,6 +245,7 @@
       warnings: [
         ...(evidenceScore === null ? ['No current pro/community evidence; score is a player-quality estimate, not a live-meta verdict.'] : []),
         ...(attr.coverage < .5 ? ['Limited position-specific attribute coverage.'] : []),
+        ...evidenceContextWarnings,
         ...(confidence < 40 ? ['Low confidence: treat this ranking as provisional.'] : [])
       ]
     };
@@ -269,7 +290,8 @@
       const observedAt = Date.parse(item?.observedAt || '');
       const key = [item?.playerId, item?.position, metric, item?.context || '', item?.observedAt || ''].join('|');
       if (!item || item.kind !== registry.kind || !['pro', 'community'].includes(item.kind)) { reject('source-kind-mismatch', item); continue; }
-      if (!item.playerId || !item.position || !metric || (allowedMetrics && !allowedMetrics.includes(metric))) { reject('invalid-or-disallowed-metric', item); continue; }
+      if (!item.playerId || !item.position || !roleGroup(item.position) || !metric || (allowedMetrics && !allowedMetrics.includes(metric))) { reject('invalid-or-disallowed-metric-or-position', item); continue; }
+      if (!Number.isFinite(Number(item.sampleSize)) || Number(item.sampleSize) < 1) { reject('invalid-sample-size', item); continue; }
       if (!Number.isFinite(Number(item.value)) || Number(item.value) < 0 || Number(item.value) > 100 ||
           !Number.isFinite(observedAt) || observedAt > now + 5 * 60000) { reject('invalid-value-or-time', item); continue; }
       if ((now - observedAt) / dayMs > Number(registry.maxAgeDays ?? maxSnapshotAgeDays)) { reject('stale-evidence', item); continue; }
