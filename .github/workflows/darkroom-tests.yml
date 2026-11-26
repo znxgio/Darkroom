@@ -1,0 +1,29 @@
+name: Darkroom tests
+
+on:
+  push:
+    branches:
+      - meta-engine/**
+  pull_request:
+    branches:
+      - claude/ea-fc-sniping-bot-jdz6vq
+      - main
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: fc-sniper
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Run unit tests
+        run: npm test
+      - name: Run mocked Web App end-to-end tests
+        run: npm run e2e
