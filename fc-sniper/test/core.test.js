@@ -1501,3 +1501,17 @@ test('2.5.3: an old 24 h lock from a 429 while loading SBCs becomes 3 h; market 
   const newer = { lockUntil: start + 24 * 3600e3, lockReason: 'EA pushback during loading challenges (429)', lockKind: 'throttled' };
   assert.equal(c.migrateLock(newer, now).lockUntil, newer.lockUntil); // new locks carry their kind
 });
+
+
+test('readStats: extracts explicitly named detailed attributes without guessing array order', () => {
+  const { readStats } = require('../fc-sniper.user.js');
+  const objectShape = readStats({ attributes: { acceleration: 95, finishing: { value: 91 }, 'defensive_awareness': 87, unknownField: 99 } });
+  assert.equal(objectShape.attributes.acceleration, 95);
+  assert.equal(objectShape.attributes.finishing, 91);
+  assert.equal(objectShape.attributes.defensiveAwareness, 87);
+  assert.equal(objectShape.attributes.unknownField, undefined);
+  const labelledArray = readStats({ attributes: [{ name: 'Sprint Speed', value: 93 }, { label: 'Stamina', rating: 88 }] });
+  assert.equal(labelledArray.attributes.sprintSpeed, 93);
+  assert.equal(labelledArray.attributes.stamina, 88);
+  assert.equal(readStats({ attributes: [90, 91, 80, 88, 45, 82] }).attributes, null);
+});
