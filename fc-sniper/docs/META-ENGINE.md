@@ -32,6 +32,12 @@ and community poll are not directly interchangeable until an adapter maps them t
 common 0–100 scale. Preserve raw observations and metric definitions in the data service; this
 engine's normalized evidence is the scoring input, not a replacement for source data.
 
+### Provider snapshot validation
+
+`normalizeProviderSnapshot(raw, registry, now, options)` validates imported snapshots against a local source registry. The registry—not the payload—sets the evidence kind, reliability, allowed metrics, and freshness limit. The validator preserves game, patch, platform, and player/position context; rejects unknown sources, kind mismatches, disallowed metrics, stale/future observations, and duplicate records; and returns explicit rejection reasons. It is a validation boundary, not a live provider or network client.
+
+Each snapshot must include `sourceId`, `game`, `patch`, `platform`, `generatedAt`, and an `evidence` array. Evidence records include `playerId`, `position`, `kind`, `metric`, `value`, `sampleSize`, and `observedAt`. The local registry supplies `kind`, `reliability`, optional `allowedMetrics`, and optional `maxAgeDays`.
+
 ### Player contract
 
 - `id`, `name`, `overall`
