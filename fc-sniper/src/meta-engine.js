@@ -242,6 +242,54 @@
       similarPerformance: Math.abs(scoreGap) <= 3 };
   }
 
+  // Validates an imported provider snapshot against a locally maintained source registry.
+  // Provider payloads never get to assign their own reliability score.
+  function normalizeProviderSnapshot(raw, sourceRegistry, now = Date.now(), options = {}) {
+    const rejected = [];
+    const reject = (reason, item = null) => rejected.push({ reason, playerId: item?.playerId ?? null });
+    if (!raw || typeof raw !== 'object') return { status: 'rejected', evidence: [], rejected: [{ reason: 'invalid-snapshot', playerId: null }] };
+    const sourceId = String(raw.sourceId || '');
+    const registry = Array.isArray(sourceRegistry)
+      ? sourceRegistry.find(x => x && x.id === sourceId)
+      : sourceRegistry?.[sourceId];
+    if (!registry || registry.enabled === false) return { status: 'rejected', evidence: [], rejected: [{ reason: 'unregistered-source', playerId: null }] };
+    const generatedAt = Date.parse(raw.generatedAt || '');
+    if (!raw.game || !raw.patch || !raw.platform || !Number.isFinite(generatedAt)) {
+      return { status: 'rejected', evidence: [], rejected: [{ reason: 'missing-snapshot-context', playerId: null }] };
+    }
+    const maxSnapshotAgeDays = Number(options.maxSnapshotAgeDays ?? registry.maxAgeDays ?? 45);
+    const ageDays = (now - generatedAt) / dayMs;
+    if (ageDays < -5 / 1440) return { status: 'rejected', evidence: [], rejected: [{ reason: 'future-snapshot', playerId: null }] };
+    if (ageDays > maxSnapshotAgeDays) return { status: 'stale', evidence: [], rejected: [{ reason: 'stale-snapshot', playerId: null }] };
+    const allowedMetrics = Array.isArray(registry.allowedMetrics) ? registry.allowedMetrics : null;
+    const seen = new Set();
+    const evidence = [];
+    for (const item of Array.isArray(raw.evidence) ? raw.evidence : []) {
+      const metric = String(item?.metric || '');
+      const observedAt = Date.parse(item?.observedAt || '');
+      const key = [item?.playerId, item?.position, metric, item?.context || '', item?.observedAt || ''].join('|');
+      if (!item || item.kind !== registry.kind || !['pro', 'community'].includes(item.kind)) { reject('source-kind-mismatch', item); continue; }
+      if (!item.playerId || !item.position || !metric || (allowedMetrics && !allowedMetrics.includes(metric))) { reject('invalid-or-disallowed-metric', item); continue; }
+      if (!Number.isFinite(Number(item.value)) || Number(item.value) < 0 || Number(item.value) > 100 ||
+          !Number.isFinite(observedAt) || observedAt > now + 5 * 60000) { reject('invalid-value-or-time', item); continue; }
+      if ((now - observedAt) / dayMs > Number(registry.maxAgeDays ?? maxSnapshotAgeDays)) { reject('stale-evidence', item); continue; }
+      if (seen.has(key)) { reject('duplicate-observation', item); continue; }
+      seen.add(key);
+      const normalized = normalizeEvidence({
+        ...item,
+        source: sourceId,
+        sourceReliability: Number(registry.reliability),
+        sampleSize: item.sampleSize,
+        observedAt: new Date(observedAt).toISOString()
+      });
+      if (!normalized) { reject('normalization-failed', item); continue; }
+      evidence.push({ ...normalized, playerId: String(item.playerId), position: String(item.position).toUpperCase(),
+        game: String(raw.game), patch: String(raw.patch), platform: String(raw.platform) });
+    }
+    return { status: evidence.length ? 'ok' : 'empty', sourceId, game: String(raw.game), patch: String(raw.patch),
+      platform: String(raw.platform), generatedAt: new Date(generatedAt).toISOString(), evidence, rejected };
+  }
+
   function snapshotMeta({ game, platform, generatedAt = new Date().toISOString(), sourceStatuses = [], players = [] }) {
     return { schemaVersion: 1, engineVersion: VERSION, game: String(game || ''),
       platform: String(platform || 'all'), generatedAt,
@@ -255,5 +303,5 @@
 
   return Object.freeze({ VERSION, DEFAULTS, ROLE_WEIGHTS, ROLE_GROUP, roleGroup, adaptPlayer,
     scoreAttributes, playStyleBonus, normalizeEvidence, summarizeEvidence,
-    evaluate, compareValue, snapshotMeta, decayWeight });
+    evaluate, compareValue, normalizeProviderSnapshot, snapshotMeta, decayWeight });
 });
