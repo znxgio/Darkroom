@@ -36,6 +36,9 @@ test('attribute score uses only available role attributes and reports coverage',
   assert.ok(result.score > 85 && result.score <= 100);
   assert.ok(result.coverage > 0.5);
   assert.equal(meta.scoreAttributes({ overall: 88 }, 'ST').method, 'overall-fallback');
+  const zeroWeightOnly = meta.scoreAttributes({ overall: 80, attributes: { defending: 99 } }, 'ST');
+  assert.equal(zeroWeightOnly.method, 'overall-fallback');
+  assert.equal(zeroWeightOnly.score, 80);
   assert.equal(meta.scoreAttributes({}, 'ST').score, null);
 });
 
