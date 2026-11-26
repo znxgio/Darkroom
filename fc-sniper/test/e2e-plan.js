@@ -5,6 +5,7 @@ const path = require('path');
 const { installMock } = require('./mock-webapp');
 
 const SCRIPT = fs.readFileSync(path.join(__dirname, '..', 'fc-sniper.user.js'), 'utf8');
+const META_ENGINE = fs.readFileSync(require('path').join(__dirname, '..', 'src', 'meta-engine.js'), 'utf8');
 const S = process.argv[2] || '/tmp';
 const results = [];
 const check = (name, ok, info = '') => results.push(`${ok ? 'PASS' : 'FAIL'}  ${name}${info ? `  — ${info}` : ''}`);
@@ -18,6 +19,7 @@ async function page(b, setup) {
   await p.goto('http://fake.test/');
   await p.evaluate(installMock);
   await p.evaluate(setup);
+  await p.addScriptTag({ content: META_ENGINE });
   await p.addScriptTag({ content: SCRIPT });
   await p.waitForSelector('#fcs');
   return p;
