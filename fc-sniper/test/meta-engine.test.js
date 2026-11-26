@@ -109,3 +109,32 @@ test('snapshot has versioned schema and source health', () => {
   assert.equal(result.players[0].score, 90);
   assert.equal(result.sourceStatuses[0].status, 'ok');
 });
+
+
+test('provider snapshots use local registry reliability and preserve game context', () => {
+  const snapshot = meta.normalizeProviderSnapshot({
+    sourceId: 'pro-feed', game: 'FC 27', patch: '1.3', platform: 'PS5',
+    generatedAt: new Date(NOW).toISOString(),
+    evidence: [{ playerId: 1001, position: 'ST', kind: 'pro', metric: 'player-usage',
+      value: 88, sampleSize: 12, sourceReliability: 0.01, observedAt: new Date(NOW).toISOString() }]
+  }, { 'pro-feed': { kind: 'pro', reliability: 0.9, allowedMetrics: ['player-usage'] } }, NOW);
+  assert.equal(snapshot.status, 'ok');
+  assert.equal(snapshot.evidence[0].sourceReliability, 0.9);
+  assert.equal(snapshot.evidence[0].patch, '1.3');
+  assert.equal(snapshot.evidence[0].platform, 'PS5');
+});
+
+test('provider snapshots reject unregistered, future, stale, and duplicate data', () => {
+  const base = { sourceId: 'community-feed', game: 'FC 27', patch: '1.3', platform: 'all',
+    generatedAt: new Date(NOW).toISOString(), evidence: [{ playerId: 5, position: 'ST',
+      kind: 'community', metric: 'player-usage', value: 70, sampleSize: 50,
+      observedAt: new Date(NOW).toISOString() }] };
+  const registry = { 'community-feed': { kind: 'community', reliability: 0.6, allowedMetrics: ['player-usage'] } };
+  assert.equal(meta.normalizeProviderSnapshot(base, {}, NOW).rejected[0].reason, 'unregistered-source');
+  assert.equal(meta.normalizeProviderSnapshot({ ...base, generatedAt: new Date(NOW + 3600000).toISOString() }, registry, NOW).rejected[0].reason, 'future-snapshot');
+  assert.equal(meta.normalizeProviderSnapshot({ ...base, generatedAt: new Date(NOW - 60 * 86400000).toISOString() }, registry, NOW).status, 'stale');
+  const dup = { ...base, evidence: [...base.evidence, ...base.evidence] };
+  const normalized = meta.normalizeProviderSnapshot(dup, registry, NOW);
+  assert.equal(normalized.evidence.length, 1);
+  assert.equal(normalized.rejected[0].reason, 'duplicate-observation');
+});
