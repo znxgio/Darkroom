@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 
 const SCRIPT = fs.readFileSync(path.join(__dirname, '..', 'fc-sniper.user.js'), 'utf8');
+const META_ENGINE = fs.readFileSync(require('path').join(__dirname, '..', 'src', 'meta-engine.js'), 'utf8');
 const results = [];
 const check = (name, ok, info = '') => results.push(`${ok ? 'PASS' : 'FAIL'}  ${name}${info ? `  — ${info}` : ''}`);
 
@@ -73,6 +74,7 @@ async function run(b, rivalMax) {
   await p.route('http://fake.test/**', (r) => r.fulfill({ contentType: 'text/html', body: '<html><head><meta charset=utf-8></head><body></body></html>' }));
   await p.goto('http://fake.test/');
   await p.evaluate(installWarMock, { rivalMax });
+  await p.addScriptTag({ content: META_ENGINE });
   await p.addScriptTag({ content: SCRIPT });
   await p.waitForSelector('#fcs');
   await p.click('#fcs [data-a=toggle]');
