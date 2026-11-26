@@ -1,6 +1,6 @@
 # Darkroom Meta Engine
 
-## Foundation milestone (0.2.1)
+## Foundation milestone (0.3.0)
 
 This is a provider-neutral, deterministic scoring core. It intentionally has **no network calls,
 credentials, EA Web App calls, browser globals, or automatic transactions**.
@@ -38,6 +38,12 @@ engine's normalized evidence is the scoring input, not a replacement for source 
 
 Each snapshot must include `sourceId`, `game`, `patch`, `platform`, `generatedAt`, and an `evidence` array. Evidence records include `playerId`, `position`, `kind`, `metric`, `value`, `sampleSize`, and `observedAt`. The local registry supplies `kind`, `reliability`, optional `allowedMetrics`, and optional `maxAgeDays`.
 
+### Tactics Meta Finder contract
+
+`normalizeTacticsSnapshot(raw, registry, now, options)` validates formation and role usage distributions. The source registry supplies the pro/community classification and reliability; a payload cannot assign its own reliability. Accepted observations retain game, patch, platform, sample size, timestamp, formation, position, role/focus, tactic code, and line height. `rankTactics(observations, options)` returns separate pro and community usage shares plus a pro-first composite for formations, roles, build-up styles, and defensive-line styles. Conflicting game/patch/platform snapshots require an explicit context selection.
+
+A tactics observation uses `dimension` (`formation`, `role`, `buildUp`, or `defensiveLine`), `key`, `usageShare` (0–100), `sampleSize`, and `observedAt`; role rows also require a supported `position`. Source adapters add the registry-assigned `kind`, `source`, and `sourceReliability`.
+
 ### Player contract
 
 - `id`, `name`, `overall`
@@ -60,7 +66,7 @@ Each snapshot must include `sourceId`, `game`, `patch`, `platform`, `generatedAt
 
 - It does not scrape FUTBIN, FUT.GG, or any other site.
 - It does not assume third-party sites permit automated access.
-- It does not yet retrieve live competitive/community evidence or prices.
+- It does not yet retrieve live competitive/community evidence, tactics distributions, or prices. The new snapshot validators and ranking functions are data contracts only; no provider is connected.
 - It does not replace the existing userscript's legacy meta scoring yet. The userscript now loads this engine and shows a clearly labeled player-quality estimate in the read-only market overlay; it explicitly warns that live evidence providers are not connected yet.
 - It does not make buy, bid, sell, SBC, or squad mutations.
 
