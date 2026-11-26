@@ -181,3 +181,41 @@ test('evaluation refuses to blend different evidence metrics', () => {
   assert.equal(result.proMetaScore, null);
   assert.ok(result.warnings.some(x => /Mixed metric evidence/.test(x)));
 });
+
+
+test('tactics finder ranks formations pro-first and keeps role usage distinct', () => {
+  const observations = [
+    { dimension: 'formation', key: '4-3-1-2', kind: 'pro', usageShare: 60, sampleSize: 30, source: 'pro-tracker', sourceReliability: 1, game: 'FC 27', patch: '1.3', platform: 'all', observedAt: new Date(NOW).toISOString(), tacticCode: 'CODE4312' },
+    { dimension: 'formation', key: '4-3-1-2', kind: 'community', usageShare: 30, sampleSize: 300, source: 'community-tracker', sourceReliability: 1, game: 'FC 27', patch: '1.3', platform: 'all', observedAt: new Date(NOW).toISOString() },
+    { dimension: 'formation', key: '4-2-1-3', kind: 'pro', usageShare: 40, sampleSize: 30, source: 'pro-tracker', sourceReliability: 1, game: 'FC 27', patch: '1.3', platform: 'all', observedAt: new Date(NOW).toISOString() },
+    { dimension: 'formation', key: '4-2-1-3', kind: 'community', usageShare: 50, sampleSize: 300, source: 'community-tracker', sourceReliability: 1, game: 'FC 27', patch: '1.3', platform: 'all', observedAt: new Date(NOW).toISOString() },
+    { dimension: 'role', key: 'Shadow Striker', position: 'CAM', focus: 'Attack', formation: '4-3-1-2', kind: 'pro', usageShare: 65, sampleSize: 30, source: 'pro-tracker', sourceReliability: 1, game: 'FC 27', patch: '1.3', platform: 'all', observedAt: new Date(NOW).toISOString() }
+  ];
+  const result = meta.rankTactics(observations, { now: NOW, game: 'FC 27', patch: '1.3', platform: 'all' });
+  assert.equal(result.status, 'ok');
+  assert.equal(result.formations[0].key, '4-3-1-2');
+  assert.equal(result.formations[0].proUsageShare, 60);
+  assert.equal(result.formations[0].communityUsageShare, 30);
+  assert.equal(result.formations[0].metaUsageShare, 51);
+  assert.equal(result.formations[0].tacticCode, 'CODE4312');
+  assert.equal(result.roles[0].position, 'CAM');
+  assert.equal(result.roles[0].key, 'Shadow Striker');
+});
+
+test('tactics finder requires explicit context when patches conflict and rejects stale/future rows', () => {
+  const base = { dimension: 'formation', key: '4-3-1-2', kind: 'pro', usageShare: 50,
+    sampleSize: 20, source: 'pro', sourceReliability: 1, game: 'FC 27', platform: 'PS5' };
+  const rows = [
+    { ...base, patch: '1.2', observedAt: new Date(NOW).toISOString() },
+    { ...base, patch: '1.3', observedAt: new Date(NOW).toISOString() },
+    { ...base, patch: '1.3', observedAt: new Date(NOW - 200 * 86400000).toISOString() },
+    { ...base, patch: '1.3', observedAt: new Date(NOW + 3600000).toISOString() }
+  ];
+  const mixed = meta.rankTactics(rows, { now: NOW });
+  assert.equal(mixed.status, 'context-required');
+  assert.ok(mixed.warnings.some(x => /Mixed patch/.test(x)));
+  const scoped = meta.rankTactics(rows, { now: NOW, game: 'FC 27', patch: '1.3', platform: 'PS5' });
+  assert.equal(scoped.formations.length, 1);
+  assert.ok(scoped.rejected.some(x => x.reason === 'stale-tactics-observation'));
+  assert.ok(scoped.rejected.some(x => x.reason === 'future-tactics-observation'));
+});
