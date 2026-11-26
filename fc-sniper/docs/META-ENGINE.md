@@ -55,7 +55,7 @@ engine's normalized evidence is the scoring input, not a replacement for source 
 - It does not scrape FUTBIN, FUT.GG, or any other site.
 - It does not assume third-party sites permit automated access.
 - It does not yet retrieve live competitive/community evidence or prices.
-- It does not change the existing userscript's scoring or UI.
+- It does not replace the existing userscript's legacy meta scoring yet. The userscript now loads this engine and shows a clearly labeled player-quality estimate in the read-only market overlay; it explicitly warns that live evidence providers are not connected yet.
 - It does not make buy, bid, sell, SBC, or squad mutations.
 
 ### Next milestones
@@ -66,6 +66,14 @@ engine's normalized evidence is the scoring input, not a replacement for source 
 4. Add price adapter and value ranking separately from meta score.
 5. Integrate the engine read-only into the userscript, then compare against existing outputs before replacing anything.
 6. Build a calibration/evaluation set from dated competitive squads/events and holdout observations.
+
+## Current userscript integration
+
+- The userscript loads the engine through a commit-pinned Tampermonkey `@require` dependency.
+- Existing EA player objects are adapted from Darkroom's normalized face stats and PlayStyles.
+- The market overlay displays the engine's player-quality estimate and confidence beside the legacy estimate.
+- This is intentionally read-only. It does not change searches, purchases, bids, listings, club state, or existing ranking decisions.
+- The existing legacy score remains active until the new engine has validated live evidence and passes side-by-side comparison.
 
 ## Validation
 
