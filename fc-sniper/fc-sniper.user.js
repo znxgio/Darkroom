@@ -1,13 +1,14 @@
 // ==UserScript==
 // @name         FC Sniper
 // @namespace    https://github.com/znxgio/darkroom
-// @version      2.5.4
+// @version      2.5.5
+// @require      https://raw.githubusercontent.com/znxgio/Darkroom/83c46b4db81892baac9cec290b88540f741ee70a/fc-sniper/src/meta-engine.js
 // @description  Sniper, pack opener, SBC solver and team upgrade advisor for the EA SPORTS FC Ultimate Team Web App, with built-in safety limits.
 // @match        https://www.ea.com/*ultimate-team/web-app*
 // @match        https://www.ea.com/ea-sports-fc/ultimate-team/web-app*
 // @run-at       document-idle
 // @grant        none
-// @downloadURL  https://raw.githubusercontent.com/znxgio/Darkroom/claude/ea-fc-sniping-bot-jdz6vq/fc-sniper/fc-sniper.user.js
+// @downloadURL  https://raw.githubusercontent.com/znxgio/Darkroom/meta-engine/foundation/fc-sniper/fc-sniper.user.js
 // @updateURL    https://raw.githubusercontent.com/znxgio/Darkroom/claude/ea-fc-sniping-bot-jdz6vq/fc-sniper/fc-sniper.user.js
 // ==/UserScript==
 
@@ -1690,6 +1691,21 @@
     const pro = proPick(p, pos) ? 2 : 0; // "pros run this" (curated, dated list)
     // keep the card's overall in the picture so a 70-rated speedster doesn't win on pace alone
     return Math.round((score * 0.7 + (p.rating || 0) * 0.3 + ps + pro) * 10) / 10;
+  }
+
+  /**
+   * New engine quality estimate for an existing Darkroom player. Until external
+   * evidence providers are connected this is explicitly NOT a live-meta score.
+   */
+  function metaEngineQuality(p, pos) {
+    try {
+      const lib = typeof globalThis !== 'undefined' ? globalThis.DarkroomMetaEngine : null;
+      if (!lib || typeof lib.evaluate !== 'function' || typeof lib.adaptPlayer !== 'function') return null;
+      return lib.evaluate(lib.adaptPlayer(p), pos, [], { now: Date.now() });
+    } catch (e) {
+      debugLog.push('Meta Engine adapter: ' + String(e && e.message || e).slice(0, 160));
+      return null;
+    }
   }
 
   /**
@@ -3543,6 +3559,11 @@
       const listed = top != null ? mine(top) : null;
       const v = overlayView(players, top != null && prices.data[String(top)] ? prices.data[String(top)].s : [], listed ? (listed.avg || listed.lowest || 0) : 0);
       if (!v) return;
+      const samplePlayer = players.find((p) => p.id === v.id) || players[0];
+      const engineQuality = v.bestPos ? metaEngineQuality(samplePlayer, v.bestPos) : null;
+      const qualityText = engineQuality && engineQuality.playerQualityScore != null
+        ? ` · engine quality estimate ${Math.round(engineQuality.playerQualityScore)}/100 · ${engineQuality.confidence}% confidence · live evidence not connected`
+        : '';
       let el = document.getElementById('fcs-ovl');
       if (!el) {
         el = document.createElement('div'); el.id = 'fcs-ovl'; el.setAttribute('role', 'status');
@@ -3556,7 +3577,7 @@
       const hist = tr.n ? esc(trendText(tr)) : 'no history yet';
       el.innerHTML = `<button data-x aria-label="Dismiss">×</button><b>🔎 ${esc(v.name)}${v.rating ? ` ${v.rating}` : ''}</b>`
         + `<div>${v.cheapest ? `cheapest Buy Now <b>${fmt(v.cheapest)}</b>` : 'cheapest Buy Now: none'} · ${verdict}</div>`
-        + `<small>${hist}${v.bestPos ? ` · meta ${v.meta} as ${esc(v.bestPos)}` : ''}</small>`;
+        + `<small>${hist}${v.bestPos ? ` · existing meta estimate ${v.meta} as ${esc(v.bestPos)}` : ''}${qualityText}</small>`;
       el.classList.add('show');
       clearTimeout(this.timer);
       this.timer = setTimeout(() => el.classList.remove('show'), 12000);
