@@ -5612,6 +5612,35 @@
     squad: null, // [{ position, player }]
     summary: null,
     results: [], // [{ slotIndex, position, current, options: [...] }]
+    metaRoster: null,
+    metaRosterAt: 0
+
+    /** Read-only player quality estimates for every card in the club; no market searches. */
+    async scoreClub() {
+      if (engine.running || engine.busy || jobs.current) { ui.log('Stop the running task first (■)', 'warn'); return; }
+      await jobs.run('Scoring your club', async () => {
+        this.metaRoster = [];
+        ui.renderMetaClub();
+        const r = await fut.clubPlayers((n) => engine.setStatus('pricing', `Reading club for meta estimates… ${n}`));
+        jobs.check(r, 'reading your club');
+        const byId = new Map();
+        for (const item of r.items || []) {
+          const p = fut.toPlayer(item);
+          if (!p.player || byId.has(String(p.id))) continue;
+          let best = null;
+          for (const pos of p.positions || []) {
+            const q = metaEngineQuality(p, pos);
+            if (q && q.playerQualityScore != null && (!best || q.playerQualityScore > best.quality.playerQualityScore)) best = { position: pos, quality: q };
+          }
+          byId.set(String(p.id), { player: p, best });
+        }
+        this.metaRoster = [...byId.values()].sort((a, b) =>
+          (b.best?.quality.playerQualityScore ?? -1) - (a.best?.quality.playerQualityScore ?? -1));
+        this.metaRosterAt = Date.now();
+        ui.renderMetaClub();
+        ui.log(`🧠 Scored ${this.metaRoster.length} club cards by position fit. These are quality estimates until live meta feeds are connected.`, 'ok');
+      });
+    },
 
     /** Reads the active squad: 11 slots, chemistry, main leagues/nations. */
     async readSquad() {
@@ -6984,6 +7013,10 @@
               <div class="two"><button class="btn blue" data-a="team-update">↻ Update my team</button><button class="btn" data-a="analyse">Find upgrades</button></div>
               <button class="btn" data-a="refresh-squad">Clear squad data</button>
               <p class="note">“Update my team” reads your squad in seconds. “Find upgrades” is the slower part: it checks the market and SBCs for your 3 weakest spots.</p></div>
+            <div class="card"><h4>🧠 Club player scores</h4>
+              <div data-r="meta-club"><p class="empty">Read your club to score each card's position-specific quality. This is not live competitive meta yet.</p></div>
+              <button class="btn blue" data-a="meta-club">Score my club</button>
+              <p class="note">Read-only. Uses the attributes and PlayStyles the Web App exposes; no market searches or transactions. Live pro/community evidence is not connected yet.</p></div>
             <div class="card ask"><h4>🧠 Ask the analyst</h4>
               <div class="two"><input type="text" data-r="ask-q" placeholder="e.g. what should replace Saka?" enterkeyhint="send"><button class="btn blue" data-a="ask">Ask</button></div>
               <div data-r="ask"><p class="empty">Answers from your own squad, club and the bot’s price checks — no guessing. Try “how’s my team?”, “compare Rice vs Bellingham”, “best CB I own”.</p></div></div>
@@ -7150,6 +7183,7 @@
           case 'team-update':
             if (engine.running || jobs.current) { this.log('Stop the running task first (■)', 'warn'); return; }
             return upgrades.updateTeam(false);
+          case 'meta-club': return upgrades.scoreClub();
           case 'autofill': this.commit(); return upgrades.autofill();
           case 'spend-reset':
             engine.cfg.listSpent = 0; engine.save(); this.renderPlayers();
@@ -8049,9 +8083,25 @@
         <p class="note">Only evolutions EA says the card qualifies for. Start them in the Web App (Evolutions).</p></div>`;
     },
 
+    renderMetaClub() {
+      const box = this.q('[data-r=meta-club]');
+      if (!box) return;
+      const rows = upgrades.metaRoster;
+      if (!rows) {
+        box.innerHTML = '<p class="empty">Read your club to score each card\'s position-specific quality. This is not live competitive meta yet.</p>';
+        return;
+      }
+      const shown = rows.slice(0, 30);
+      box.innerHTML = `<p class="note">${rows.length} cards · updated ${Math.max(0, Math.round((Date.now() - upgrades.metaRosterAt) / 60000))} min ago · quality fit only, not live meta</p>
+        <div class="list">${shown.map(({ player, best }) => `<div class="li"><span class="t"><b>${esc(player.name)} ${player.rating || ''}</b>
+          <small>${best ? `${esc(best.position)} · ${Math.round(best.quality.playerQualityScore)}/100 quality · ${best.quality.confidence}% confidence` : 'Not enough position data to score'} · ${player.positions.map(esc).join('/') || 'position unknown'}</small></span></div>`).join('')}</div>
+        ${rows.length > shown.length ? `<p class="note">Showing top ${shown.length} of ${rows.length} cards.</p>` : ''}`;
+    },
+
     renderUpgrades() {
       const saved = upgrades.savedTeam();
       const s = upgrades.summary || (saved && saved.summary);
+      this.renderMetaClub();
       if (s) {
         const age = saved && saved.at ? Math.round((Date.now() - saved.at) / 60e3) : null;
         const when = upgrades.summary && age !== null && age < 2 ? 'just now' : age !== null ? (age < 60 ? `${age} min ago` : age < 1440 ? `${Math.round(age / 60)} h ago` : `${Math.round(age / 1440)} d ago`) : '';
