@@ -19,7 +19,7 @@ test('legacy Darkroom player objects adapt without inventing live evidence', () 
   assert.equal(adapted.playStyles[0].plus, true);
   const result = meta.evaluate(adapted, 'ST', [], { now: NOW });
   assert.equal(result.proMetaScore, null);
-  assert.ok(result.warnings.some(x => /No current pro\\/community/.test(x)));
+  assert.ok(result.warnings.some(x => /No current pro\/community/.test(x)));
 });
 
 test('position groups normalize common positions', () => {
