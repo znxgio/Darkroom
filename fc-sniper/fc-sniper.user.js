@@ -3600,6 +3600,24 @@
       const qualityText = engineQuality && engineQuality.playerQualityScore != null
         ? ` · engine quality estimate ${Math.round(engineQuality.playerQualityScore)}/100 · ${engineQuality.confidence}% confidence · live evidence not connected`
         : '';
+      const seenMeta = new Set();
+      const marketQualityRows = [];
+      for (const p of players) {
+        const id = String(p.id || '');
+        if (!id || seenMeta.has(id)) continue;
+        seenMeta.add(id);
+        let best = null;
+        for (const pos of p.positions || []) {
+          const q = metaEngineQuality(p, pos);
+          if (q && q.playerQualityScore != null && (!best || q.playerQualityScore > best.quality.playerQualityScore)) best = { position: pos, quality: q };
+        }
+        if (best) marketQualityRows.push({ player: p, ...best });
+      }
+      marketQualityRows.sort((a, b) => b.quality.playerQualityScore - a.quality.playerQualityScore);
+      const marketQualityHtml = marketQualityRows.length
+        ? `<div><b>Players in these results · quality estimate only</b><small>${marketQualityRows.slice(0, 5).map(x =>
+          `${esc(x.player.name)} ${x.player.rating || ''} · ${esc(x.position)} ${Math.round(x.quality.playerQualityScore)}/100 · ${x.quality.confidence}% · ${x.player.price ? fmt(x.player.price) + ' coins' : 'auction'}`).join('<br>')}</small></div>`
+        : '';
       let el = document.getElementById('fcs-ovl');
       if (!el) {
         el = document.createElement('div'); el.id = 'fcs-ovl'; el.setAttribute('role', 'status');
@@ -3613,7 +3631,8 @@
       const hist = tr.n ? esc(trendText(tr)) : 'no history yet';
       el.innerHTML = `<button data-x aria-label="Dismiss">×</button><b>🔎 ${esc(v.name)}${v.rating ? ` ${v.rating}` : ''}</b>`
         + `<div>${v.cheapest ? `cheapest Buy Now <b>${fmt(v.cheapest)}</b>` : 'cheapest Buy Now: none'} · ${verdict}</div>`
-        + `<small>${hist}${v.bestPos ? ` · existing meta estimate ${v.meta} as ${esc(v.bestPos)}` : ''}${qualityText}</small>`;
+        + `<small>${hist}${v.bestPos ? ` · existing meta estimate ${v.meta} as ${esc(v.bestPos)}` : ''}${qualityText}</small>`
+        + marketQualityHtml;
       el.classList.add('show');
       clearTimeout(this.timer);
       this.timer = setTimeout(() => el.classList.remove('show'), 12000);
