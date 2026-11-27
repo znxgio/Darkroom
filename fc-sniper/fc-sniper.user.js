@@ -3666,7 +3666,8 @@
           `${esc(x.candidate.player.name)} ${Math.round(x.candidate.quality.playerQualityScore)} ${x.candidate.source === 'club' ? '(owned)' : '(market)'} vs ${esc(x.target.player.name)} ${Math.round(x.target.quality.playerQualityScore)} · save ${fmt(x.comparison.savings)} coins · ${x.comparison.scoreGap > 0 ? '+' : ''}${x.comparison.scoreGap} score`).join('<br>')}</small></div>`
         : '';
       if (valuePairs.length) {
-        const old = store.get(KEYS.metaValue, []);
+        const savedTracker = store.get(KEYS.metaValue, []);
+        const old = Array.isArray(savedTracker) ? savedTracker : [];
         const additions = valuePairs.map(x => ({
           key: [x.target.player.id, x.candidate.player.id, x.target.position].join('|'),
           target: { id: x.target.player.id, name: x.target.player.name, rating: x.target.player.rating,
@@ -8174,7 +8175,8 @@
     renderMetaValue() {
       const box = this.q('[data-r=meta-value]');
       if (!box) return;
-      const rows = store.get(KEYS.metaValue, []);
+      const saved = store.get(KEYS.metaValue, []);
+      const rows = Array.isArray(saved) ? saved.filter(x => x && x.target && x.alternative) : [];
       if (!rows.length) {
         box.innerHTML = '<p class="empty">Cheaper similar-fit comparisons from cards you view in the market will appear here.</p>';
         return;
