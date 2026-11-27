@@ -6823,7 +6823,7 @@
   #fcs .jobbar[hidden]{display:none}
   #fcs .jobbar .mini{min-height:32px;padding:0 14px}
   #fcs.locked .body .row,#fcs.locked .body .chip button,#fcs.locked .body .chip .mx,#fcs.locked .body .frow button,#fcs.locked .body .fed,#fcs.locked .body input,#fcs.locked .body select,#fcs.locked .body .pqw,#fcs.locked .body [data-a=filter-new],#fcs.locked .body [data-a=filter-starters],#fcs.locked .body button:disabled{opacity:.4}
-  #fcs.locked .body button:disabled{pointer-events:auto}
+  #fcs.locked .body button:disabled{pointer-events:none}
   #fcs.locked [data-pane=log] *,#fcs.locked .tabs *,#fcs.locked .hd *{opacity:1}
   #fcs.mob .jobbar{padding:6px 10px;font-size:13px}
   #fcs .last.ok{color:var(--green)}#fcs .last.warn{color:var(--amber)}#fcs .last.err{color:var(--red)}#fcs .last.alert{color:#ffe08a}
@@ -7248,18 +7248,6 @@
       };
       root.addEventListener('pointerdown', (e) => { if (e.button === 0) explainLockedControl(e); }, true);
       root.addEventListener('click', explainLockedControl, true);
-      root.addEventListener('keydown', (e) => {
-        if (!root.classList.contains('locked') || !e.target.closest || !e.target.closest('.row.tg input') || ![' ', 'Enter'].includes(e.key)) return;
-        e.preventDefault(); e.stopImmediatePropagation();
-        this.toast(this.lockTask && !engine.running && !plan.active ? `Busy: ${this.lockTask} — tap ■ to stop it` : 'Stop the bot (■) to change this', 'alert');
-      }, true);
-      root.addEventListener('change', (e) => {
-        const input = e.target;
-        if (!root.classList.contains('locked') || !input.matches || !input.matches('.row.tg input')) return;
-        input.checked = input.dataset.lockedValue === 'true';
-        e.preventDefault(); e.stopImmediatePropagation();
-        this.toast(this.lockTask && !engine.running && !plan.active ? `Busy: ${this.lockTask} — tap ■ to stop it` : 'Stop the bot (■) to change this', 'alert');
-      }, true);
       root.addEventListener('click', (e) => {
         if (root.classList.contains('min') && e.target.closest('.logo')) { root.classList.remove('min'); return; }
         const btn = e.target.closest('button');
@@ -8733,12 +8721,6 @@
       go.setAttribute('aria-label', on ? 'Stop' : 'Start');
       this.tick();
       this.qa('[data-k] , [data-k] button, [data-r=pq], [data-a=price]').forEach((el) => { el.disabled = on; });
-      this.qa('.row.tg input').forEach((el) => {
-        el.disabled = false;
-        el.setAttribute('aria-disabled', on ? 'true' : 'false');
-        if (on) el.dataset.lockedValue = String(el.checked);
-        else delete el.dataset.lockedValue;
-      });
       const bar = this.q('[data-r=jobbar]');
       if (bar && !jobs.current) { bar.hidden = !on; this.q('[data-r=jobname]').textContent = on ? '▶ Bot running — stop (■) to change settings' : ''; }
       this.syncLock();

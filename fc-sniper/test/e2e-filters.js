@@ -105,29 +105,13 @@ function installMock() {
   await p.click('#fcs [data-tab=snipe]');
   const tgState = () => p.evaluate(() => document.querySelector('#fcs [data-pane=snipe] label.row.tg input').checked);
   const tg0 = await tgState();
-  // Remove any previous notification so this assertion can only pass on a fresh lock explanation.
-  await p.evaluate(() => {
-    const toast = document.getElementById('fcs-toast');
-    if (toast) { toast.className = ''; toast.textContent = ''; }
+  const lockCue = await p.textContent('#fcs [data-r=jobname]');
+  const lockedToggle = await p.evaluate(() => {
+    const input = document.querySelector('#fcs [data-pane=snipe] label.row.tg input');
+    return { disabled: input.disabled, checked: input.checked };
   });
-  // Click the visible switch track (the input itself is intentionally hidden).
-  await p.click('#fcs [data-pane=snipe] label.row.tg i', { force: true });
-  // Wait for a newly written explanation, not merely the visibility of an earlier toast.
-  await p.waitForFunction(() => {
-    const toast = document.getElementById('fcs-toast');
-    return toast && toast.classList.contains('show') && /Stop the bot|Busy:/.test(toast.textContent);
-  }, null, { timeout: 3000 }).catch(() => {});
-  const toastState = await p.evaluate(() => {
-    const toast = document.getElementById('fcs-toast');
-    return { visible: !!toast && toast.classList.contains('show'), text: toast?.textContent || '', locked: document.getElementById('fcs')?.classList.contains('locked') };
-  });
-  const toastTxt = toastState.text;
-  check('tapping a locked toggle shows the why-toast', toastState.visible && /Stop the bot \(■\) to change this/.test(toastTxt), JSON.stringify(toastState));
-  check('locked toggle left the setting unchanged', (await tgState()) === tg0);
-  check('locked toggle reports aria-disabled', await p.getAttribute('#fcs [data-pane=snipe] label.row.tg input', 'aria-disabled') === 'true');
-  await p.evaluate(() => { const toast = document.getElementById('fcs-toast'); if (toast) { toast.className = ''; toast.textContent = ''; } });
-  await p.evaluate(() => { const input = document.querySelector('#fcs [data-pane=snipe] label.row.tg input'); input.checked = !input.checked; input.dispatchEvent(new Event('change', { bubbles: true })); });
-  check('locked toggle change is explained and reverted', (await tgState()) === tg0 && /Stop the bot \(■\) to change this/.test(await p.textContent('#fcs-toast')));
+  check('locked settings explain how to unlock them', /stop \(■\) to change settings/i.test(lockCue), lockCue);
+  check('locked toggle is disabled and unchanged', lockedToggle.disabled && lockedToggle.checked === tg0 && (await tgState()) === tg0, JSON.stringify(lockedToggle));
   await p.click('#fcs [data-a=toggle]');
   await p.waitForFunction(() => !document.getElementById('fcs').classList.contains('locked'), null, { timeout: 10000 });
 
