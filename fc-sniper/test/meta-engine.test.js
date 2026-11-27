@@ -22,6 +22,12 @@ test('legacy Darkroom player objects adapt without inventing live evidence', () 
   assert.ok(result.warnings.some(x => /No current pro\/community/.test(x)));
 });
 
+test('player adapter tolerates absent or non-array PlayStyles', () => {
+  assert.deepEqual(meta.adaptPlayer({ id: 7, playStyles: null }).playStyles, []);
+  assert.deepEqual(meta.adaptPlayer({ id: 8, playStyles: { name: 'Quick Step' } }).playStyles, []);
+});
+
+
 test('position groups normalize common positions', () => {
   assert.equal(meta.roleGroup('ST'), 'ST');
   assert.equal(meta.roleGroup('LW'), 'W');
@@ -141,6 +147,7 @@ test('provider snapshots reject unregistered, future, stale, and duplicate data'
       observedAt: new Date(NOW).toISOString() }] };
   const registry = { 'community-feed': { kind: 'community', reliability: 0.6, allowedMetrics: ['player-usage'] } };
   assert.equal(meta.normalizeProviderSnapshot(base, {}, NOW).rejected[0].reason, 'unregistered-source');
+  assert.equal(meta.normalizeProviderSnapshot(base, { 'community-feed': { kind: 'community', reliability: 3 } }, NOW).rejected[0].reason, 'invalid-source-registry');
   assert.equal(meta.normalizeProviderSnapshot({ ...base, generatedAt: new Date(NOW + 3600000).toISOString() }, registry, NOW).rejected[0].reason, 'future-snapshot');
   assert.equal(meta.normalizeProviderSnapshot({ ...base, generatedAt: new Date(NOW - 60 * 86400000).toISOString() }, registry, NOW).status, 'stale');
   const dup = { ...base, evidence: [...base.evidence, { ...base.evidence[0], observedAt: NOW }] };
