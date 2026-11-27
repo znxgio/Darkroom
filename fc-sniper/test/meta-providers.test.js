@@ -14,7 +14,10 @@ test('provider registry describes separate pro and community FUT.GG sources', ()
 
 test('candidate providers do not enable ingestion by default', () => {
   assert.deepEqual(providers.buildEvidenceRegistry(), {});
-  assert.equal(providers.getProvider('ea-community-api').status, 'not-available-to-darkroom');
+  const ea = providers.getProvider('ea-community-api');
+  assert.equal(ea.status, 'not-available-to-darkroom');
+  assert.equal(ea.publicApiSpec, false);
+  assert.equal(ea.partnerRetentionDays, 28);
 });
 
 test('authorized source registry only emits that source kind and allowed metrics', () => {
