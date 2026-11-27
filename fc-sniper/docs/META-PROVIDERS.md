@@ -92,7 +92,7 @@ A documented alternative is DataFluxor's FUT Data REST API. Its published contra
 - `test/meta-market-provider.test.js` and `test/meta-api.test.js` cover normalization, stale data, route validation, and key isolation.
 - Configure `DATAFLUXOR_API_KEY` on the server and `DARKROOM_ALLOWED_ORIGIN` to the exact Darkroom UI origin before exposing it. Do not place the key in userscript settings, local storage, or browser requests.
 - Start with `npm run start:meta-api` from `fc-sniper/`; the service listens on `PORT` (default 8787). Set the environment variables in the hosting platform's secret manager. `.env.example` documents the required names without containing secrets.
-- The server exposes `GET /health`, `GET /api/meta/cards/search?q=...`, and `GET /api/meta/prices?ea_ids=...&platform=ps`. It is deliberately read-only.
+- The server exposes `GET /health`, `GET /api/meta/snapshot` (reads a versioned snapshot file supplied by an authorized feed operator), `GET /api/meta/cards/search?q=...`, and `GET /api/meta/prices?ea_ids=...&platform=ps`. It is deliberately read-only.
 
 ### Competitive-meta source decision
 
@@ -100,4 +100,4 @@ FUTFC/PaceFC and FUTSettings remain useful public research references, but their
 
 ### Remaining integration work
 
-The DataFluxor server proxy and quote normalizer are implemented, but production connectivity requires a provider API key, a deployed Darkroom server, and wiring the returned quotes into the existing value tracker UI. The competitive tactics feed still requires an authorized source feed or licensed data export. No credentials, external subscriptions, or hosting services are provisioned by this code.
+The DataFluxor server proxy and quote normalizer are implemented, but production connectivity requires a provider API key, a deployed Darkroom server, and wiring the returned quotes into the existing value tracker UI. The competitive tactics feed still requires an authorized source feed or licensed data export. The server can serve that snapshot from `DARKROOM_META_SNAPSHOT_FILE`; it does not collect or fabricate the underlying tactics evidence. No credentials, external subscriptions, or hosting services are provisioned by this code.
