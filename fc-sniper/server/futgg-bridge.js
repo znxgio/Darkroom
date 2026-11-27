@@ -58,8 +58,7 @@ function send(res, status, body, origin) {
   };
   if (origin && ALLOWED_ORIGINS.has(origin)) {
     headers['Access-Control-Allow-Origin'] = origin;
-    if (String(res.req && res.req.headers && res.req.headers['access-control-request-private-network']) === 'true')
-      headers['Access-Control-Allow-Private-Network'] = 'true';
+    headers['Access-Control-Allow-Private-Network'] = 'true';
     headers['Access-Control-Allow-Methods'] = 'GET, OPTIONS';
     headers['Access-Control-Allow-Headers'] = 'Content-Type';
   }
