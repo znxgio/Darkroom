@@ -6,6 +6,7 @@
 // @require      https://raw.githubusercontent.com/znxgio/Darkroom/c5d2b57bee38804c4579792a9c2fac691268bc55/fc-sniper/src/meta-providers.js
 // @require      https://raw.githubusercontent.com/znxgio/Darkroom/c5d2b57bee38804c4579792a9c2fac691268bc55/fc-sniper/src/meta-live-feed.js
 // @require      https://raw.githubusercontent.com/znxgio/Darkroom/c5d2b57bee38804c4579792a9c2fac691268bc55/fc-sniper/src/meta-market-provider.js
+// @require      https://raw.githubusercontent.com/znxgio/Darkroom/4d4049e228d22624128842b13ffecaf87574af49/fc-sniper/src/meta-futdb.js
 // @description  Sniper, pack opener, SBC solver and team upgrade advisor for the EA SPORTS FC Ultimate Team Web App, with built-in safety limits.
 // @match        https://www.ea.com/*ultimate-team/web-app*
 // @match        https://www.ea.com/ea-sports-fc/ultimate-team/web-app*
