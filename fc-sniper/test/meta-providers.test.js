@@ -28,6 +28,15 @@ test('authorized source registry only emits that source kind and allowed metrics
   assert.deepEqual(providers.buildEvidenceRegistry(['futbin-market']), {});
 });
 
+test('tactics registry keeps pro and community separate and stays disabled by default', () => {
+  assert.deepEqual(providers.buildTacticsRegistry(), {});
+  const registry = providers.buildTacticsRegistry(['futgg-pro', 'futgg-community']);
+  assert.equal(registry['futgg-pro'].kind, 'pro');
+  assert.equal(registry['futgg-community'].kind, 'community');
+  assert.ok(registry['futgg-pro'].allowedDimensions.includes('formation'));
+  assert.equal(registry['futbin-market'], undefined);
+});
+
 test('unknown providers return null', () => {
   assert.equal(providers.getProvider('made-up-provider'), null);
 });
