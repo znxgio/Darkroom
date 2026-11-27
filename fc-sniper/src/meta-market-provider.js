@@ -60,7 +60,8 @@
     const fetchImpl = options.fetchImpl || (typeof fetch === 'function' ? fetch : null);
     if (!base || typeof fetchImpl !== 'function') return null;
     const request = async (path, params) => {
-      const url = new URL(path, base.toString().replace(/\\/$/, '') + '/');
+      const baseText = base.toString();
+      const url = new URL(path, (baseText.endsWith('/') ? baseText : baseText + '/') );
       for (const [key, value] of Object.entries(params || {})) url.searchParams.set(key, String(value));
       let response;
       try {
