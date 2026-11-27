@@ -86,6 +86,7 @@ function installMock() {
   // an empty market prevents a fresh purchase toast from masking the lock explanation.
   await p.waitForFunction(() => !document.querySelector('#fcs [data-a=toggle]').classList.contains('on'), null, { timeout: 30000 });
   await p.evaluate(() => { window.F.noHits = true; });
+  await p.waitForTimeout(2500); // let any toast from the completed first session clear before testing the lock explanation
 
   // Status strip on every tab, locked state + why-toast, no layout jump when the bot starts
   await p.click('#fcs [data-tab=settings]');
