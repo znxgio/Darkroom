@@ -86,8 +86,10 @@ const idle = (p) => p.waitForFunction(() => !document.querySelector('#fcs [data-
   await p.waitForSelector('#fcs-ovl.show', { timeout: 3000 }).catch(() => {});
   const ovl = await p.evaluate(() => (document.getElementById('fcs-ovl') || {}).textContent || '');
   check('overlay on a user search', /cheapest Buy Now/.test(ovl) && /Mbapp/.test(ovl), ovl);
-  check('club player scores card is present and manual-only', await p.locator('#fcs [data-a=meta-club]').count() === 1 && (await p.textContent('#fcs [data-r=meta-club]')).includes('Read your club'), '');
-  check('persistent value tracker is present', await p.locator('#fcs [data-a=meta-value-clear]').count() === 1 && (await p.textContent('#fcs [data-r=meta-value]')).includes('Cheaper similar-fit'), '');
+  check('club player scores card is present and manual-only', await p.locator('#fcs [data-a=meta-club]').count() === 1 && (await p.textContent('#fcs [data-r=meta-club]')).includes('Read your owned cards'), '');
+  const valueTrackerUi = { box: await p.locator('#fcs [data-r=meta-value]').count(), clear: await p.locator('#fcs [data-a=meta-value-clear]').count() };
+  const storedValuePairs = await p.evaluate(() => JSON.parse(localStorage.getItem('fc-sniper:meta-value') || '[]'));
+  check('persistent value tracker UI and saved comparisons', valueTrackerUi.box === 1 && valueTrackerUi.clear === 1 && Array.isArray(storedValuePairs) && storedValuePairs.length > 0, JSON.stringify({ valueTrackerUi, stored: storedValuePairs }));
   check('Meta Engine quality estimate is visible and caveated', ovl.includes('engine quality estimate') && ovl.includes('live evidence not connected'), ovl);
   check('per-player market quality list is visible', ovl.includes('Players in these results') && ovl.includes('quality estimate only'), ovl);
   check('overlay colours under green (✅), over red (❌)', await p.evaluate(() => { const g = document.querySelector('#fcs-ovl b.g'); return !!g && /✅/.test(g.textContent) && getComputedStyle(g).color === 'rgb(61, 220, 132)'; }), '');
