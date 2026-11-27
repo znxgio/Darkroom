@@ -101,3 +101,20 @@ FUTFC/PaceFC and FUTSettings remain useful public research references, but their
 ### Remaining integration work
 
 The DataFluxor server proxy and quote normalizer are implemented, but production connectivity requires a provider API key, a deployed Darkroom server, and wiring the returned quotes into the existing value tracker UI. The competitive tactics feed still requires an authorized source feed or licensed data export. The server can serve that snapshot from `DARKROOM_META_SNAPSHOT_FILE`; it does not collect or fabricate the underlying tactics evidence. No credentials, external subscriptions, or hosting services are provisioned by this code.
+
+
+## FUT-DB Ultimate Team card data integration
+
+FUT-DB is now implemented as Darkroom's first documented FC Ultimate Team card-data API connector.
+
+- API documentation: https://api.futdatabase.com/api/doc/index.html
+- Terms: https://fut-db.com/terms
+- Account/API portal: https://app.futdatabase.com/
+- Authentication: `X-AUTH-TOKEN` header, stored only on the Darkroom server.
+- Implemented lookup: `GET /api/players/res/{EA resource id}` through Darkroom's `GET /api/meta/futdb/players/resource/{resourceId}` route.
+- Free account supports player card lookup; full detailed stats, premium search, and player prices require premium. We only implement the documented card-by-resource-ID route so far.
+- The adapter normalizes card identity, six face stats, detailed attribute groups, PlayStyles, PlayStyle+, roles, positions, skill moves, and weak foot.
+- These are player-card facts. They do not count as pro-meta usage evidence or formation popularity.
+- The FUT-DB terms restrict reproduction/distribution/modification of its content without permission; Darkroom uses the documented API for individual lookups and does not bulk mirror or redistribute its database. Review provider terms before public/commercial deployment.
+
+Configure `FUTDB_API_KEY` in the server's secret manager. No API key is included in this repository. The provider API route returns 503 until a key is configured.
