@@ -1789,14 +1789,15 @@
     }
     const num = (...xs) => { for (const x of xs) if (x !== undefined && x !== null && !Number.isNaN(Number(x))) return Number(x); return 0; };
     const ps = readPlayStyles(item);
-    return {
+    const out = {
       stats,
-      attributes,
       skillMoves: num(item.skillMoves, item._skillMoves, item.skillmoves),
       weakFoot: num(item.weakFoot, item._weakFoot, item.weakFootAbilityTypeCode, item.weakfoot),
-      playStyles: ps.styles, // [{ id, name, plus }] — best guess at EA's field names until the probe confirms them
+      playStyles: ps.styles,
       accelerate: ps.accelerate,
     };
+    if (attributes) out.attributes = attributes;
+    return out;
   }
 
   /**
