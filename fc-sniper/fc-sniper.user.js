@@ -6824,6 +6824,7 @@
   #fcs .jobbar .mini{min-height:32px;padding:0 14px}
   #fcs.locked .body .row,#fcs.locked .body .chip button,#fcs.locked .body .chip .mx,#fcs.locked .body .frow button,#fcs.locked .body .fed,#fcs.locked .body input,#fcs.locked .body select,#fcs.locked .body .pqw,#fcs.locked .body [data-a=filter-new],#fcs.locked .body [data-a=filter-starters],#fcs.locked .body button:disabled{opacity:.4}
   #fcs.locked .body button:disabled{pointer-events:auto}
+  #fcs.locked .body input:disabled{pointer-events:none}
   #fcs.locked [data-pane=log] *,#fcs.locked .tabs *,#fcs.locked .hd *{opacity:1}
   #fcs.mob .jobbar{padding:6px 10px;font-size:13px}
   #fcs .last.ok{color:var(--green)}#fcs .last.warn{color:var(--amber)}#fcs .last.err{color:var(--red)}#fcs .last.alert{color:#ffe08a}
