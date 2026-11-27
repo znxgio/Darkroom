@@ -10,6 +10,8 @@ const HOST = '127.0.0.1';
 const PORT = Number(process.env.DARKROOM_BRIDGE_PORT || 8765);
 const SNAPSHOT_FILE = process.env.DARKROOM_META_SNAPSHOT_FILE
   ? path.resolve(process.env.DARKROOM_META_SNAPSHOT_FILE) : '';
+const AUTHORIZED_SOURCES = String(process.env.DARKROOM_AUTHORIZED_META_SOURCES || '')
+  .split(',').map(value => value.trim()).filter(value => ['futgg-pro', 'futgg-community'].includes(value));
 const ALLOWED_ORIGINS = new Set([
   'https://www.ea.com',
   'https://ea.com'
@@ -77,7 +79,8 @@ const server = http.createServer((req, res) => {
   if (req.method === 'GET' && url.pathname === '/health') {
     const snapshot = readSnapshot();
     send(res, 200, { ok: true, service: 'darkroom-mac-bridge', automaticImport: snapshot.ok,
-      status: snapshot.ok ? 'snapshot-ready' : 'manual-fallback-required', reason: snapshot.reason || null }, origin);
+      status: snapshot.ok ? 'snapshot-ready' : 'manual-fallback-required', reason: snapshot.reason || null,
+      authorizedSources: AUTHORIZED_SOURCES }, origin);
     return;
   }
   if (req.method === 'GET' && url.pathname === '/api/meta/snapshot') {
