@@ -3,9 +3,9 @@
 // @namespace    https://github.com/znxgio/darkroom
 // @version      2.6.7
 // @require      https://raw.githubusercontent.com/znxgio/Darkroom/f2778ec3cee149a1bf0f2816bb48d6a0d7ddcaee/fc-sniper/src/meta-engine.js
-// @require      https://raw.githubusercontent.com/znxgio/Darkroom/ca16afdd6a6756b8826e061e965b5f503e3f8606/fc-sniper/src/meta-providers.js
-// @require      https://raw.githubusercontent.com/znxgio/Darkroom/ca16afdd6a6756b8826e061e965b5f503e3f8606/fc-sniper/src/meta-live-feed.js
-// @require      https://raw.githubusercontent.com/znxgio/Darkroom/ca16afdd6a6756b8826e061e965b5f503e3f8606/fc-sniper/src/meta-market-provider.js
+// @require      https://raw.githubusercontent.com/znxgio/Darkroom/20667e0a0b95289f73090e4997b22d3e28fa9f7c/fc-sniper/src/meta-providers.js
+// @require      https://raw.githubusercontent.com/znxgio/Darkroom/20667e0a0b95289f73090e4997b22d3e28fa9f7c/fc-sniper/src/meta-live-feed.js
+// @require      https://raw.githubusercontent.com/znxgio/Darkroom/20667e0a0b95289f73090e4997b22d3e28fa9f7c/fc-sniper/src/meta-market-provider.js
 // @description  Sniper, pack opener, SBC solver and team upgrade advisor for the EA SPORTS FC Ultimate Team Web App, with built-in safety limits.
 // @match        https://www.ea.com/*ultimate-team/web-app*
 // @match        https://www.ea.com/ea-sports-fc/ultimate-team/web-app*
