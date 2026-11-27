@@ -71,3 +71,31 @@ Darkroom now has a secure HTTPS snapshot consumer in `src/meta-live-feed.js`. It
 ### Remaining blocker
 
 A live provider is not connected yet. The next step is a written data permission/feed agreement with FUT.GG or another source that can provide dated pro and community observations, plus a hosted feed endpoint. No scrape, undocumented API, third-party proxy, EA login token, or manual hardcoded meta snapshot will be used as a substitute.
+
+
+## Market-data integration: DataFluxor FUT Data (26 November 2026)
+
+A documented alternative is DataFluxor's FUT Data REST API. Its published contract includes exact EA item ID card lookup, card search, console/PC market quotes, observation timestamps, stale flags, and price history. It is a market/card data provider, not a competitive tactics source. The published price is an observation of market data, not a live auction feed.
+
+- Provider page and API contract: https://datafluxor.com/fut-data
+- Search: `GET /api/v1/fut/cards/search?q=...`
+- Price lookup: `GET /api/v1/fut/prices?ea_ids=...&platform=ps` (up to 500 EA item IDs)
+- Authentication: `X-API-Key`, server-side only.
+- Published plan: $29/month for 100,000 requests; free sandbox is illustrative only and is not production access.
+- The provider documents 429 rate limits and returns observation age; Darkroom rejects stale quotes from the value-comparison index.
+- No purchase or subscription is made by this repository change. Production requests require the user's own provider key.
+
+### Implementation
+
+- `server/meta-api.js` is a minimal Node HTTP proxy. It keeps the provider key on the server, restricts requests to search and price routes, validates IDs/platforms, applies a local per-IP rate limit, uses HTTPS, and returns no-store responses.
+- `src/meta-market-provider.js` normalizes quotes, preserves exact card identity and source timestamps, and excludes stale/zero prices from value comparisons.
+- `test/meta-market-provider.test.js` and `test/meta-api.test.js` cover normalization, stale data, route validation, and key isolation.
+- Configure `DATAFLUXOR_API_KEY` on the server and `DARKROOM_ALLOWED_ORIGIN` to the exact Darkroom UI origin before exposing it. Do not place the key in userscript settings, local storage, or browser requests.
+
+### Competitive-meta source decision
+
+FUTFC/PaceFC and FUTSettings remain useful public research references, but their automated ingestion rights and documented API contracts have not been verified. Their data is not scraped or silently imported. Use them as human research references until they expressly authorize a feed. FUT.GG remains permission-required. A public player database or market API cannot substitute for pro pick-rate evidence.
+
+### Remaining integration work
+
+The DataFluxor server proxy and quote normalizer are implemented, but production connectivity requires a provider API key, a deployed Darkroom server, and wiring the returned quotes into the existing value tracker UI. The competitive tactics feed still requires an authorized source feed or licensed data export. No credentials, external subscriptions, or hosting services are provisioned by this code.
