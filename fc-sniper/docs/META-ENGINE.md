@@ -97,3 +97,36 @@ Run:
 ```sh
 node --test test/meta-engine.test.js
 ```
+
+## Live feed integration boundary (added 0.4.0)
+
+`src/meta-live-feed.js` is the transport adapter for a separately hosted Darkroom feed service. It is deliberately not wired to a third-party site or credential-bearing endpoint.
+
+### Why a Darkroom feed service
+
+The userscript is a public client; provider API keys must not be embedded in it. A backend feed service should hold provider credentials, verify the provider's license/terms, refresh on a controlled schedule, preserve raw source provenance, and publish a small normalized snapshot. The userscript requests only that snapshot over HTTPS with cookies and credentials omitted.
+
+### Feed contract
+
+- `schemaVersion: 1`
+- `game`, `patch`, `platform`, `generatedAt`
+- `tacticsSnapshots`: source-native snapshots accepted by `normalizeTacticsSnapshot`
+- `playerSnapshots`: source-native snapshots accepted by `normalizeProviderSnapshot`
+
+The local source registry remains authoritative for source kind, reliability, allowed dimensions/metrics, and maximum age. Payloads cannot self-assign reliability. Each source snapshot retains its own source ID, context, timestamps, sample sizes, and provenance.
+
+### Current state
+
+- The transport adapter and contract tests are implemented.
+- No provider is currently authorized or connected, and no third-party credentials are stored in Darkroom.
+- FUT.GG's public tactics hub is useful as a human research reference, but its published terms restrict automated access and competing use. Do not scrape it or consume a scraping intermediary for Darkroom without written permission or a suitable license.
+- EA's FC Community API is available only through EA-approved partner sites (currently FUT.GG, FUTBIN, FUTWIZ), with user consent; it is not a general API endpoint Darkroom can call directly.
+- A live connection requires a licensed provider feed or written permission plus a hosted feed endpoint. Until then, the UI must continue to label engine scores as provisional estimates.
+
+### Security and behavior
+
+- HTTPS only; rejects credentials in endpoint URLs.
+- GET requests use `credentials: omit`, `cache: no-store`, and `redirect: error`.
+- Provider credentials belong on the feed service, never in the userscript.
+- Stale, malformed, unregistered, or context-incompatible snapshots are surfaced rather than silently blended.
+- Feed outages return explicit status; previously cached scores should not be silently represented as current.
