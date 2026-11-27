@@ -18,14 +18,16 @@ authorized export/feed that can be saved locally.
 
 ## Enable automatic import
 
-Only after obtaining an authorized FUT.GG export/feed, save its Darkroom schema
+Only after obtaining written permission or a licensed FUT.GG export/feed, save its Darkroom schema
 v1 JSON to a local file and start the bridge with:
 
 ```sh
-DARKROOM_META_SNAPSHOT_FILE="$HOME/Darkroom/authorized-meta-snapshot.json" node server/futgg-bridge.js
+DARKROOM_META_SNAPSHOT_FILE="$HOME/Darkroom/authorized-meta-snapshot.json" \\
+DARKROOM_AUTHORIZED_META_SOURCES="futgg-pro,futgg-community" \\
+node server/futgg-bridge.js
 ```
 
-The file must contain `schemaVersion`, `game`, `patch`, `platform`,
+The source allowlist is intentionally empty by default. Add only the FUT.GG source IDs covered by your permission/license. The file must contain `schemaVersion`, `game`, `patch`, `platform`,
 `generatedAt`, `tacticsSnapshots`, and `playerSnapshots`. The bridge serves
 it at `/api/meta/snapshot`, rejects files over 1 MB and snapshots older than
 72 hours, and allows browser requests only from the EA Web App origins.
