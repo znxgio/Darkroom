@@ -46,3 +46,28 @@ Each accepted snapshot must retain game cycle, patch, platform, source, metric d
 ## Next integration gate
 
 Before enabling a live adapter, verify the exact documented endpoint/feed, authentication model, permitted use, rate limits, retention rules, attribution requirements, and whether commercial/derivative scoring is allowed. Then add a narrow adapter with fixtures and tests. Start with FUT.GG tactics snapshots; add market pricing only through a permitted route.
+
+
+## Live feed integration status (27 November 2026)
+
+Darkroom now has a secure HTTPS snapshot consumer in `src/meta-live-feed.js`. It expects a separately hosted Darkroom feed service; provider credentials must remain server-side. The feed is not pointed at any third-party site.
+
+### Access decision
+
+- FUT.GG remains the strongest candidate for pro/community usage and role/tactics coverage, but its published content terms restrict automated access and use that competes with or substitutes for its service. Treat its tactics page as a human research reference only until Stormstrike grants written permission or a suitable data license.
+- Crawlora documents a hosted API for FUT.GG-derived data, but its own acceptable-use policy says customers remain responsible for source-site terms and rights. It does not grant a right to reuse FUT.GG content that FUT.GG's terms restrict.
+- EA's FC Community API is not a direct Darkroom API. EA lists FUT.GG, FUTBIN, and FUTWIZ as the approved partner sites and says it is not accepting additional applications. User consent through one of those partners does not grant Darkroom a separate right to ingest that partner's data.
+- FUTFC/PaceFC is a useful independent research cross-check where sample windows and patch labels are published, but it is not yet an approved automated source. Confirm its terms and obtain permission before automated ingestion.
+- Player databases and price feeds are separate data families. Do not turn card ratings, GG Ratings, price popularity, or market price into pro pick-rate evidence unless the source defines that metric.
+
+### Adapter contracts
+
+- `buildTacticsRegistry(authorizedSourceIds)` creates the trusted tactics-source registry. It is empty by default.
+- `buildEvidenceRegistry(authorizedSourceIds)` creates the trusted player-evidence registry. It is empty by default.
+- `meta-live-feed.js` reads a versioned snapshot from an HTTPS Darkroom feed endpoint, validates timestamps and context, and normalizes snapshots through the engine validators.
+- Feed payloads cannot assign their own source reliability. The local registry controls source kind, reliability, allowed dimensions/metrics, and maximum age.
+- The userscript must never contain partner API keys. A backend service is required for any credentialed provider integration.
+
+### Remaining blocker
+
+A live provider is not connected yet. The next step is a written data permission/feed agreement with FUT.GG or another source that can provide dated pro and community observations, plus a hosted feed endpoint. No scrape, undocumented API, third-party proxy, EA login token, or manual hardcoded meta snapshot will be used as a substitute.
