@@ -1,5 +1,7 @@
 'use strict';
 
+const fs = require('node:fs/promises');
+
 // Darkroom server-side market-data proxy.
 // Run with DATAFLUXOR_API_KEY set. Never put this key in the userscript/browser.
 const http = require('node:http');
@@ -8,6 +10,7 @@ const HOST = 'datafluxor.com';
 const BASE = 'https://datafluxor.com/api/v1/fut';
 const PORT = Number(process.env.PORT || 8787);
 const API_KEY = String(process.env.DATAFLUXOR_API_KEY || '').trim();
+const META_SNAPSHOT_FILE = String(process.env.DARKROOM_META_SNAPSHOT_FILE || '').trim();
 const ALLOWED_ORIGIN = String(process.env.DARKROOM_ALLOWED_ORIGIN || '').trim();
 const RATE_LIMIT = Number(process.env.DARKROOM_RATE_LIMIT_PER_MINUTE || 60);
 const WINDOW_MS = 60_000;
@@ -78,6 +81,7 @@ async function upstream(path, query) {
 
 function createServer(options = {}) {
   const fetchUpstream = options.upstream || upstream;
+  const snapshotFile = options.snapshotFile ?? META_SNAPSHOT_FILE;
   const keyConfigured = options.keyConfigured ?? !!API_KEY;
   return http.createServer(async (req, res) => {
     const url = parseRequestUrl(req);
@@ -104,6 +108,23 @@ function createServer(options = {}) {
     if (url.pathname === '/health') {
       return send(res, 200, { ok: true, provider: 'datafluxor-fut-data',
         configured: keyConfigured, apiKeyExposedToClient: false }, origin);
+    }
+    if (url.pathname === '/api/meta/snapshot') {
+      if (!snapshotFile) return send(res, 404, { ok: false, error: 'meta-snapshot-not-configured' }, origin);
+      try {
+        const stat = await fs.stat(snapshotFile);
+        if (!stat.isFile() || stat.size > 1_000_000)
+          return send(res, 413, { ok: false, error: 'meta-snapshot-too-large-or-invalid' }, origin);
+        const raw = await fs.readFile(snapshotFile, 'utf8');
+        const snapshot = JSON.parse(raw);
+        if (!snapshot || snapshot.schemaVersion !== 1 || !Array.isArray(snapshot.tacticsSnapshots) ||
+            !Array.isArray(snapshot.playerSnapshots))
+          return send(res, 502, { ok: false, error: 'meta-snapshot-invalid' }, origin);
+        return send(res, 200, snapshot, origin);
+      } catch (error) {
+        return send(res, error.code === 'ENOENT' ? 404 : 502,
+          { ok: false, error: error.code === 'ENOENT' ? 'meta-snapshot-not-found' : 'meta-snapshot-unavailable' }, origin);
+      }
     }
     if (!keyConfigured) return send(res, 503, { ok: false, error: 'provider-key-not-configured' }, origin);
 
