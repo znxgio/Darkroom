@@ -5,7 +5,7 @@ Repository: https://github.com/znxgio/Darkroom
 Working branch: `meta-engine/foundation`  
 Draft PR: https://github.com/znxgio/Darkroom/pull/3  
 PR base/original branch: `claude/ea-fc-sniping-bot-jdz6vq`  
-Latest verified PR head when this handoff was written: `33cb74ea58ff06b3bba2e36d94a7d13aff217a14`
+Latest PR head after adding this handoff and README links: `2d8cdb65e4cbe67f4ce820834dac2f9088e04cdd` (the earlier implementation checkpoint was `33cb74ea58ff06b3bba2e36d94a7d13aff217a14`).
 
 ## Read this first — instructions for the next ChatGPT session
 
@@ -124,7 +124,7 @@ npm run e2e
 - Draft PR #3: https://github.com/znxgio/Darkroom/pull/3
 - PR is open, draft, and unmerged.
 - Last verified head: `33cb74ea58ff06b3bba2e36d94a7d13aff217a14`.
-- Latest checked workflow run at that head: run `45934553567`, workflow “Darkroom tests”, completed with **failure**. Unit-test step succeeded; mocked Web App end-to-end step failed. The exact failing assertion/log has not yet been retrieved in this handoff. Retrieve the workflow job logs and fix the E2E failure before saying CI is green.
+- Workflow run `45934553567` at the earlier implementation checkpoint completed with **failure**. Unit-test step succeeded; mocked Web App end-to-end step failed. The exact failing assertion/log has not yet been retrieved. A newer workflow run `46023192933` for the current handoff commit `2d8cdb65e4cbe67f4ce820834dac2f9088e04cdd` was **in progress** at the time of this update. Check it before claiming CI status. If it fails, retrieve the job logs and fix the E2E failure before saying CI is green.
 - An earlier workflow run also had a mocked E2E failure. Do not assume that prior fix resolved all E2E issues.
 - The userscript's development @downloadURL/@updateURL may point to the dev branch. Before any release/merge, restore approved release URLs and verify all @require commit pins point to the intended immutable commits.
 
