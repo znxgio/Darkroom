@@ -3,13 +3,16 @@
 const fs = require('node:fs/promises');
 
 // Darkroom server-side market-data proxy.
-// Run with DATAFLUXOR_API_KEY set. Never put this key in the userscript/browser.
+// Provider keys stay server-side. Never put provider credentials in the userscript/browser.
 const http = require('node:http');
 
 const HOST = 'datafluxor.com';
 const BASE = 'https://datafluxor.com/api/v1/fut';
 const PORT = Number(process.env.PORT || 8787);
 const API_KEY = String(process.env.DATAFLUXOR_API_KEY || '').trim();
+const FUTDB_HOST = 'api.futdatabase.com';
+const FUTDB_BASE = 'https://api.futdatabase.com';
+const FUTDB_API_KEY = String(process.env.FUTDB_API_KEY || '').trim();
 const META_SNAPSHOT_FILE = String(process.env.DARKROOM_META_SNAPSHOT_FILE || '').trim();
 const ALLOWED_ORIGIN = String(process.env.DARKROOM_ALLOWED_ORIGIN || '').trim();
 const RATE_LIMIT = Number(process.env.DARKROOM_RATE_LIMIT_PER_MINUTE || 60);
@@ -79,10 +82,43 @@ async function upstream(path, query) {
   }
 }
 
+
+async function futdbUpstream(path) {
+  if (!FUTDB_API_KEY) {
+    const error = new Error('FUTDB_API_KEY is not configured');
+    error.statusCode = 503;
+    throw error;
+  }
+  const url = new URL(path, FUTDB_BASE);
+  if (url.hostname !== FUTDB_HOST || url.protocol !== 'https:') throw new Error('Invalid FUT-DB upstream URL');
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  try {
+    const response = await fetch(url, { method: 'GET',
+      headers: { 'X-AUTH-TOKEN': FUTDB_API_KEY, Accept: 'application/json' },
+      redirect: 'error', signal: controller.signal });
+    const data = await response.json();
+    if (!response.ok) {
+      const error = new Error('FUT-DB returned HTTP ' + response.status);
+      error.statusCode = response.status === 429 ? 429 : response.status === 402 ? 402 : 502;
+      error.retryAfter = response.headers.get('retry-after');
+      throw error;
+    }
+    if (!data || typeof data !== 'object' || !data.player) {
+      const error = new Error('FUT-DB returned no player record');
+      error.statusCode = 404;
+      throw error;
+    }
+    return data;
+  } finally { clearTimeout(timer); }
+}
+
 function createServer(options = {}) {
   const fetchUpstream = options.upstream || upstream;
+  const fetchFutDb = options.futdbUpstream || futdbUpstream;
   const snapshotFile = options.snapshotFile ?? META_SNAPSHOT_FILE;
   const keyConfigured = options.keyConfigured ?? !!API_KEY;
+  const futdbKeyConfigured = options.futdbKeyConfigured ?? !!FUTDB_API_KEY;
   return http.createServer(async (req, res) => {
     const url = parseRequestUrl(req);
     const origin = req.headers.origin || '';
@@ -107,7 +143,7 @@ function createServer(options = {}) {
 
     if (url.pathname === '/health') {
       return send(res, 200, { ok: true, provider: 'datafluxor-fut-data',
-        configured: keyConfigured, apiKeyExposedToClient: false }, origin);
+        configured: keyConfigured, futdbConfigured: futdbKeyConfigured, apiKeyExposedToClient: false }, origin);
     }
     if (url.pathname === '/api/meta/snapshot') {
       if (!snapshotFile) return send(res, 404, { ok: false, error: 'meta-snapshot-not-configured' }, origin);
@@ -124,6 +160,21 @@ function createServer(options = {}) {
       } catch (error) {
         return send(res, error.code === 'ENOENT' ? 404 : 502,
           { ok: false, error: error.code === 'ENOENT' ? 'meta-snapshot-not-found' : 'meta-snapshot-unavailable' }, origin);
+      }
+    }
+    const futdbMatch = url.pathname.match(/^\/api\/meta\/futdb\/players\/resource\/(\\d{1,12})$/);
+    if (futdbMatch) {
+      if (!futdbKeyConfigured) return send(res, 503, { ok: false, error: 'futdb-key-not-configured' }, origin);
+      try {
+        const result = await fetchFutDb('/api/players/res/' + futdbMatch[1]);
+        return send(res, 200, { ok: true, provider: 'fut-db', retrievedAt: new Date().toISOString(),
+          player: result.player }, origin);
+      } catch (error) {
+        const status = Number(error.statusCode) || (error.name === 'AbortError' ? 504 : 502);
+        return send(res, status, { ok: false, error: status === 503 ? 'futdb-unavailable' :
+          status === 429 ? 'futdb-rate-limit' : status === 404 ? 'futdb-player-not-found' :
+          status === 402 ? 'futdb-subscription-required' : 'futdb-request-failed',
+          retryAfter: error.retryAfter || null }, origin);
       }
     }
     if (!keyConfigured) return send(res, 503, { ok: false, error: 'provider-key-not-configured' }, origin);
@@ -164,4 +215,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { createServer, limited, upstream, HOST, BASE };
+module.exports = { createServer, limited, upstream, futdbUpstream, HOST, BASE, FUTDB_HOST, FUTDB_BASE };
