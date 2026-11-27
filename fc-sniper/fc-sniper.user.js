@@ -8193,7 +8193,7 @@
       if (!box) return;
       const rows = upgrades.metaRoster;
       if (!rows) {
-        box.innerHTML = '<p class="empty">Read your club to score each card\'s position-specific quality. This is not live competitive meta yet.</p>';
+        box.innerHTML = '<p class="empty">Read your owned cards to score position-specific quality. This is not live competitive meta yet.</p>';
         return;
       }
       const shown = rows.slice(0, 30);
