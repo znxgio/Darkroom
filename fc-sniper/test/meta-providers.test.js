@@ -60,3 +60,12 @@ test('FUTSettings remains a human research reference until an authorized feed ex
   assert.equal(provider.status, 'human-research-only');
   assert.deepEqual(providers.buildTacticsRegistry(), {});
 });
+
+test('PaceFC is the primary pro-meta candidate but automated ingestion stays permission-gated', () => {
+  const pace = providers.getProvider('pacefc-pro');
+  assert.equal(pace.url, 'https://pacefc.gg/meta/cards');
+  assert.equal(pace.kind, 'pro');
+  assert.equal(pace.automatedIngestion, false);
+  assert.equal(pace.status, 'permission-required');
+  assert.deepEqual(providers.buildTacticsRegistry(), {});
+});
