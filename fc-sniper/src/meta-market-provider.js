@@ -80,7 +80,7 @@
       },
       async getPrices(eaIds, platform = 'ps', now = Date.now()) {
         const ids = Array.from(new Set((Array.isArray(eaIds) ? eaIds : []).map(String)));
-        if (!ids.length || ids.length > 500 || ids.some(id => !/^\\d{1,12}$/.test(id)))
+        if (!ids.length || ids.length > 500 || ids.some(id => !/^\d{1,12}$/.test(id)))
           return { status: 'unavailable', reason: 'invalid-ea-ids', quotes: [], unresolved: [] };
         if (!['ps', 'xbox', 'pc'].includes(platform))
           return { status: 'unavailable', reason: 'invalid-platform', quotes: [], unresolved: [] };
