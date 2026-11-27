@@ -105,9 +105,14 @@ function installMock() {
   await p.click('#fcs [data-tab=snipe]');
   const tgState = () => p.evaluate(() => document.querySelector('#fcs [data-pane=snipe] label.row.tg input').checked);
   const tg0 = await tgState();
-  await p.click('#fcs [data-pane=snipe] label.row.tg span', { force: true });
+  // Click the toggle label itself so the delegated capture handler receives the row as its target.
+  await p.click('#fcs [data-pane=snipe] label.row.tg', { force: true });
+  await p.waitForFunction(() => {
+    const toast = document.getElementById('fcs-toast');
+    return toast && toast.classList.contains('show') && toast.textContent.includes('Stop the bot');
+  }, null, { timeout: 3000 });
   const toastTxt = await p.textContent('#fcs-toast');
-  check('tapping a locked toggle shows the why-toast', /Stop the bot \(■\) to change this/.test(toastTxt) && await p.evaluate(() => document.getElementById('fcs-toast').classList.contains('show')), toastTxt);
+  check('tapping a locked toggle shows the why-toast', /Stop the bot \\(■\\) to change this/.test(toastTxt), toastTxt);
   check('locked toggle left the setting unchanged', (await tgState()) === tg0);
   await p.click('#fcs [data-a=toggle]');
   await p.waitForFunction(() => !document.getElementById('fcs').classList.contains('locked'), null, { timeout: 10000 });
