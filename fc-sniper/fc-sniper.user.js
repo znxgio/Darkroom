@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FC Sniper
 // @namespace    https://github.com/znxgio/darkroom
-// @version      2.6.5
+// @version      2.6.6
 // @require      https://raw.githubusercontent.com/znxgio/Darkroom/f2778ec3cee149a1bf0f2816bb48d6a0d7ddcaee/fc-sniper/src/meta-engine.js
 // @description  Sniper, pack opener, SBC solver and team upgrade advisor for the EA SPORTS FC Ultimate Team Web App, with built-in safety limits.
 // @match        https://www.ea.com/*ultimate-team/web-app*
@@ -2733,7 +2733,7 @@
 
   const w = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '2.6.5';
+  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '2.6.6';
   const errText = (e) => (e && e.message ? e.message : String(e));
   const fmt = (n) => Number(n || 0).toLocaleString();
 
