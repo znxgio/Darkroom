@@ -5,7 +5,7 @@ Repository: https://github.com/znxgio/Darkroom
 Working branch: `meta-engine/foundation`  
 Draft PR: https://github.com/znxgio/Darkroom/pull/3  
 PR base/original branch: `claude/ea-fc-sniping-bot-jdz6vq`  
-Current working head: `32deeb5682bdcd095ea0e6575960861514a807bc`; see the latest Actions run and branch history for subsequent commits.
+Current working head: `29a0320ef08fc30acdb2566f2a8a3bc3773f2b07`; see the latest Actions run and branch history for subsequent commits.
 
 ## Read this first — instructions for the next ChatGPT session
 
@@ -17,7 +17,7 @@ Continue the existing Darkroom project from the working branch. Do not restart t
 3. Do not change EA buying, bidding, selling, SBC submission, or account automation while working on the meta feature.
 4. The owner reports FUT.GG support chat approved automated access for the owner's personal use. Keep collection local and private; no resale, public reuse, or redistribution. Do not use private endpoints, reuse cookies/tokens, or bypass access restrictions.
 5. The collector reads normal rendered public FUT.GG pages only. Do not claim private club synchronization or broader provider authorization.
-6. Never claim CI passes unless the latest workflow result confirms it. Local tests pass, but Actions runs `46043312868`, `46044440530`, `46045588344`, `46047094928`, and `46048420014` failed on the locked-toggle toast assertion. The test now checks the visible persistent lock explanation and native disabled state; inspect the next Actions run.
+6. Never claim CI passes unless the latest workflow result confirms it. Actions runs `46043312868` through `46048420014` failed on the locked-toggle toast assertion; run `46049584985` passed unit tests and was cancelled at the 20-minute workflow timeout. A push attempting to raise that timeout was rejected because the connected GitHub OAuth app lacks the `workflow` scope; the local workflow edit was reverted.
 7. Do not ask the owner to repeat decisions already recorded here. Make reasonable implementation decisions and report completed work, limitations, and blockers plainly.
 8. Do not request or store account passwords, EA credentials, session cookies, or recovery information.
 9. The owner approved committing and pushing implementation updates to `meta-engine/foundation`. Do not merge PR #3 or change the original branch.
@@ -130,13 +130,14 @@ npm run e2e
 - Working branch: `meta-engine/foundation`.
 - Draft PR #3: https://github.com/znxgio/Darkroom/pull/3
 - PR is open, draft, and unmerged.
-- Last inspected head: `32deeb5682bdcd095ea0e6575960861514a807bc`.
+- Last inspected remote head: `29a0320ef08fc30acdb2566f2a8a3bc3773f2b07`.
 - Workflow run `45934553567` failed in the mocked E2E step after unit tests passed. Its failure was `test/e2e-filters.js`: tapping a locked toggle showed no why-toast.
 - Workflow run `46023266440` on head `111ecb4d266269e61bbd999d0071c05f4b6e103c` also failed on the same locked-toggle why-toast assertion. Logs were retrieved; unit tests passed, E2E failed.
 - Runs `46043312868` through `46048420014` passed unit tests but failed the `test/e2e-filters.js` toast assertion. Native-disabled settings do not reliably deliver a click event to the delegated toast handler in Linux Chromium. The panel already shows `Bot running — stop (■) to change settings`; the local test now asserts that persistent cue and that the toggle stays disabled/unchanged instead of expecting a tap toast. The focused local filter suite passes with that assertion.
+- Run `46049584985` on `29a0320` passed unit tests and continued through the mocked browser tests, then GitHub cancelled the job at its configured 20-minute timeout. This was a timeout, not a reported test failure. An attempted workflow timeout increase to 45 minutes was rejected by GitHub because the OAuth app has no `workflow` scope; the change was reverted locally.
 - Local `npm test` passes 197 tests. The full local `npm run e2e` suite passed before this test-only adjustment; the focused filter suite passes afterward. `node --check` on changed JavaScript files and `git diff --check` pass.
 - The bridge was checked on isolated port 18765 because port 8765 was occupied by an unrelated Uvicorn service returning 404. The bridge's EA-origin `OPTIONS` preflight returned 204 with the expected allow-origin, methods, and Private Network Access headers; the same EA origin received `/health` 200, and an unlisted origin was denied with 403. This verifies local CORS/PNA response behavior only; it does not verify an end-to-end browser request from the EA Web App on the user's Mac.
-- Latest workflow `46048420014` failed only on the locked-toggle why-toast assertion after the unit step succeeded. Push the persistent-lock-cue assertion and inspect that exact follow-up run.
+- Latest workflow `46049584985` was cancelled by the 20-minute job timeout after unit tests passed. The workflow-file push was rejected: GitHub requires the connected OAuth app to have the `workflow` scope to update `.github/workflows/darkroom-tests.yml`. The local workflow change was reverted; to rerun the full CI suite beyond 20 minutes, the owner needs to reconnect GitHub with that scope or change the workflow directly.
 - The FUT.GG continuation commit `b656cc6` passed local `npm test` (197 tests) and full `npm run e2e` (all eight suites). A real rendered-page collection passed through the snapshot parser (14 formations, 68 roles, 144 pro and 144 community player observations, zero rejects). Local bridge returned 200 for EA-origin health/snapshot requests and 403 for an unlisted origin. The focused filter suite passes locally after the locked disabled-input hit-testing fix.
 - The userscript's development @downloadURL/@updateURL may point to the dev branch. Before any release/merge, restore approved release URLs and verify all @require commit pins point to the intended immutable commits.
 
@@ -152,7 +153,7 @@ npm run e2e
 
 ## Suggested next actions (in order)
 
-1. Push the stable persistent-lock-cue E2E assertion to `meta-engine/foundation`, then inspect that exact GitHub Actions run. Do not merge PR #3.
+1. If full CI is still required, reconnect GitHub with the `workflow` permission scope, then raise the job timeout or split the E2E suites into shorter jobs and inspect the new Actions run. Do not merge PR #3.
 2. If the CI E2E still fails, retrieve its log, fix the assertion/behavior, rerun tests, and push a follow-up to the same branch.
 3. Inspect `futgg-bridge.js` and the userscript bridge check together for browser private-network/CORS behavior. Test from the actual EA Web App origin on the user's Mac. Do not report local bridge success merely because the Node process starts.
 4. Run full tests and a local bridge/EA-origin check; fix any failures.
