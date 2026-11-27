@@ -41,7 +41,7 @@
     {
       id: 'pacefc-pro',
       name: 'PaceFC — Pro Tactics Research',
-      url: 'https://futfc.gg/fc-27-tactics/',
+      url: 'https://pacefc.gg/meta/cards',
       category: 'competitive-meta',
       kind: 'pro',
       capabilities: ['formation-usage', 'tactic-codes', 'patch-comparison'],
@@ -50,7 +50,7 @@
       automatedIngestion: false,
       status: 'permission-required',
       reliability: 0.76,
-      notes: 'Potential independent pro cross-check when methodology, sample window, and patch labels are disclosed. Stormstrike terms restrict automated access and copying/reuse without permission; human viewing only until written permission or license is obtained.'
+      notes: 'Strong potential pro source: tournament-specific pro squads, player pick rates by position, and formation/role usage. PaceFC terms prohibit scraping or automated bulk copying without written permission and restrict bulk/commercial reuse; request permission before ingestion.'
     },
     {
       id: 'datafluxor-fut-market',
