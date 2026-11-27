@@ -8175,7 +8175,7 @@
       const box = this.q('[data-r=meta-value]');
       if (!box) return;
       const saved = store.get(KEYS.metaValue, []);
-      const rows = Array.isArray(saved) ? saved.filter(x => x && x.target && x.alternative) : [];
+      const rows = Array.isArray(saved) ? saved.filter(x => x && x.target && x.alternative && Number.isFinite(x.updatedAt)) : [];
       if (!rows.length) {
         box.innerHTML = '<p class="empty">Cheaper similar-fit comparisons from cards you view in the market will appear here.</p>';
         return;
