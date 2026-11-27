@@ -17,7 +17,7 @@
   function normalizePlayer(raw, retrievedAt = new Date().toISOString()) {
     if (!raw || typeof raw !== 'object') return null;
     const resourceId = String(raw.resourceId ?? raw.id ?? '');
-    if (!/^\\d{1,12}$/.test(resourceId)) return null;
+    if (!/^\d{1,12}$/.test(resourceId)) return null;
     const attributes = {};
     const groups = [
       ['paceAttributes', 'pace'], ['shootingAttributes', 'shooting'],
@@ -70,7 +70,7 @@
     return Object.freeze({
       async getPlayerByResourceId(resourceId) {
         const id = String(resourceId ?? '');
-        if (!/^\\d{1,12}$/.test(id)) return { ok: false, error: 'invalid-resource-id' };
+        if (!/^\d{1,12}$/.test(id)) return { ok: false, error: 'invalid-resource-id' };
         const url = new URL('/api/meta/futdb/players/resource/' + id, base);
         let response;
         try {
