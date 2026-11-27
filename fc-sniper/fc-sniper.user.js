@@ -8234,7 +8234,7 @@
         this.liveMetaContext = result.context || null;
         this.renderMetaClub();
         setStatus('Imported authorized FUT.GG evidence · ' + activeMetaEvidence.length +
-          ' player observations · ' + (result.tactics && result.tactics.observations ? result.tactics.observations.length : 0) +
+          ' player observations · ' + (result.tactics ? result.tactics.formations.length + result.tactics.roles.length + result.tactics.buildUpStyles.length + result.tactics.defensiveStyles.length : 0) +
           ' tactics observations · patch ' + (result.context && result.context.patch || 'unknown') + '.');
         this.log('Imported authorized FUT.GG meta snapshot. Re-score your club to refresh player grades.', 'ok');
       } catch (error) {
