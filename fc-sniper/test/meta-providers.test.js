@@ -43,3 +43,20 @@ test('tactics registry keeps pro and community separate and stays disabled by de
 test('unknown providers return null', () => {
   assert.equal(providers.getProvider('made-up-provider'), null);
 });
+
+test('DataFluxor is a market source and cannot enter meta evidence registries', () => {
+  const provider = providers.getProvider('datafluxor-fut-market');
+  assert.equal(provider.category, 'market-data');
+  assert.equal(provider.automatedIngestion, true);
+  assert.deepEqual(provider.evidenceMetrics, []);
+  assert.deepEqual(providers.buildEvidenceRegistry(['datafluxor-fut-market']), {});
+  assert.equal(providers.buildTacticsRegistry(['datafluxor-fut-market'])['datafluxor-fut-market'], undefined);
+});
+
+test('FUTSettings remains a human research reference until an authorized feed exists', () => {
+  const provider = providers.getProvider('futsettings-pro');
+  assert.equal(provider.kind, 'pro');
+  assert.equal(provider.automatedIngestion, false);
+  assert.equal(provider.status, 'human-research-only');
+  assert.deepEqual(providers.buildTacticsRegistry(['futsettings-pro']), {});
+});
