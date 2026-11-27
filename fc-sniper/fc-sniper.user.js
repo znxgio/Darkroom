@@ -8206,7 +8206,7 @@
       for (const row of rows.slice(0, 15)) {
         const player = row && row.player;
         const resourceId = player && (player.resourceId || player.definitionId || player.defId || player.id);
-        if (!/^\\d{1,12}$/.test(String(resourceId || ''))) { missing++; continue; }
+        if (!/^\d{1,12}$/.test(String(resourceId || ''))) { missing++; continue; }
         const result = await client.getPlayerByResourceId(resourceId);
         if (!result.ok) { missing++; continue; }
         const data = result.player;
