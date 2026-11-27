@@ -46,11 +46,11 @@
       kind: 'pro',
       capabilities: ['formation-usage', 'tactic-codes', 'patch-comparison'],
       evidenceMetrics: ['pro-formation-usage'],
-      access: 'public-reference',
+      access: 'public-reference-restricted',
       automatedIngestion: false,
-      status: 'secondary-candidate',
+      status: 'permission-required',
       reliability: 0.76,
-      notes: 'Useful cross-check when methodology, sample window, and patch labels are disclosed. Do not merge unlike sample windows.'
+      notes: 'Potential independent pro cross-check when methodology, sample window, and patch labels are disclosed. Stormstrike terms restrict automated access and copying/reuse without permission; human viewing only until written permission or license is obtained.'
     },
     {
       id: 'datafluxor-fut-market',
@@ -78,7 +78,7 @@
       automatedIngestion: false,
       status: 'human-research-only',
       reliability: 0.70,
-      notes: 'Public pro formation and player reference. No documented ingestion API or automated-use permission verified; use for attributed manual research only.'
+      notes: 'Public pro formation and player reference. Terms grant personal non-commercial viewing only and prohibit copying materials; do not ingest, copy, or redistribute without permission.'
     },
     {
       id: 'futbin-market',
