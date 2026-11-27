@@ -110,8 +110,8 @@ function installMock() {
     const toast = document.getElementById('fcs-toast');
     if (toast) { toast.className = ''; toast.textContent = ''; }
   });
-  // Click the toggle label itself so the delegated capture handler receives the row as its target.
-  await p.click('#fcs [data-pane=snipe] label.row.tg', { force: true });
+  // Click the visible switch track (the input itself is intentionally hidden).
+  await p.click('#fcs [data-pane=snipe] label.row.tg i', { force: true });
   // Wait for a newly written explanation, not merely the visibility of an earlier toast.
   await p.waitForFunction(() => {
     const toast = document.getElementById('fcs-toast');
