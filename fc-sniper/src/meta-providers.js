@@ -53,6 +53,34 @@
       notes: 'Useful cross-check when methodology, sample window, and patch labels are disclosed. Do not merge unlike sample windows.'
     },
     {
+      id: 'datafluxor-fut-market',
+      name: 'DataFluxor FUT Data — Player Cards and Market Prices',
+      url: 'https://datafluxor.com/fut-data',
+      category: 'market-data',
+      kind: 'community',
+      capabilities: ['player-card-search', 'card-attributes', 'exact-card-identity', 'console-prices', 'pc-prices', 'price-history'],
+      evidenceMetrics: [],
+      access: 'documented-api-key',
+      automatedIngestion: true,
+      status: 'api-available-key-required',
+      reliability: 0.78,
+      notes: 'Documented REST API for FC 27 Ultimate Team cards and observed prices. Use server-side X-API-Key only. Price and card data are market/player facts, never pro-meta evidence.'
+    },
+    {
+      id: 'futsettings-pro',
+      name: 'FUTSettings — Pro Tactics Reference',
+      url: 'https://futsettings.com/',
+      category: 'competitive-meta',
+      kind: 'pro',
+      capabilities: ['formation-usage', 'pro-player-reference', 'tactic-settings'],
+      evidenceMetrics: [],
+      access: 'public-reference',
+      automatedIngestion: false,
+      status: 'human-research-only',
+      reliability: 0.70,
+      notes: 'Public pro formation and player reference. No documented ingestion API or automated-use permission verified; use for attributed manual research only.'
+    },
+    {
       id: 'futbin-market',
       name: 'FUTBIN — Market Reference',
       url: 'https://www.futbin.com/',
@@ -136,7 +164,7 @@
     const dimensions = {
       'futgg-pro': ['formation', 'role', 'buildUp', 'defensiveLine'],
       'futgg-community': ['formation', 'role', 'buildUp', 'defensiveLine'],
-      'pacefc-pro': ['formation']
+      'pacefc-pro': ['formation'],\n      'futsettings-pro': ['formation']
     };
     for (const provider of PROVIDERS) {
       const allowedDimensions = dimensions[provider.id];
