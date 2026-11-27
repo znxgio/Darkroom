@@ -1,15 +1,20 @@
 'use strict';
 
-// Local Mac companion for Darkroom. It only serves a user-supplied, authorized
-// snapshot file; it does not scrape FUT.GG, read browser cookies, or access EA.
+// Local Mac companion for Darkroom. It serves a private-use FUT.GG snapshot
+// assembled from rendered site pages. It never reuses browser credentials or
+// accesses EA, and it is not a public feed or redistribution service.
 const http = require('node:http');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 
 const HOST = '127.0.0.1';
 const PORT = Number(process.env.DARKROOM_BRIDGE_PORT || 8765);
+const DEFAULT_SNAPSHOT_FILE = path.join(os.homedir(), '.darkroom', 'futgg-meta-snapshot.json');
 const SNAPSHOT_FILE = process.env.DARKROOM_META_SNAPSHOT_FILE
-  ? path.resolve(process.env.DARKROOM_META_SNAPSHOT_FILE) : '';
+  ? path.resolve(process.env.DARKROOM_META_SNAPSHOT_FILE) : DEFAULT_SNAPSHOT_FILE;
+const PERSONAL_SYNC_ENABLED = process.env.DARKROOM_FUTGG_PERSONAL_SYNC !== '0' &&
+  !process.env.DARKROOM_META_SNAPSHOT_FILE;
 const AUTHORIZED_SOURCES = String(process.env.DARKROOM_AUTHORIZED_META_SOURCES || '')
   .split(',').map(value => value.trim()).filter(value => ['futgg-pro', 'futgg-community'].includes(value));
 const ALLOWED_ORIGINS = new Set([
@@ -26,6 +31,11 @@ function validateSnapshot(raw) {
     return { ok: false, reason: 'invalid-snapshot-collections' };
   if (raw.tacticsSnapshots.length > 500 || raw.playerSnapshots.length > 1000)
     return { ok: false, reason: 'snapshot-too-large' };
+  if (raw.personalUseOnly === true && raw.redistributionAllowed !== false)
+    return { ok: false, reason: 'invalid-personal-use-policy' };
+  if (raw.authorizedSources != null && (!Array.isArray(raw.authorizedSources) ||
+      raw.authorizedSources.some(source => !['futgg-pro', 'futgg-community'].includes(source))))
+    return { ok: false, reason: 'invalid-authorized-source-list' };
   return { ok: true };
 }
 
@@ -81,7 +91,9 @@ const server = http.createServer((req, res) => {
     const snapshot = readSnapshot();
     send(res, 200, { ok: true, service: 'darkroom-mac-bridge', automaticImport: snapshot.ok,
       status: snapshot.ok ? 'snapshot-ready' : 'manual-fallback-required', reason: snapshot.reason || null,
-      authorizedSources: AUTHORIZED_SOURCES }, origin);
+      authorizedSources: snapshot.ok && Array.isArray(snapshot.snapshot.authorizedSources)
+        ? snapshot.snapshot.authorizedSources : AUTHORIZED_SOURCES,
+      usePolicy: snapshot.ok && snapshot.snapshot.personalUseOnly ? 'personal-only' : null }, origin);
     return;
   }
   if (req.method === 'GET' && url.pathname === '/api/meta/snapshot') {
@@ -95,9 +107,25 @@ const server = http.createServer((req, res) => {
 if (require.main === module) {
   server.listen(PORT, HOST, () => {
     process.stdout.write('Darkroom Mac bridge listening at http://' + HOST + ':' + PORT + '\n');
-    process.stdout.write(SNAPSHOT_FILE
-      ? 'Authorized snapshot file: ' + SNAPSHOT_FILE + '\n'
-      : 'No authorized FUT.GG export/feed configured; automatic import will fall back to manual.\n');
+    process.stdout.write('Private FUT.GG snapshot file: ' + SNAPSHOT_FILE + '\n');
+    if (PERSONAL_SYNC_ENABLED) {
+      const sync = async () => {
+        try {
+          const { syncToFile } = require('./futgg-personal-sync');
+          const result = await syncToFile({ filePath: SNAPSHOT_FILE,
+            onPage: (url, count) => process.stdout.write('Read rendered FUT.GG page (' + count + ' rows): ' + url + '\n') });
+          process.stdout.write('Personal snapshot refreshed locally at ' + result.snapshot.generatedAt + '\n');
+        } catch (error) {
+          process.stderr.write('FUT.GG personal sync unavailable; keeping manual fallback (' +
+            String(error && error.message || error) + ').\n');
+        }
+      };
+      sync();
+      const refresh = setInterval(sync, 6 * 60 * 60 * 1000);
+      if (typeof refresh.unref === 'function') refresh.unref();
+    } else {
+      process.stdout.write('Automatic FUT.GG refresh is disabled for this bridge instance.\n');
+    }
   });
 }
-module.exports = { server, validateSnapshot, readSnapshot, HOST, PORT };
+module.exports = { server, validateSnapshot, readSnapshot, HOST, PORT, DEFAULT_SNAPSHOT_FILE };

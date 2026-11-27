@@ -12,9 +12,9 @@
 
 ## Access and compliance boundary
 
-- No scraping, private endpoints, hidden API calls, EA session-cookie reuse, or partner credential reuse.
-- Publicly viewable pages are research references, not an automatic grant of automated ingestion rights.
-- Automated ingestion remains disabled until a documented feed, API agreement, export, or explicit written permission is verified.
+- FUT.GG support told the owner that automated access is acceptable for personal use. The local collector reads rendered public pages only, without FUT.GG/EA login, cookies, private endpoints, or hidden APIs.
+- FUT.GG data stays on the owner's Mac for personal use. It is not published, resold, or redistributed; this account-specific approval does not extend to other users.
+- Other providers remain disabled until a documented feed, API agreement, export, or provider-specific permission is verified. FUT.GG is enabled only by the owner's local bridge; the provider registry remains empty by default.
 - User-authorized EA Community API access must occur through an approved partner's own consent flow; Darkroom must not collect EA passwords or tokens.
 - EA's stated 28-day retention limit applies to data pulled by approved partner sites; Darkroom must not assume it inherits partner access or retention rights.
 - Store only the minimum data needed, respect source retention rules, and preserve source attribution.
@@ -54,7 +54,7 @@ Darkroom now has a secure HTTPS snapshot consumer in `src/meta-live-feed.js`. It
 
 ### Access decision
 
-- FUT.GG remains the strongest candidate for pro/community usage and role/tactics coverage, but its published content terms restrict automated access and use that competes with or substitutes for its service. Treat its tactics page as a human research reference only until Stormstrike grants written permission or a suitable data license.
+- The owner reports that FUT.GG support approved automated use for their personal workflow. Darkroom now has a Mac-only collector for rendered FUT.GG FC 27 tactics and position-usage pages. It stores a local snapshot only and must not be used to publish, resell, or redistribute FUT.GG data. This account-specific support authorization does not transfer to other users.
 - Crawlora documents a hosted API for FUT.GG-derived data, but its own acceptable-use policy says customers remain responsible for source-site terms and rights. It does not grant a right to reuse FUT.GG content that FUT.GG's terms restrict.
 - EA's FC Community API is not a direct Darkroom API. EA lists FUT.GG, FUTBIN, and FUTWIZ as the approved partner sites and says it is not accepting additional applications. User consent through one of those partners does not grant Darkroom a separate right to ingest that partner's data.
 - PaceFC (pacefc.gg) is the strongest independent pro-meta candidate found so far: it exposes tournament-specific pro squads, most-used cards by position, and formation/role settings. Its Terms of Use (23 October 2026) prohibit scraping or automated copying of large portions without written permission and prohibit bulk/commercial reuse without asking. Request written permission for an automated personal-research feed before ingesting it. FUTSettings' terms grant personal, non-commercial viewing only and prohibit copying materials; do not ingest its tactics or player information without permission.
@@ -62,15 +62,20 @@ Darkroom now has a secure HTTPS snapshot consumer in `src/meta-live-feed.js`. It
 
 ### Adapter contracts
 
-- `buildTacticsRegistry(authorizedSourceIds)` creates the trusted tactics-source registry. It is empty by default.
-- `buildEvidenceRegistry(authorizedSourceIds)` creates the trusted player-evidence registry. It is empty by default.
+- `buildTacticsRegistry(authorizedSourceIds)` creates the trusted tactics-source registry. It is empty unless the local bridge reports the authorized sources.
+- `buildEvidenceRegistry(authorizedSourceIds)` creates the trusted player-evidence registry. It is empty unless the local bridge reports the authorized sources.
 - `meta-live-feed.js` reads a versioned snapshot from an HTTPS Darkroom feed endpoint, validates timestamps and context, and normalizes snapshots through the engine validators.
 - Feed payloads cannot assign their own source reliability. The local registry controls source kind, reliability, allowed dimensions/metrics, and maximum age.
 - The userscript must never contain partner API keys. A backend service is required for any credentialed provider integration.
 
-### Remaining blocker
+### Current source limits
 
-A live provider is not connected yet. The next step is a written data permission/feed agreement with FUT.GG or another source that can provide dated pro and community observations, plus a hosted feed endpoint. No scrape, undocumented API, third-party proxy, EA login token, or manual hardcoded meta snapshot will be used as a substitute.
+- The collector uses ordinary browser navigation and reads rendered page content. It does not use undocumented/private APIs, site cookies, account authentication, or EA account data.
+- Snapshots are local, private, and time-limited. Do not deploy this bridge as a public service or copy its dataset into shared storage.
+- FUT.GG pages do not disclose source sample denominators, platform scope, patch number, or source observation timestamps. Darkroom marks these as unknown and lowers confidence by using an explicit unknown-sample-size path; retrieval time is not represented as a FUT.GG publication time.
+- Player usage is a popularity/selection metric, not a direct win-rate or causal performance measure. Pro and community usage remain separate.
+- Account-specific authorization is not transferable. Another user must obtain their own authorization before automated use.
+- The collector fails closed if the expected FC 27 rendered pages or fields are missing. The local manual snapshot flow remains available.
 
 
 ## Market-data integration: DataFluxor FUT Data (26 November 2026)
@@ -96,7 +101,7 @@ A documented alternative is DataFluxor's FUT Data REST API. Its published contra
 
 ### Competitive-meta source decision
 
-FUTFC/PaceFC and FUTSettings remain useful public research references, but their automated ingestion rights and documented API contracts have not been verified. Their data is not scraped or silently imported. Use them as human research references until they expressly authorize a feed. FUT.GG remains permission-required. A public player database or market API cannot substitute for pro pick-rate evidence.
+FUTFC/PaceFC and FUTSettings remain useful public research references, but their automated ingestion rights and documented API contracts have not been verified. Their data is not scraped or silently imported. Use them as human research references until they expressly authorize a feed. FUT.GG automated collection is limited to the owner's reported personal-use permission and local bridge. A public player database or market API cannot substitute for pro pick-rate evidence.
 
 ### Remaining integration work
 

@@ -1,49 +1,36 @@
-# FUT.GG + Mac bridge
+# FUT.GG personal Mac bridge
 
-Darkroom uses an automatic-first import flow, with manual fallback. The Mac bridge
-is a small local Node service bound only to `127.0.0.1`. It never reads browser
-cookies, EA credentials, or hidden FUT.GG endpoints and does not scrape pages.
+The owner reports that FUT.GG support approved automated access for personal use. Darkroom keeps the resulting data on the owner's Mac and does not publish, resell, or redistribute it. The collector reads only rendered FUT.GG pages that a user can open normally; it does not call site-internal endpoints, sign in, read browser profiles, or collect EA club data.
 
-## Start on macOS
+## Start
 
 From the `fc-sniper` directory:
 
 ```sh
-node server/futgg-bridge.js
+npm install
+npx playwright install chromium
+bash scripts/start-futgg-bridge.command
 ```
 
-The health check is `http://127.0.0.1:8765/health`. With no configured snapshot,
-it reports `manual-fallback-required`; this is expected until FUT.GG provides an
-authorized export/feed that can be saved locally.
+The launcher opens the FUT.GG tactics page and starts `server/futgg-bridge.js`. The bridge runs an initial local sync and repeats it every six hours. It renders the FC 27 tactics overview and the twelve position-specific Most Used Players pages, then writes a schema v1 snapshot to `~/.darkroom/futgg-meta-snapshot.json` with owner-only file permissions. The browser context is temporary and unauthenticated; the current pages used for competitive meta are public.
 
-## Enable automatic import
+The bridge listens only on `127.0.0.1:8765`. The EA Web App reads `http://127.0.0.1:8765/health` and `/api/meta/snapshot`. Only the EA Web App origins are allowed. The snapshot is private to this local workflow.
 
-Only after obtaining written permission or a licensed FUT.GG export/feed, save its Darkroom schema
-v1 JSON to a local file and start the bridge with:
+## Data and limits
 
-```sh
-DARKROOM_META_SNAPSHOT_FILE="$HOME/Darkroom/authorized-meta-snapshot.json" \\
-DARKROOM_AUTHORIZED_META_SOURCES="futgg-pro,futgg-community" \\
-node server/futgg-bridge.js
-```
+- Pro and community evidence stays in separate source registries and score fields.
+- FUT.GG publishes player and formation usage percentages but the pages checked do not publish sample denominators, patch numbers, platform scope, or source observation timestamps. Darkroom preserves those as unknown; it does not invent values. The snapshot's `generatedAt` and evidence `observedAt` mean retrieval time.
+- The player pages expose exact FC 27 EA resource IDs in their normal player links, so observations can be matched to card IDs and positions.
+- The page data is usage/popularity evidence, not a win-rate or causal performance measurement.
+- Only the source pages in the collector are visited. The sync is paced and runs every six hours.
+- No account credentials, EA session, FUT.GG cookie, private club sync, market data, or player personal information is read.
 
-The source allowlist is intentionally empty by default. Add only the FUT.GG source IDs covered by your permission/license. The file must contain `schemaVersion`, `game`, `patch`, `platform`,
-`generatedAt`, `tacticsSnapshots`, and `playerSnapshots`. The bridge serves
-it at `/api/meta/snapshot`, rejects files over 1 MB and snapshots older than
-72 hours, and allows browser requests only from the EA Web App origins.
+If FUT.GG changes the rendered page structure or game cycle, the sync fails closed and keeps the previous snapshot. The bridge reports manual fallback when the saved snapshot is missing, invalid, or older than 72 hours.
 
-## Current FUT.GG limitation
+## Optional controls
 
-FUT.GG's EA club sync populates the user's FUT.GG account; it does not itself
-authorize Darkroom to read that private account data. No documented export/feed
-for Darkroom has been verified. Therefore the bridge intentionally reports the
-manual fallback state until an authorized transfer mechanism is available.
-Opening FUT.GG in a browser is supported as a human research step, not as
-permission to automate extraction or copy bulk content.
+Set `DARKROOM_FUTGG_PERSONAL_SYNC=0` to disable automatic collection while keeping the local bridge available. Setting `DARKROOM_META_SNAPSHOT_FILE` points the bridge to a manually supplied authorized snapshot and disables the page collector, so that file is not overwritten. Do not point it at a shared or public location.
 
-## Security
+## Account sync
 
-- Listens on loopback only; no LAN exposure.
-- No login/session/token collection.
-- Strict Host and Origin checks; no arbitrary proxying.
-- Read-only GET endpoints; no EA account or market actions.
+FUT.GG's EA account synchronization is not used by this integration. It imports only the competitive meta fields displayed on the public tactics pages. Private club data remains inside FUT.GG and the EA Web App.

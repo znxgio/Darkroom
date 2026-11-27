@@ -1,6 +1,6 @@
 # Meta data source strategy
 
-Status: research and integration constraints, reviewed 2026-11-26. This document is not a claim that any external source has granted Darkroom an API licence.
+Status: research and integration constraints, reviewed 2026-11-27. The owner reports that FUT.GG support approved automated access for personal use; that permission is limited to the owner's local workflow and does not authorize redistribution.
 
 ## Findings
 
@@ -13,9 +13,9 @@ Public reference pages:
 - https://www.fut.gg/tactics/codes/
 - Example formation detail: https://www.fut.gg/tactics/4-2-1-3/
 
-The site says its tactics are based on real squads it tracks and that the preferred tactic per formation is derived from those squads. Its editorial policy says it uses in-game data it collects directly, official EA announcements, and its own testing. That is useful provenance, but it does not establish a public API, bulk-feed entitlement, or permission for automated scraping.
+The site says its tactics are based on real squads it tracks and that the preferred tactic per formation is derived from those squads. Its editorial policy says it uses in-game data it collects directly, official EA announcements, and its own testing. That is useful provenance, but it does not establish a public API or bulk-feed entitlement. FUT.GG support told the owner that personal automated access is acceptable; the implemented local collector relies on that owner-specific authorization.
 
-**Decision:** treat FUT.GG as a high-priority prospective provider / human-verifiable reference. Do not build a scraper or assume an undocumented endpoint. Seek written permission or a documented partner feed before automated ingestion. Until then, accept only permitted exports/manual snapshots and retain attribution, URL, observed time, game version, and patch.
+**Decision:** use only the owner's local collector for personal, non-redistributed use. It reads rendered FC 27 tactics/player-usage pages through ordinary browser navigation, never private endpoints or account credentials. Preserve source URLs and retrieval time. The source pages do not report sample denominator, patch, platform, or source observation time; mark these unknown. Authorization does not transfer to other users.
 
 ### 2. EA's FC Community API is not a general developer API
 

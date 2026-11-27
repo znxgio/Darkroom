@@ -7109,6 +7109,7 @@
               <p class="note">“Update my team” reads your squad in seconds. “Find upgrades” is the slower part: it checks the market and SBCs for your 3 weakest spots.</p></div>
             <div class="card"><h4>🧠 My player scores</h4>
               <div data-r="meta-club"><p class="empty">Read your owned cards to score each card's position-specific quality. This is not live competitive meta yet.</p></div>
+              <div data-r="meta-tactics"><p class="empty">Your private FUT.GG snapshot will show pro and community formation and role usage here.</p></div>
               <div class="row" style="gap:6px;align-items:center"><button class="btn" data-a="meta-futgg-open">Open FUT.GG</button><button class="btn" data-a="meta-futgg-sync">Check Mac auto-import</button></div>
               <p class="note" data-r="meta-futgg-status">Mac bridge not checked. Automatic import is attempted first; manual fallback is used when no authorized feed is available.</p>
               <details class="hint"><summary>Import a permitted snapshot manually</summary>
@@ -8419,6 +8420,7 @@
     },
 
     renderMetaClub() {
+      this.renderMetaTactics();
       const box = this.q('[data-r=meta-club]');
       if (!box) return;
       const rows = upgrades.metaRoster;
@@ -8432,6 +8434,33 @@
         <div class="list">${shown.map(({ player, best }) => `<div class="li"><span class="t"><b>${esc(player.name)} ${player.rating || ''}</b>
           <small>${best ? `${esc(best.position)} · ${best.quality.proMetaScore != null || best.quality.communityMetaScore != null ? `score ${Math.round(best.quality.score)}/100 · ` : ''}${best.quality.playerQualityScore == null ? 'quality estimate unavailable' : `${Math.round(best.quality.playerQualityScore)}/100 quality estimate`} · ${best.quality.confidence}% confidence${best.quality.proMetaScore != null ? ` · pro ${Math.round(best.quality.proMetaScore)}` : ''}${best.quality.communityMetaScore != null ? ` · community ${Math.round(best.quality.communityMetaScore)}` : ''}` : 'Not enough position data to score'} · ${(player.positions || []).map(esc).join('/') || 'position unknown'}${player.futdb ? ` · FUT-DB data ${esc(player.futdb.retrievedAt)}` : ''}</small></span></div>`).join('')}</div>
         ${rows.length > shown.length ? `<p class="note">Showing top ${shown.length} of ${rows.length} cards.</p>` : ''}`;
+    },
+
+    renderMetaTactics() {
+      const box = this.q('[data-r=meta-tactics]');
+      if (!box) return;
+      const tactics = this.liveMetaTactics;
+      if (!tactics || tactics.status !== 'ok') {
+        box.innerHTML = '<p class="empty">Your private FUT.GG snapshot will show pro and community formation and role usage here.</p>';
+        return;
+      }
+      const formations = [...(tactics.formations || [])]
+        .sort((a, b) => (b.proUsageShare ?? -1) - (a.proUsageShare ?? -1)).slice(0, 6);
+      const roleByPosition = new Map();
+      for (const row of tactics.roles || []) {
+        if (!row.position) continue;
+        const current = roleByPosition.get(row.position);
+        if (!current || (row.proUsageShare ?? -1) > (current.proUsageShare ?? -1)) roleByPosition.set(row.position, row);
+      }
+      const roles = [...roleByPosition.values()].sort((a, b) => a.position.localeCompare(b.position));
+      const percent = value => Number.isFinite(Number(value)) ? `${Number(value).toFixed(1).replace(/\.0$/, '')}%` : '—';
+      const context = tactics.context || {};
+      box.innerHTML = `<p class="note">${esc(context.game || 'FC 27')} · patch ${esc(context.patch || 'not reported')} · platform ${esc(context.platform || 'not reported')} · sample denominators are not published</p>
+        <h5 class="subtitle">Formations used by pros</h5>
+        ${formations.length ? `<div class="list">${formations.map(row => `<div class="li"><span class="t"><b>${esc(row.key)}</b><small>Pros ${percent(row.proUsageShare)} · community ${percent(row.communityUsageShare)}${row.proBuildUpStyle || row.proDefensiveLineStyle ? ` · pro setup: ${esc([row.proBuildUpStyle && `${row.proBuildUpStyle} build-up`, row.proDefensiveLineStyle && `${row.proDefensiveLineStyle} line`].filter(Boolean).join(' · '))}` : ''}</small></span></div>`).join('')}</div>` : '<p class="empty">No formation observations in this snapshot.</p>'}
+        <h5 class="subtitle">Most-used role by position</h5>
+        ${roles.length ? `<div class="list">${roles.map(row => `<div class="li"><span class="t"><b>${esc(row.position)} · ${esc(row.key)}</b><small>Pros ${percent(row.proUsageShare)} · community ${percent(row.communityUsageShare)}</small></span></div>`).join('')}</div>` : '<p class="empty">No role observations in this snapshot.</p>'}
+        <p class="note">Imported for your local personal use only. FUT.GG does not publish patch, platform, or sample-size details on these pages.</p>`;
     },
 
     renderUpgrades() {

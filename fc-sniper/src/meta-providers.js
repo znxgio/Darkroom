@@ -1,6 +1,6 @@
-/* Darkroom Meta Provider Registry — no network or scraping.
- * Provider profiles describe candidate sources and the evidence they can supply.
- * Ingestion stays disabled until a documented feed or explicit permission exists.
+/* Darkroom Meta Provider Registry.
+ * The FUT.GG collector reads only the user's authorized, rendered public pages,
+ * runs locally, and is restricted to this user's personal non-redistributed use.
  */
 (function (root, factory) {
   const api = factory();
@@ -31,12 +31,12 @@
       category: 'competitive-meta',
       kind: 'pro',
       capabilities: ['formation-usage', 'role-usage', 'build-up-usage', 'defensive-line-usage', 'tactic-codes', 'player-role-fit'],
-      evidenceMetrics: ['pro-formation-usage', 'pro-role-usage', 'pro-build-up-usage', 'pro-defensive-line-usage'],
-      access: 'public-reference-restricted',
-      automatedIngestion: false,
-      status: 'permission-required',
+      evidenceMetrics: ['pro-formation-usage', 'pro-role-usage', 'pro-build-up-usage', 'pro-defensive-line-usage', 'pro-player-usage'],
+      access: 'personal-use-support-authorization',
+      automatedIngestion: true,
+      status: 'personal-local-only',
       reliability: 0.82,
-      notes: 'Public FC 27 tactics pages visibly separate pro and community usage, but published content terms restrict automated access and competing use. Human research reference only until written permission or a suitable license is obtained.'
+      notes: 'FUT.GG support authorized this account owner to automate personal use. The local collector reads rendered pages only. No public reuse, resale, or redistribution is allowed; the source does not publish sample denominators or patch/platform context.'
     },
     {
       id: 'futgg-community',
@@ -45,12 +45,12 @@
       category: 'competitive-meta',
       kind: 'community',
       capabilities: ['formation-usage', 'role-usage', 'build-up-usage', 'defensive-line-usage', 'player-role-fit'],
-      evidenceMetrics: ['community-formation-usage', 'community-role-usage', 'community-build-up-usage', 'community-defensive-line-usage'],
-      access: 'public-reference-restricted',
-      automatedIngestion: false,
-      status: 'permission-required',
+      evidenceMetrics: ['community-formation-usage', 'community-role-usage', 'community-build-up-usage', 'community-defensive-line-usage', 'community-player-usage'],
+      access: 'personal-use-support-authorization',
+      automatedIngestion: true,
+      status: 'personal-local-only',
       reliability: 0.72,
-      notes: 'Keep community squad trends separate from pro tactics observations. Automated ingestion requires written permission or a suitable license.'
+      notes: 'FUT.GG support authorized this account owner to automate personal use. Keep community squad trends separate from pro tactics observations. No public reuse, resale, or redistribution is allowed.'
     },
     {
       id: 'pacefc-pro',
@@ -163,6 +163,7 @@
           kind: provider.kind,
           reliability: provider.reliability,
           allowedMetrics: [metric],
+          allowUnknownSampleSize: provider.id.startsWith('futgg-'),
           maxAgeDays: 45
         };
       }
@@ -188,6 +189,7 @@
         kind: provider.kind,
         reliability: provider.reliability,
         allowedDimensions: [...allowedDimensions],
+        allowUnknownSampleSize: provider.id.startsWith('futgg-'),
         maxAgeDays: 45
       };
     }

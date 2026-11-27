@@ -15,8 +15,8 @@ Continue the existing Darkroom project from the working branch. Do not restart t
 1. Work only on `meta-engine/foundation`.
 2. Never merge PR #3 or change the original branch without the owner's explicit approval.
 3. Do not change EA buying, bidding, selling, SBC submission, or account automation while working on the meta feature.
-4. Do not scrape FUT.GG, use undocumented/private endpoints, reuse EA/FUT.GG cookies or tokens, or bypass access restrictions.
-5. Never claim live FUT.GG import works until an authorized export/API/feed is actually obtained and tested end-to-end.
+4. The owner reports FUT.GG support chat approved automated access for the owner's personal use. Keep collection local and private; no resale, public reuse, or redistribution. Do not use private endpoints, reuse cookies/tokens, or bypass access restrictions.
+5. The collector reads normal rendered public FUT.GG pages only. Do not claim private club synchronization or broader provider authorization.
 6. Never claim tests pass unless the latest workflow result confirms it. The last verified CI run below has an E2E failure.
 7. Do not ask the owner to repeat decisions already recorded here. Make reasonable implementation decisions and report completed work, limitations, and blockers plainly.
 8. Do not request or store account passwords, EA credentials, session cookies, or recovery information.
@@ -44,7 +44,7 @@ Desired user experience:
 3. If the bridge/feed is missing, stale, invalid, or unavailable, explain why and fall back to manual input/research.
 4. Manual and automatic evidence must pass through the same validation and analysis pipeline.
 
-Important distinction: FUT.GG's EA account sync puts the user's club data into FUT.GG. That does **not** automatically give Darkroom permission or a technical route to read that private data. The user has discussed using their always-on Mac as a technical/human bridge. The Mac can run a local service and open FUT.GG for the user, but it must not scrape private pages/endpoints or steal/reuse browser session credentials.
+Important distinction: the owner reports FUT.GG support approved automated access for personal use. This is owner-specific permission for the local workflow only. The Mac collector reads rendered public tactics pages in a fresh unauthenticated browser context; it does not access FUT.GG private account pages or EA club data. No resale, public reuse, or redistribution is allowed.
 
 ### Implemented Mac bridge
 
@@ -52,21 +52,24 @@ Important distinction: FUT.GG's EA account sync puts the user's club data into F
 - `fc-sniper/scripts/start-futgg-bridge.command`: launcher script. Run it with `bash scripts/start-futgg-bridge.command` from `fc-sniper`; it opens FUT.GG tactics in a browser and starts the local service.
 - `fc-sniper/test/futgg-bridge.test.js`: validates snapshot schema and size.
 - `fc-sniper/docs/FUTGG-MAC-BRIDGE.md`: setup and authorization notes.
+- `fc-sniper/server/futgg-personal-sync.js`: local Playwright collector for the rendered FC 27 tactics overview and twelve position-usage pages. Writes an owner-only snapshot to `~/.darkroom/futgg-meta-snapshot.json`.
 - Package script: `npm run start:futgg-bridge`.
 - Health endpoint: `http://127.0.0.1:8765/health`.
 - Snapshot endpoint: `http://127.0.0.1:8765/api/meta/snapshot`.
 - Optional snapshot file: set `DARKROOM_META_SNAPSHOT_FILE` to a local JSON file.
-- Optional source allowlist: `DARKROOM_AUTHORIZED_META_SOURCES`. It is empty by default. Only configure FUT.GG source IDs after obtaining the relevant permission/license.
+- The bridge's local snapshot advertises the two FUT.GG source IDs collected. No extra provider allowlist is needed for this owner-specific local workflow.
 
-The bridge validates schema version 1, required game/patch/platform/generatedAt context, arrays for tactics/player snapshots, collection caps, file size, and freshness. It only serves a local authorized snapshot; it is not a FUT.GG connector or scraper.
+The bridge validates schema version 1, context/timestamp, arrays, collection caps, file size, freshness, and the personal-use policy. It binds to loopback, limits browser origins to EA Web App origins, and reads only its local snapshot file.
 
-### Current limitation — do not gloss over this
+### Current implementation and limits
 
-No documented FUT.GG export/feed for Darkroom has been verified. Therefore automatic import from FUT.GG is **not currently operational**. The UI's auto-check currently checks the local Mac bridge and then reports manual fallback if no authorized snapshot/source is configured. Opening FUT.GG is a human research step, not a data transfer.
+The Mac collector and local automatic feed are implemented. The collector reads normal rendered public pages, not an API or private account data. A real collection against the current FUT.GG pages produced 14 formations, 68 role/focus observations, 144 pro player observations, and 144 community player observations; the snapshot passed Darkroom's live-feed parser with zero rejected rows. Rows under 1% are omitted because the source reports them as ranges. FUT.GG does not publish sample denominators, platform scope, patch number, or source observation timestamps on these pages, so these remain explicitly unknown. Local retrieval time is not treated as source publication time.
+
+This is not private club synchronization, market pricing, or proof that FUT.GG has a public API/feed. Manual snapshot import remains supported through the same validation and engine path.
 
 The manual import UI is implemented in Squad → My player scores. It accepts user-provided schema v1 JSON, requires a permission/license confirmation and HTTPS source URLs, previews context and rejections, and sends accepted rows through the same parser and source registry as the authorized feed. The schema is documented in `fc-sniper/docs/META-MANUAL-IMPORT.md`. Imported evidence stays in page memory only. This does not mean a FUT.GG export was found or that FUT.GG import works.
 
-Continue investigating only official/documented export or partner mechanisms and/or written permission. Preserve auto-first status checks, and do not invent a FUT.GG export or silently parse/scrape the FUT.GG website.
+Keep the collector within the owner-reported personal-use authorization and local-only policy. If any other user or public deployment is considered, obtain separate authorization first. Do not add private endpoints, account data, or redistribution.
 
 ## Architecture / key files
 
@@ -82,7 +85,7 @@ Provider-neutral engine: player adaptation, role/position weighting, PlayStyle p
 - `fc-sniper/src/meta-live-feed.js`
 - `fc-sniper/docs/META-PROVIDERS.md`
 
-Provider registry records capabilities and access limitations. FUT.GG and PaceFC ingestion are permission-gated. FUTBIN is market reference only. FUT-DB is player-card data, not competitive meta. The feed consumer validates authorized versioned snapshots and context.
+Provider registry records capabilities and access limitations. FUT.GG ingestion is limited to this owner's personal local bridge; PaceFC remains permission-gated. FUTBIN is market reference only. FUT-DB is player-card data, not competitive meta. The feed consumer validates versioned snapshots and context.
 
 ### Market / player enrichment
 - `fc-sniper/src/meta-market-provider.js`
@@ -101,7 +104,7 @@ Existing legacy score remains a fallback. The new meta engine produces quality/r
 - Check Mac auto-import.
 - Market overlay quality estimate/confidence and value tracker.
 
-Recent UI integration adds a player-evidence variable to the engine evaluation path and a local bridge status check. Verify the exact current code and runtime behavior before extending it.
+Recent UI integration displays separate pro/community formation and player usage in My Player Scores, and the local bridge status check feeds the same engine path as manual import.
 
 ### Tests
 - `fc-sniper/test/meta-engine.test.js`
@@ -111,6 +114,7 @@ Recent UI integration adds a player-evidence variable to the engine evaluation p
 - `fc-sniper/test/meta-api.test.js`
 - `fc-sniper/test/meta-futdb.test.js`
 - `fc-sniper/test/futgg-bridge.test.js`
+- `fc-sniper/test/futgg-personal-sync.test.js`
 - Existing Playwright mocked EA Web App tests under `fc-sniper/test/e2e*.js`.
 
 Run from `fc-sniper`:
@@ -133,13 +137,14 @@ npm run e2e
 - Local `npm test` passes all 193 tests after adding manual snapshot parser/provenance tests. The Chromium launch issue was resolved by reinstalling Playwright's browser in the configured browser cache. The complete local `npm run e2e` suite passed: `test/e2e.js`, `test/e2e-list.js`, `test/e2e-filters.js`, `test/e2e-tasks.js`, `test/e2e-trade.js`, `test/e2e-war.js`, `test/e2e-plan.js`, and `test/e2e-dry.js`. This includes the formerly failing locked-toggle explanation. After updating `test/e2e.js` to exercise manual import preview, authorization, import, and clear, that updated script passed independently. `node --check` on changed JavaScript files and `git diff --check` pass.
 - The bridge was checked on isolated port 18765 because port 8765 was occupied by an unrelated Uvicorn service returning 404. The bridge's EA-origin `OPTIONS` preflight returned 204 with the expected allow-origin, methods, and Private Network Access headers; the same EA origin received `/health` 200, and an unlisted origin was denied with 403. This verifies local CORS/PNA response behavior only; it does not verify an end-to-end browser request from the EA Web App on the user's Mac.
 - Check the new workflow run before claiming CI status. If it fails, retrieve logs and continue fixing it.
+- Current continuation adds the FUT.GG local collector, unknown-sample handling, tactics panel, fixtures, and documentation. Full `npm test` passes 197 tests. Full `npm run e2e` passes all eight suites: `test/e2e.js`, `test/e2e-list.js`, `test/e2e-filters.js`, `test/e2e-tasks.js`, `test/e2e-trade.js`, `test/e2e-war.js`, `test/e2e-plan.js`, and `test/e2e-dry.js`. A real rendered-page collection passed through the snapshot parser (14 formations, 68 roles, 144 pro and 144 community player observations, zero rejects). Local bridge returned 200 for EA-origin health/snapshot requests and 403 for an unlisted origin. Syntax and `git diff --check` pass. GitHub Actions for this continuation has not run yet.
 - The userscript's development @downloadURL/@updateURL may point to the dev branch. Before any release/merge, restore approved release URLs and verify all @require commit pins point to the intended immutable commits.
 
 ## Research conclusions already reached
 
 - EA Community API access is restricted to approved partner sites; Darkroom does not have direct partner access.
 - FUT.GG's EA partner status does not authorize Darkroom to read FUT.GG private account data.
-- Public pages and a browser-open action do not authorize automated bulk extraction.
+- The owner reports FUT.GG support chat approved rendered-page automated access for personal use. This does not authorize resale, public reuse, redistribution, private account access, or use by other users.
 - A third-party hosted API that republishes FUT.GG data does not by itself grant rights to reuse that data.
 - No verified free all-in-one provider has been found for current player attributes, live prices, professional usage, community usage, formations, and tactics.
 - The owner prefers free options and does not want invented subscriptions/API keys.
@@ -150,8 +155,8 @@ npm run e2e
 1. Push the current manual-import and locked-toggle fix to `meta-engine/foundation`, then inspect that exact GitHub Actions run. Do not merge PR #3.
 2. If the CI E2E still fails, retrieve its log, fix the assertion/behavior, rerun unit tests, and push a follow-up to the same branch.
 3. Inspect `futgg-bridge.js` and the userscript bridge check together for browser private-network/CORS behavior. Test from the actual EA Web App origin on the user's Mac. Do not report local bridge success merely because the Node process starts.
-4. Research official FUT.GG export/partner permission routes. If unavailable, keep auto-first with honest manual fallback.
-5. Update the PR description and handoff whenever the actual state changes.
+4. Run full tests and a local bridge/EA-origin check; fix any failures.
+5. Commit and push the implementation to `meta-engine/foundation`, then inspect the exact CI run and update the draft PR description.
 6. Ask for explicit merge approval only after the owner can review the working branch and CI is green.
 
 ## How to continue with the owner

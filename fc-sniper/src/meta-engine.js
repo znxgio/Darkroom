@@ -140,10 +140,12 @@
     const observedAt = typeof item.observedAt === 'number' ? item.observedAt : Date.parse(item.observedAt || '');
     if (!kind || !Number.isFinite(value) || value < 0 || value > 100 ||
         !Number.isFinite(observedAt) || !Number.isFinite(reliability)) return null;
+    const sampleSizeKnown = item.sampleSizeKnown !== false;
     return {
       kind, value, source: String(item.source || 'unknown'),
       sourceReliability: clamp(reliability, 0, 1),
-      observedAt, sampleSize: clamp(Number(item.sampleSize) || 1, 1, 1000000),
+      observedAt, sampleSize: sampleSizeKnown ? clamp(Number(item.sampleSize) || 1, 1, 1000000) : null,
+      sampleSizeKnown,
       metric: String(item.metric || 'rating'), context: String(item.context || ''),
       url: item.url ? String(item.url) : null,
       game: item.game ? String(item.game) : null,
@@ -164,11 +166,11 @@
       const sources = new Set();
       for (const e of entries) {
         const age = Math.max(0, (now - e.observedAt) / dayMs);
-        const sampleFactor = Math.sqrt(e.sampleSize);
+        const sampleFactor = Math.sqrt(e.sampleSizeKnown ? e.sampleSize : 1);
         const weight = decayWeight(age, halfLife) * e.sourceReliability * sampleFactor;
         numerator += e.value * weight;
         denominator += weight;
-        rawSamples += e.sampleSize;
+        if (e.sampleSizeKnown) rawSamples += e.sampleSize;
         newest = Math.max(newest, e.observedAt);
         sources.add(e.source);
       }
@@ -292,7 +294,8 @@
       const key = [item?.playerId, item?.position, metric, item?.context || '', observedAt].join('|');
       if (!item || item.kind !== registry.kind || !['pro', 'community'].includes(item.kind)) { reject('source-kind-mismatch', item); continue; }
       if (!item.playerId || !item.position || !roleGroup(item.position) || !metric || (allowedMetrics && !allowedMetrics.includes(metric))) { reject('invalid-or-disallowed-metric-or-position', item); continue; }
-      if (!Number.isFinite(Number(item.sampleSize)) || Number(item.sampleSize) < 1) { reject('invalid-sample-size', item); continue; }
+      const sampleSizeKnown = Number.isFinite(Number(item.sampleSize)) && Number(item.sampleSize) >= 1;
+      if (!sampleSizeKnown && !(registry.allowUnknownSampleSize === true && item.sampleSize == null && item.sampleSizeKnown === false)) { reject('invalid-sample-size', item); continue; }
       if (!Number.isFinite(Number(item.value)) || Number(item.value) < 0 || Number(item.value) > 100 ||
           !Number.isFinite(observedAt) || observedAt > now + 5 * 60000) { reject('invalid-value-or-time', item); continue; }
       if ((now - observedAt) / dayMs > Number(registry.maxAgeDays ?? maxSnapshotAgeDays)) { reject('stale-evidence', item); continue; }
@@ -302,11 +305,13 @@
         ...item,
         source: sourceId,
         sourceReliability: Number(registry.reliability),
-        sampleSize: item.sampleSize,
+        sampleSize: sampleSizeKnown ? item.sampleSize : null,
+        sampleSizeKnown,
         observedAt: new Date(observedAt).toISOString()
       });
       if (!normalized) { reject('normalization-failed', item); continue; }
-      evidence.push({ ...normalized, playerId: String(item.playerId), position: String(item.position).toUpperCase(),
+      evidence.push({ ...normalized, sampleSize: sampleSizeKnown ? normalized.sampleSize : null,
+        sampleSizeKnown, playerId: String(item.playerId), position: String(item.position).toUpperCase(),
         game: String(raw.game), patch: String(raw.patch), platform: String(raw.platform) });
     }
     return { status: evidence.length ? 'ok' : 'empty', sourceId, game: String(raw.game), patch: String(raw.patch),
@@ -341,19 +346,22 @@
       const key = String(item?.key || item?.formation || item?.role || '').trim();
       const position = item?.position ? String(item.position).toUpperCase() : null;
       const usageShare = Number(item?.usageShare);
-      const sampleSize = Number(item?.sampleSize);
+      const sampleSizeKnown = Number.isFinite(Number(item?.sampleSize)) && Number(item?.sampleSize) >= 1;
+      const sampleSize = sampleSizeKnown ? Number(item.sampleSize) : 1;
       const observedAt = typeof item?.observedAt === 'number' ? item.observedAt : Date.parse(item?.observedAt || '');
       if (!['formation', 'role', 'buildUp', 'defensiveLine'].includes(dimension) ||
           (allowed && !allowed.includes(dimension)) || !key ||
           (dimension === 'role' && !roleGroup(position))) { reject('invalid-or-disallowed-tactics-dimension', item); continue; }
       if (!Number.isFinite(usageShare) || usageShare < 0 || usageShare > 100 ||
+          (!sampleSizeKnown && !(registry.allowUnknownSampleSize === true && item?.sampleSize == null && item?.sampleSizeKnown === false)) ||
           !Number.isFinite(sampleSize) || sampleSize < 1 || !Number.isFinite(observedAt) ||
           observedAt > now + 5 * 60000) { reject('invalid-tactics-value-or-time', item); continue; }
       if ((now - observedAt) / dayMs > Number(registry.maxAgeDays ?? maxAgeDays)) { reject('stale-tactics-observation', item); continue; }
       const duplicateKey = [dimension, key, position || '', item.focus || '', item.formation || '', observedAt].join('|');
       if (seen.has(duplicateKey)) { reject('duplicate-tactics-observation', item); continue; }
       seen.add(duplicateKey);
-      observations.push({ ...item, dimension, key, position, usageShare, sampleSize, observedAt,
+      observations.push({ ...item, dimension, key, position, usageShare,
+        sampleSize: sampleSizeKnown ? sampleSize : null, sampleSizeKnown, observedAt,
         kind: registry.kind, source: sourceId, sourceReliability: Number(registry.reliability),
         game: String(raw.game), patch: String(raw.patch), platform: String(raw.platform) });
     }
@@ -374,14 +382,15 @@
       const key = String(item?.key || item?.formation || item?.role || '').trim();
       const position = item?.position ? String(item.position).toUpperCase() : null;
       const usageShare = Number(item?.usageShare);
-      const sampleSize = Number(item?.sampleSize);
+      const sampleSizeKnown = Number.isFinite(Number(item?.sampleSize)) && Number(item?.sampleSize) >= 1;
+      const sampleSize = sampleSizeKnown ? Number(item.sampleSize) : 1;
       const observedAt = typeof item?.observedAt === 'number' ? item.observedAt : Date.parse(item?.observedAt || '');
       const reliability = Number(item?.sourceReliability);
       if (!['formation', 'role', 'buildUp', 'defensiveLine'].includes(dimension) ||
           !key || !['pro', 'community'].includes(item?.kind) ||
           (dimension === 'role' && !roleGroup(position)) ||
           !Number.isFinite(usageShare) || usageShare < 0 || usageShare > 100 ||
-          !Number.isFinite(sampleSize) || sampleSize < 1 ||
+          (!sampleSizeKnown && item?.sampleSizeKnown !== false) || !Number.isFinite(sampleSize) || sampleSize < 1 ||
           !Number.isFinite(reliability) || reliability < 0 || reliability > 1 ||
           !Number.isFinite(observedAt)) {
         rejected.push({ reason: 'invalid-tactics-observation', key: key || null }); continue;
@@ -389,7 +398,8 @@
       const age = (now - observedAt) / dayMs;
       if (age < -5 / 1440) { rejected.push({ reason: 'future-tactics-observation', key }); continue; }
       if (age > Number(opts.maxEvidenceAgeDays)) { rejected.push({ reason: 'stale-tactics-observation', key }); continue; }
-      accepted.push({ ...item, dimension, key, position, usageShare, sampleSize,
+      accepted.push({ ...item, dimension, key, position, usageShare,
+        sampleSize: sampleSizeKnown ? sampleSize : null, sampleSizeKnown,
         observedAt, source: String(item.source || 'unknown'), sourceReliability: reliability });
     }
     const contextWarnings = [];
@@ -419,10 +429,10 @@
       for (const e of entries) {
         const age = Math.max(0, (now - e.observedAt) / dayMs);
         const halfLife = e.kind === 'pro' ? opts.proHalfLifeDays : opts.communityHalfLifeDays;
-        const weight = decayWeight(age, halfLife) * e.sourceReliability * Math.sqrt(e.sampleSize);
+        const weight = decayWeight(age, halfLife) * e.sourceReliability * Math.sqrt(e.sampleSizeKnown ? e.sampleSize : 1);
         numerator += e.usageShare * weight;
         denominator += weight;
-        sampleCount += e.sampleSize;
+        if (e.sampleSizeKnown) sampleCount += e.sampleSize;
         newest = Math.max(newest, e.observedAt);
         sources.add(e.source);
       }
@@ -443,10 +453,15 @@
       const communityTacticCode = g.community.find(x => x.tacticCode)?.tacticCode || null;
       const proLineHeight = g.pro.find(x => x.lineHeight != null)?.lineHeight ?? null;
       const communityLineHeight = g.community.find(x => x.lineHeight != null)?.lineHeight ?? null;
+      const proBuildUpStyle = g.pro.find(x => x.buildUpStyle)?.buildUpStyle || null;
+      const communityBuildUpStyle = g.community.find(x => x.buildUpStyle)?.buildUpStyle || null;
+      const proDefensiveLineStyle = g.pro.find(x => x.defensiveLineStyle)?.defensiveLineStyle || null;
+      const communityDefensiveLineStyle = g.community.find(x => x.defensiveLineStyle)?.defensiveLineStyle || null;
       return { dimension: g.dimension, key: g.key, position: g.position, focus: g.focus,
         formation: g.formation, tacticCode: proTacticCode || communityTacticCode,
         proTacticCode, communityTacticCode,
         lineHeight: proLineHeight ?? communityLineHeight, proLineHeight, communityLineHeight,
+        proBuildUpStyle, communityBuildUpStyle, proDefensiveLineStyle, communityDefensiveLineStyle,
         proUsageShare: pro.usageShare, communityUsageShare: community.usageShare,
         metaUsageShare: score === null ? null : round1(score), confidence,
         pro, community, latestAt: [pro.newestAt, community.newestAt].filter(Boolean).sort().pop() || null };

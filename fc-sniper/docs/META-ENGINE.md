@@ -64,15 +64,15 @@ A tactics observation uses `dimension` (`formation`, `role`, `buildUp`, or `defe
 
 ### What this milestone does not do
 
-- It does not scrape FUTBIN, FUT.GG, or any other site.
+- The FUT.GG personal collector reads rendered public page content under the owner's reported support authorization. It does not use private endpoints, logged-in account data, or browser credentials.
 - It does not assume third-party sites permit automated access.
-- It does not yet retrieve live competitive/community evidence, tactics distributions, or prices. The new snapshot validators and ranking functions are data contracts only; no provider is connected.
+- The Mac bridge now retrieves FUT.GG's published player and tactics usage pages for the owner's local personal use. It does not retrieve private club data or market prices.
 - It does not replace the existing userscript's legacy meta scoring yet. The userscript now loads this engine and shows a clearly labeled player-quality estimate in the read-only market overlay; it explicitly warns that live evidence providers are not connected yet.
 - It does not make buy, bid, sell, SBC, or squad mutations.
 
 ### Next milestones
 
-1. Obtain a documented feed or written permission for the selected external provider(s); EA's Community API is partner-gated and is not directly available to this userscript.
+1. Keep the FUT.GG collector local-only; obtain separate provider authorization before enabling any source for another user. EA's Community API is partner-gated and is not directly available to this userscript.
 2. Build provider adapters and a source registry; keep raw evidence, metric definitions, timestamps, patch, platform, and sample size.
 3. Add contract fixtures from real permitted source responses and verify freshness/outage handling.
 4. Calibrate player and tactics rankings against dated competitive squads/events and held-out observations.
@@ -118,10 +118,10 @@ The local source registry remains authoritative for source kind, reliability, al
 ### Current state
 
 - The transport adapter and contract tests are implemented.
-- No provider is currently authorized or connected, and no third-party credentials are stored in Darkroom.
-- FUT.GG's public tactics hub is useful as a human research reference, but its published terms restrict automated access and competing use. Do not scrape it or consume a scraping intermediary for Darkroom without written permission or a suitable license.
+- FUT.GG's rendered FC 27 tactics/player-usage pages are connected through a local-only collector based on the owner's report of support authorization for personal use. No FUT.GG account credentials, EA session data, or third-party API keys are stored in Darkroom.
+- FUT.GG does not publish sample denominators, platform scope, patch number, or source observation timestamps on these pages. Darkroom preserves those as unknown and records local retrieval time honestly.
 - EA's FC Community API is available only through EA-approved partner sites (currently FUT.GG, FUTBIN, FUTWIZ), with user consent; it is not a general API endpoint Darkroom can call directly.
-- A live connection requires a licensed provider feed or written permission plus a hosted feed endpoint. Until then, the UI must continue to label engine scores as provisional estimates.
+- FUT.GG usage is not win-rate evidence. UI labels must distinguish source usage percentages from estimated player quality and show the unpublished context/sample limits.
 
 ### Security and behavior
 

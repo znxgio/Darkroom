@@ -181,6 +181,22 @@ test('provider snapshot validation rejects missing sample size and unsupported p
   assert.equal(normalized.rejected.length, 2);
 });
 
+test('FUT.GG registry can retain an unpublished sample denominator as unknown', () => {
+  const base = { sourceId: 'futgg-pro:pro-player-usage', game: 'FC 27', patch: 'not-reported-by-source',
+    platform: 'not-reported-by-source', generatedAt: new Date(NOW).toISOString(), evidence: [
+      { playerId: '231747', position: 'ST', kind: 'pro', metric: 'pro-player-usage', value: 21,
+        sampleSize: null, sampleSizeKnown: false, observedAt: new Date(NOW).toISOString() }
+    ] };
+  const registry = { kind: 'pro', reliability: 0.82, allowedMetrics: ['pro-player-usage'], allowUnknownSampleSize: true };
+  const accepted = meta.normalizeProviderSnapshot(base, { [base.sourceId]: registry }, NOW);
+  assert.equal(accepted.evidence.length, 1);
+  assert.equal(accepted.evidence[0].sampleSize, null);
+  assert.equal(accepted.evidence[0].sampleSizeKnown, false);
+  const denied = meta.normalizeProviderSnapshot(base, { [base.sourceId]: { ...registry, allowUnknownSampleSize: false } }, NOW);
+  assert.equal(denied.evidence.length, 0);
+  assert.equal(denied.rejected[0].reason, 'invalid-sample-size');
+});
+
 
 test('evaluation refuses to blend different evidence metrics', () => {
   const evidence = [
@@ -253,4 +269,19 @@ test('tactics snapshot validator assigns trusted source metadata and rejects inv
   const ranked = meta.rankTactics(normalized.observations, { now: NOW, game: 'FC 27', patch: '1.3', platform: 'all' });
   assert.equal(ranked.formations[0].key, '4-3-1-2');
   assert.equal(ranked.roles[0].key, 'Shadow Striker');
+});
+
+test('tactics snapshots may mark source sample denominator unknown only when registry allows it', () => {
+  const row = { dimension: 'formation', key: '4-3-1-2', usageShare: 33,
+    sampleSize: null, sampleSizeKnown: false, observedAt: new Date(NOW).toISOString() };
+  const raw = { sourceId: 'futgg-pro', game: 'FC 27', patch: 'not-reported-by-source',
+    platform: 'not-reported-by-source', generatedAt: new Date(NOW).toISOString(), tactics: [row] };
+  const registry = { kind: 'pro', reliability: 0.82, allowedDimensions: ['formation'], allowUnknownSampleSize: true };
+  const accepted = meta.normalizeTacticsSnapshot(raw, { 'futgg-pro': registry }, NOW);
+  assert.equal(accepted.observations.length, 1);
+  assert.equal(accepted.observations[0].sampleSize, null);
+  assert.equal(meta.rankTactics(accepted.observations, { now: NOW, game: raw.game, patch: raw.patch, platform: raw.platform }).formations[0].proUsageShare, 33);
+  const denied = meta.normalizeTacticsSnapshot(raw, { 'futgg-pro': { ...registry, allowUnknownSampleSize: false } }, NOW);
+  assert.equal(denied.observations.length, 0);
+  assert.equal(denied.rejected[0].reason, 'invalid-tactics-value-or-time');
 });
