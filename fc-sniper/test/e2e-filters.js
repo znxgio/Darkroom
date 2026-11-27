@@ -105,20 +105,24 @@ function installMock() {
   await p.click('#fcs [data-tab=snipe]');
   const tgState = () => p.evaluate(() => document.querySelector('#fcs [data-pane=snipe] label.row.tg input').checked);
   const tg0 = await tgState();
+  // Remove any previous notification so this assertion can only pass on a fresh lock explanation.
+  await p.evaluate(() => {
+    const toast = document.getElementById('fcs-toast');
+    if (toast) { toast.className = ''; toast.textContent = ''; }
+  });
   // Click the toggle label itself so the delegated capture handler receives the row as its target.
   await p.click('#fcs [data-pane=snipe] label.row.tg', { force: true });
-  // Wait for any explanation toast, then assert its exact reason. Keeping the wait independent
-  // of the message makes a wrong "Busy" reason visible instead of hiding it as a timeout.
+  // Wait for a newly written explanation, not merely the visibility of an earlier toast.
   await p.waitForFunction(() => {
     const toast = document.getElementById('fcs-toast');
-    return toast && toast.classList.contains('show');
+    return toast && toast.classList.contains('show') && /Stop the bot|Busy:/.test(toast.textContent);
   }, null, { timeout: 3000 }).catch(() => {});
   const toastState = await p.evaluate(() => {
     const toast = document.getElementById('fcs-toast');
     return { visible: !!toast && toast.classList.contains('show'), text: toast?.textContent || '', locked: document.getElementById('fcs')?.classList.contains('locked') };
   });
   const toastTxt = toastState.text;
-  check('tapping a locked toggle shows the why-toast', toastState.visible && /Stop the bot \\(■\\) to change this/.test(toastTxt), JSON.stringify(toastState));
+  check('tapping a locked toggle shows the why-toast', toastState.visible && /Stop the bot \(■\) to change this/.test(toastTxt), JSON.stringify(toastState));
   check('locked toggle left the setting unchanged', (await tgState()) === tg0);
   await p.click('#fcs [data-a=toggle]');
   await p.waitForFunction(() => !document.getElementById('fcs').classList.contains('locked'), null, { timeout: 10000 });
