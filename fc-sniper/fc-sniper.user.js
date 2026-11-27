@@ -1701,11 +1701,12 @@
    * New engine quality estimate for an existing Darkroom player. Until external
    * evidence providers are connected this is explicitly NOT a live-meta score.
    */
+  let activeMetaEvidence = [];
   function metaEngineQuality(p, pos) {
     try {
       const lib = typeof globalThis !== 'undefined' ? globalThis.DarkroomMetaEngine : null;
       if (!lib || typeof lib.evaluate !== 'function' || typeof lib.adaptPlayer !== 'function') return null;
-      return lib.evaluate(lib.adaptPlayer(p), pos, [], { now: Date.now() });
+      return lib.evaluate(lib.adaptPlayer(p), pos, activeMetaEvidence, { now: Date.now() });
     } catch (e) {
       debugLog.push('Meta Engine adapter: ' + String(e && e.message || e).slice(0, 160));
       return null;
@@ -7102,9 +7103,11 @@
               <p class="note">“Update my team” reads your squad in seconds. “Find upgrades” is the slower part: it checks the market and SBCs for your 3 weakest spots.</p></div>
             <div class="card"><h4>🧠 My player scores</h4>
               <div data-r="meta-club"><p class="empty">Read your owned cards to score each card's position-specific quality. This is not live competitive meta yet.</p></div>
+              <div class="row" style="gap:6px;align-items:center"><button class="btn" data-a="meta-futgg-open">Open FUT.GG</button><button class="btn" data-a="meta-futgg-sync">Check Mac auto-import</button></div>
+              <p class="note" data-r="meta-futgg-status">Mac bridge not checked. Automatic import is attempted first; manual fallback is used when no authorized feed is available.</p>
               <div class="row" style="gap:6px;align-items:center"><input class="input" data-i="meta-api-url" placeholder="Darkroom Meta API URL (deployed server)" aria-label="Darkroom Meta API URL"><button class="btn" data-a="meta-futdb-enrich">Enrich top 15 via FUT-DB</button></div>
               <button class="btn blue" data-a="meta-club">Score my club</button>
-              <p class="note">Read-only. Covers club, SBC storage, transfer list and unassigned cards. Uses exposed attributes and PlayStyles; no market searches or transactions. Live pro/community evidence is not connected yet.</p></div>
+              <p class="note">Read-only. FUT.GG account sync does not automatically grant Darkroom access. The Mac bridge imports only a licensed/authorized snapshot; otherwise use manual research and keep scores marked provisional.</p></div>
             <div class="card"><h4>💰 Value tracker</h4>
               <div data-r="meta-value"><p class="empty">Cheaper similar-fit comparisons from cards you view in the market will appear here.</p></div>
               <button class="btn" data-a="meta-value-clear">Clear tracker</button>
@@ -7276,6 +7279,8 @@
             if (engine.running || jobs.current) { this.log('Stop the running task first (■)', 'warn'); return; }
             return upgrades.updateTeam(false);
           case 'meta-club': return upgrades.scoreClub();
+          case 'meta-futgg-open': window.open('https://www.fut.gg/tactics/', '_blank', 'noopener'); return;
+          case 'meta-futgg-sync': return this.syncFutGgMeta();
           case 'meta-futdb-enrich': return this.enrichMetaClubFromFutDb();
           case 'meta-value-clear': store.set(KEYS.metaValue, []); this.renderMetaValue(); this.log('Value tracker cleared', 'muted'); return;
           case 'autofill': this.commit(); return upgrades.autofill();
@@ -8192,6 +8197,50 @@
         return `<div class="li"><span class="t"><b>${esc(x.alternative.name)} ${x.alternative.score}/100 ${x.alternative.source === 'club' ? '<span class="tag ok">owned</span>' : '<span class="tag">market</span>'}</b>
           <small>Alternative to ${esc(x.target.name)} ${x.target.score}/100 · ${esc(x.position)} · ${fmt(x.alternative.price)} vs ${fmt(x.target.price)} · save <span class="up">${fmt(x.savings)}</span> · ${x.scoreGap > 0 ? '+' : ''}${x.scoreGap} score · ${x.confidence}% confidence · ${when}</small></span></div>`;
       }).join('')}</div>`;
+    },
+
+    async syncFutGgMeta() {
+      const statusBox = this.q('[data-r=meta-futgg-status]');
+      const setStatus = (message) => { if (statusBox) statusBox.textContent = message; };
+      const base = 'http://127.0.0.1:8765';
+      try {
+        const healthResponse = await fetch(base + '/health', { method: 'GET', mode: 'cors',
+          credentials: 'omit', cache: 'no-store' });
+        if (!healthResponse.ok) throw new Error('Mac bridge returned HTTP ' + healthResponse.status);
+        const health = await healthResponse.json();
+        if (!health.ok) throw new Error('Mac bridge did not respond correctly');
+        const providers = globalThis.DarkroomMetaProviders;
+        const feed = globalThis.DarkroomMetaLiveFeed;
+        const engineLib = globalThis.DarkroomMetaEngine;
+        const sourceIds = Array.isArray(health.authorizedSources) ? health.authorizedSources : [];
+        if (!health.automaticImport || !sourceIds.length || !providers || !feed || !engineLib) {
+          setStatus('Mac bridge online · automatic import unavailable (' +
+            (health.reason || 'no authorized FUT.GG source configured') +
+            ') · manual fallback required. Open FUT.GG to review tactics.');
+          this.log('FUT.GG auto-import unavailable; using manual fallback. No authorized feed is configured.', 'warn');
+          return;
+        }
+        const registry = providers.buildFeedRegistry(sourceIds);
+        const result = await feed.load({ endpoint: base + '/api/meta/snapshot',
+          engine: engineLib, sourceRegistry: registry });
+        if (!['ok', 'partial'].includes(result.status)) {
+          setStatus('Mac bridge online · import ' + result.status + ' (' +
+            (result.reason || 'no usable authorized evidence') + ') · manual fallback required.');
+          this.log('FUT.GG import did not produce usable evidence; manual fallback required.', 'warn');
+          return;
+        }
+        activeMetaEvidence = result.playerEvidence || [];
+        this.liveMetaTactics = result.tactics || null;
+        this.liveMetaContext = result.context || null;
+        this.renderMetaClub();
+        setStatus('Imported authorized FUT.GG evidence · ' + activeMetaEvidence.length +
+          ' player observations · ' + (result.tactics && result.tactics.observations ? result.tactics.observations.length : 0) +
+          ' tactics observations · patch ' + (result.context && result.context.patch || 'unknown') + '.');
+        this.log('Imported authorized FUT.GG meta snapshot. Re-score your club to refresh player grades.', 'ok');
+      } catch (error) {
+        setStatus('Mac bridge unavailable · manual fallback required. Start the Mac bridge and retry.');
+        this.log('Mac bridge unavailable; manual fallback required (' + errText(error) + ').', 'warn');
+      }
     },
 
     async enrichMetaClubFromFutDb() {
