@@ -1,6 +1,6 @@
 # Darkroom Meta Engine
 
-## Foundation milestone (0.3.3)
+## Foundation milestone (0.3.4)
 
 This is a provider-neutral, deterministic scoring core. It intentionally has **no network calls,
 credentials, EA Web App calls, browser globals, or automatic transactions**.
