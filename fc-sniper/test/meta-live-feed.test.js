@@ -51,6 +51,19 @@ test('live feed normalizes licensed snapshots and ranks pro/community separately
   assert.equal(result.playerEvidence.length, 1);
   assert.equal(result.playerEvidence[0].sourceReliability, 0.9);
 });
+test('manual snapshots use the same validators and retain source provenance', () => {
+  const raw = envelope();
+  raw.playerSnapshots[0].sourceUrl = 'https://source.example/research/players';
+  const result = feed.parseSnapshot(raw, { engine, sourceRegistry: registry, now: NOW });
+  assert.equal(result.status, 'ok');
+  assert.equal(result.context.patch, '1.3');
+  assert.equal(result.playerEvidence[0].url, 'https://source.example/research/players');
+});
+test('manual snapshots report envelope validation failures', () => {
+  const result = feed.parseSnapshot({ schemaVersion: 2 }, { engine, sourceRegistry: registry, now: NOW });
+  assert.equal(result.status, 'rejected');
+  assert.equal(result.reason, 'unsupported-feed-schema');
+});
 test('feed never trusts provider reliability sent in payload', async () => {
   const raw = envelope(); raw.playerSnapshots[0].evidence[0].sourceReliability = 0.01;
   const result = await feed.load({ endpoint: 'https://meta.example/snapshot', engine, sourceRegistry: registry, now: NOW,

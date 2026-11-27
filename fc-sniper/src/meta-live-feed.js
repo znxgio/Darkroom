@@ -33,23 +33,64 @@
       game: String(raw.game), patch: String(raw.patch), platform: String(raw.platform) };
   }
 
-  async function load(options = {}) {
-    const endpoint = parseEndpoint(options.endpoint);
+  function parseSnapshot(raw, options = {}) {
     const empty = { tactics: null, playerEvidence: [], sourceStatuses: [] };
-    if (!endpoint) return { status: 'unavailable', reason: 'invalid-or-non-https-endpoint', ...empty };
     const engine = options.engine;
     if (!engine || typeof engine.normalizeTacticsSnapshot !== 'function' ||
         typeof engine.normalizeProviderSnapshot !== 'function' || typeof engine.rankTactics !== 'function')
       return { status: 'unavailable', reason: 'meta-engine-unavailable', ...empty };
-    const fetchImpl = options.fetchImpl || (typeof fetch === 'function' ? fetch : null);
-    if (typeof fetchImpl !== 'function') return { status: 'unavailable', reason: 'fetch-unavailable', ...empty };
-
     const now = Number.isFinite(options.now) ? options.now : Date.now();
     const maxAgeHours = Number(options.maxEnvelopeAgeHours ?? DEFAULTS.maxEnvelopeAgeHours);
-    const timeoutMs = Number(options.timeoutMs ?? DEFAULTS.timeoutMs);
-    if (!Number.isFinite(maxAgeHours) || maxAgeHours <= 0 || !Number.isFinite(timeoutMs) || timeoutMs <= 0)
+    if (!Number.isFinite(maxAgeHours) || maxAgeHours <= 0)
       return { status: 'unavailable', reason: 'invalid-feed-policy', ...empty };
+    const envelope = validateEnvelope(raw, now, maxAgeHours);
+    if (!envelope.ok) return { status: envelope.reason === 'stale-feed' ? 'stale' : 'rejected',
+      reason: envelope.reason, ...empty };
 
+    const registry = options.sourceRegistry || {};
+    const sourceStatuses = [], tacticsRows = [], playerEvidence = [], rejected = [];
+    for (const snapshot of raw.tacticsSnapshots) {
+      const withProvenance = snapshot && snapshot.sourceUrl ? { ...snapshot,
+        tactics: (Array.isArray(snapshot.tactics) ? snapshot.tactics : []).map(item => ({ ...item, url: item.url || snapshot.sourceUrl })) } : snapshot;
+      const normalized = engine.normalizeTacticsSnapshot(withProvenance, registry, now,
+        { maxSnapshotAgeDays: options.maxSnapshotAgeDays });
+      sourceStatuses.push({ id: String(snapshot && snapshot.sourceId || 'unknown'), family: 'tactics',
+        status: normalized.status, accepted: normalized.observations.length,
+        rejected: normalized.rejected.length, generatedAt: normalized.generatedAt || null });
+      tacticsRows.push(...normalized.observations);
+      rejected.push(...normalized.rejected.map(item => ({ ...item, sourceId: snapshot && snapshot.sourceId || null })));
+    }
+    for (const snapshot of raw.playerSnapshots) {
+      const withProvenance = snapshot && snapshot.sourceUrl ? { ...snapshot,
+        evidence: (Array.isArray(snapshot.evidence) ? snapshot.evidence : []).map(item => ({ ...item, url: item.url || snapshot.sourceUrl })) } : snapshot;
+      const normalized = engine.normalizeProviderSnapshot(withProvenance, registry, now,
+        { maxSnapshotAgeDays: options.maxSnapshotAgeDays });
+      sourceStatuses.push({ id: String(snapshot && snapshot.sourceId || 'unknown'), family: 'player-evidence',
+        status: normalized.status, accepted: normalized.evidence.length,
+        rejected: normalized.rejected.length, generatedAt: normalized.generatedAt || null });
+      playerEvidence.push(...normalized.evidence);
+      rejected.push(...normalized.rejected.map(item => ({ ...item, sourceId: snapshot && snapshot.sourceId || null })));
+    }
+    const tactics = engine.rankTactics(tacticsRows, {
+      now, game: envelope.game, patch: envelope.patch, platform: envelope.platform
+    });
+    const acceptedCount = tacticsRows.length + playerEvidence.length;
+    return {
+      status: acceptedCount ? (rejected.length ? 'partial' : 'ok') : 'empty',
+      context: { game: envelope.game, patch: envelope.patch, platform: envelope.platform },
+      generatedAt: envelope.generatedAt, tactics, playerEvidence, sourceStatuses, rejected
+    };
+  }
+
+  async function load(options = {}) {
+    const endpoint = parseEndpoint(options.endpoint);
+    const empty = { tactics: null, playerEvidence: [], sourceStatuses: [] };
+    if (!endpoint) return { status: 'unavailable', reason: 'invalid-or-non-https-endpoint', ...empty };
+    const fetchImpl = options.fetchImpl || (typeof fetch === 'function' ? fetch : null);
+    if (typeof fetchImpl !== 'function') return { status: 'unavailable', reason: 'fetch-unavailable', ...empty };
+    const timeoutMs = Number(options.timeoutMs ?? DEFAULTS.timeoutMs);
+    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0)
+      return { status: 'unavailable', reason: 'invalid-feed-policy', ...empty };
     const controller = typeof AbortController === 'function' ? new AbortController() : null;
     const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
     let response;
@@ -68,44 +109,11 @@
     if (timer) clearTimeout(timer);
     if (!response || !response.ok) return { status: 'unavailable', reason: 'feed-http-error',
       httpStatus: Number(response && response.status) || null, ...empty };
-
     let raw;
     try { raw = await response.json(); } catch (_) {
       return { status: 'unavailable', reason: 'invalid-feed-json', ...empty };
     }
-    const envelope = validateEnvelope(raw, now, maxAgeHours);
-    if (!envelope.ok) return { status: envelope.reason === 'stale-feed' ? 'stale' : 'rejected',
-      reason: envelope.reason, ...empty };
-
-    const registry = options.sourceRegistry || {};
-    const sourceStatuses = [], tacticsRows = [], playerEvidence = [], rejected = [];
-    for (const snapshot of raw.tacticsSnapshots) {
-      const normalized = engine.normalizeTacticsSnapshot(snapshot, registry, now,
-        { maxSnapshotAgeDays: options.maxSnapshotAgeDays });
-      sourceStatuses.push({ id: String(snapshot && snapshot.sourceId || 'unknown'), family: 'tactics',
-        status: normalized.status, accepted: normalized.observations.length,
-        rejected: normalized.rejected.length, generatedAt: normalized.generatedAt || null });
-      tacticsRows.push(...normalized.observations);
-      rejected.push(...normalized.rejected.map(item => ({ ...item, sourceId: snapshot && snapshot.sourceId || null })));
-    }
-    for (const snapshot of raw.playerSnapshots) {
-      const normalized = engine.normalizeProviderSnapshot(snapshot, registry, now,
-        { maxSnapshotAgeDays: options.maxSnapshotAgeDays });
-      sourceStatuses.push({ id: String(snapshot && snapshot.sourceId || 'unknown'), family: 'player-evidence',
-        status: normalized.status, accepted: normalized.evidence.length,
-        rejected: normalized.rejected.length, generatedAt: normalized.generatedAt || null });
-      playerEvidence.push(...normalized.evidence);
-      rejected.push(...normalized.rejected.map(item => ({ ...item, sourceId: snapshot && snapshot.sourceId || null })));
-    }
-    const tactics = engine.rankTactics(tacticsRows, {
-      now, game: envelope.game, patch: envelope.patch, platform: envelope.platform
-    });
-    const acceptedCount = tacticsRows.length + playerEvidence.length;
-    return {
-      status: acceptedCount ? (rejected.length ? 'partial' : 'ok') : 'empty',
-      context: { game: envelope.game, patch: envelope.patch, platform: envelope.platform },
-      generatedAt: envelope.generatedAt, tactics, playerEvidence, sourceStatuses, rejected
-    };
+    return parseSnapshot(raw, options);
   }
-  return Object.freeze({ SCHEMA_VERSION, DEFAULTS, parseEndpoint, validateEnvelope, load });
+  return Object.freeze({ SCHEMA_VERSION, DEFAULTS, parseEndpoint, validateEnvelope, parseSnapshot, load });
 });

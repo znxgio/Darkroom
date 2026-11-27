@@ -1698,15 +1698,19 @@
   }
 
   /**
-   * New engine quality estimate for an existing Darkroom player. Until external
-   * evidence providers are connected this is explicitly NOT a live-meta score.
+   * Scores a player from matching, permitted evidence when available; without it,
+   * the result remains a quality/role-fit estimate rather than a live-meta score.
    */
   let activeMetaEvidence = [];
+  let activeMetaContext = null;
   function metaEngineQuality(p, pos) {
     try {
       const lib = typeof globalThis !== 'undefined' ? globalThis.DarkroomMetaEngine : null;
       if (!lib || typeof lib.evaluate !== 'function' || typeof lib.adaptPlayer !== 'function') return null;
-      return lib.evaluate(lib.adaptPlayer(p), pos, activeMetaEvidence, { now: Date.now() });
+      const playerIds = new Set([p && p.id, p && p.defId, p && p.resourceId].filter(x => x != null).map(String));
+      const evidence = activeMetaEvidence.filter(item => playerIds.has(String(item.playerId)) &&
+        (!item.position || String(item.position).toUpperCase() === String(pos).toUpperCase()));
+      return lib.evaluate(lib.adaptPlayer(p), pos, evidence, { now: Date.now(), ...(activeMetaContext || {}) });
     } catch (e) {
       debugLog.push('Meta Engine adapter: ' + String(e && e.message || e).slice(0, 160));
       return null;
@@ -3615,14 +3619,15 @@
         let best = null;
         for (const pos of p.positions || []) {
           const q = metaEngineQuality(p, pos);
-          if (q && q.playerQualityScore != null && (!best || q.playerQualityScore > best.quality.playerQualityScore)) best = { position: pos, quality: q };
+          if (q && q.score != null && (!best || q.score > best.quality.score)) best = { position: pos, quality: q };
         }
         if (best) marketQualityRows.push({ player: p, ...best });
       }
-      marketQualityRows.sort((a, b) => b.quality.playerQualityScore - a.quality.playerQualityScore);
+      marketQualityRows.sort((a, b) => b.quality.score - a.quality.score);
+      const hasPlayerEvidence = x => x.quality.proMetaScore != null || x.quality.communityMetaScore != null;
       const marketQualityHtml = marketQualityRows.length
-        ? `<div><b>Players in these results · quality estimate only</b><small>${marketQualityRows.slice(0, 5).map(x =>
-          `${esc(x.player.name)} ${x.player.rating || ''} · ${esc(x.position)} ${Math.round(x.quality.playerQualityScore)}/100 · ${x.quality.confidence}% · ${x.player.price ? fmt(x.player.price) + ' coins' : 'auction'}`).join('<br>')}</small></div>`
+        ? `<div><b>Players in these results · ${activeMetaEvidence.length ? 'permitted evidence used when card IDs match' : 'quality estimate only'}</b><small>${marketQualityRows.slice(0, 5).map(x =>
+          `${esc(x.player.name)} ${x.player.rating || ''} · ${esc(x.position)} ${hasPlayerEvidence(x) ? `score ${Math.round(x.quality.score)}/100 · ` : ''}${x.quality.playerQualityScore == null ? 'quality estimate unavailable' : `quality ${Math.round(x.quality.playerQualityScore)}/100`}${x.quality.proMetaScore != null ? ` · pro ${Math.round(x.quality.proMetaScore)}` : ''}${x.quality.communityMetaScore != null ? ` · community ${Math.round(x.quality.communityMetaScore)}` : ''} · ${x.quality.confidence}% · ${x.player.price ? fmt(x.player.price) + ' coins' : 'auction'}`).join('<br>')}</small></div>`
         : '';
       const valuePairs = [];
       const valueLib = typeof globalThis !== 'undefined' ? globalThis.DarkroomMetaEngine : null;
@@ -3631,8 +3636,8 @@
         for (const target of priced.slice().sort((a, b) => b.player.price - a.player.price).slice(0, 5)) {
           const alternatives = priced.filter(x => x.position === target.position && x.player.id !== target.player.id && x.player.price < target.player.price)
             .map(candidate => ({ candidate, comparison: valueLib.compareValue(
-              { score: candidate.quality.playerQualityScore, price: candidate.player.price },
-              { score: target.quality.playerQualityScore, price: target.player.price }
+              { score: candidate.quality.score, price: candidate.player.price },
+              { score: target.quality.score, price: target.player.price }
             ) }))
             .filter(x => x.comparison.comparable && x.comparison.similarPerformance && x.comparison.scoreGap >= -3)
             .sort((a, b) => b.comparison.savings - a.comparison.savings);
@@ -3650,13 +3655,13 @@
           for (const entry of upgrades.metaRoster) {
             if (!entry.player || String(entry.player.id) === String(target.player.id)) continue;
             const q = metaEngineQuality(entry.player, target.position);
-            if (!q || q.playerQualityScore == null) continue;
+            if (!q || q.score == null) continue;
             const samples = (prices.data[String(entry.player.id)]?.s || []).filter(x => x && x[1] > 0 && Date.now() - x[0] <= 24 * 3600e3);
             const latest = samples[samples.length - 1];
             if (!latest) continue;
             const comparison = valueLib.compareValue(
-              { score: q.playerQualityScore, price: latest[1] },
-              { score: target.quality.playerQualityScore, price: target.player.price }
+              { score: q.score, price: latest[1] },
+              { score: target.quality.score, price: target.player.price }
             );
             if (comparison.comparable && comparison.similarPerformance && comparison.scoreGap >= -3) {
               alternatives.push({ candidate: { player: entry.player, position: target.position, quality: q, source: 'club', price: latest[1] }, target, comparison });
@@ -3669,7 +3674,7 @@
       }
       const valueHtml = valuePairs.length
         ? `<div><b>Cheaper similar-fit options · provisional</b><small>${valuePairs.map(x =>
-          `${esc(x.candidate.player.name)} ${Math.round(x.candidate.quality.playerQualityScore)} ${x.candidate.source === 'club' ? '(owned)' : '(market)'} vs ${esc(x.target.player.name)} ${Math.round(x.target.quality.playerQualityScore)} · save ${fmt(x.comparison.savings)} coins · ${x.comparison.scoreGap > 0 ? '+' : ''}${x.comparison.scoreGap} score`).join('<br>')}</small></div>`
+          `${esc(x.candidate.player.name)} ${Math.round(x.candidate.quality.score)} ${x.candidate.source === 'club' ? '(owned)' : '(market)'} vs ${esc(x.target.player.name)} ${Math.round(x.target.quality.score)} · save ${fmt(x.comparison.savings)} coins · ${x.comparison.scoreGap > 0 ? '+' : ''}${x.comparison.scoreGap} score`).join('<br>')}</small></div>`
         : '';
       if (valuePairs.length) {
         const savedTracker = store.get(KEYS.metaValue, []);
@@ -5718,7 +5723,7 @@
           let best = null;
           for (const pos of p.positions || []) {
             const q = metaEngineQuality(p, pos);
-            if (q && q.playerQualityScore != null && (!best || q.playerQualityScore > best.quality.playerQualityScore)) best = { position: pos, quality: q };
+            if (q && q.score != null && (!best || q.score > best.quality.score)) best = { position: pos, quality: q };
           }
           byId.set(String(p.id), { player: p, best });
         }
@@ -6775,6 +6780,7 @@
   #fcs input,#fcs select{font:inherit;color:var(--text);background:var(--card2);border:1px solid var(--line);border-radius:9px;padding:7px 9px;width:100%;min-width:0;outline:0}
   #fcs input:focus,#fcs select:focus{border-color:var(--green)}
   #fcs input:disabled,#fcs select:disabled{opacity:.55}
+  #fcs textarea{font:11px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--text);background:var(--card2);border:1px solid var(--line);border-radius:9px;padding:8px;width:100%;min-height:140px;resize:vertical}
 
   #fcs .hd{display:flex;align-items:center;gap:10px;padding:12px 12px 10px 14px;cursor:move;touch-action:none;user-select:none}
   #fcs .brand{display:flex;align-items:center;gap:8px;flex:1;min-width:0}
@@ -7105,6 +7111,13 @@
               <div data-r="meta-club"><p class="empty">Read your owned cards to score each card's position-specific quality. This is not live competitive meta yet.</p></div>
               <div class="row" style="gap:6px;align-items:center"><button class="btn" data-a="meta-futgg-open">Open FUT.GG</button><button class="btn" data-a="meta-futgg-sync">Check Mac auto-import</button></div>
               <p class="note" data-r="meta-futgg-status">Mac bridge not checked. Automatic import is attempted first; manual fallback is used when no authorized feed is available.</p>
+              <details class="hint"><summary>Import a permitted snapshot manually</summary>
+                <p class="note">Paste a Darkroom schema v1 JSON snapshot you are allowed to use. Each source snapshot needs an HTTPS sourceUrl. Darkroom validates it with the same source registry, freshness rules, and scoring pipeline as the feed. Import is local to this page session.</p>
+                <textarea data-r="meta-import-json" aria-label="Darkroom meta snapshot JSON" placeholder="Paste a documented Darkroom schema v1 snapshot"></textarea>
+                <label class="row tg"><span>I have permission or a license to use every source in this snapshot.</span><input type="checkbox" data-r="meta-import-authorization"><i></i></label>
+                <div class="row" style="gap:6px;align-items:center"><button class="btn" data-a="meta-import-preview">Preview and validate</button><button class="btn blue" data-a="meta-import-apply" disabled>Import snapshot</button><button class="btn" data-a="meta-import-clear">Clear imported evidence</button></div>
+                <p class="note" data-r="meta-import-result" aria-live="polite">No manual snapshot previewed.</p>
+              </details>
               <div class="row" style="gap:6px;align-items:center"><input class="input" data-i="meta-api-url" placeholder="Darkroom Meta API URL (deployed server)" aria-label="Darkroom Meta API URL"><button class="btn" data-a="meta-futdb-enrich">Enrich top 15 via FUT-DB</button></div>
               <button class="btn blue" data-a="meta-club">Score my club</button>
               <p class="note">Read-only. FUT.GG account sync does not automatically grant Darkroom access. The Mac bridge imports only a licensed/authorized snapshot; otherwise use manual research and keep scores marked provisional.</p></div>
@@ -7211,8 +7224,19 @@
       root.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' && e.target.matches && e.target.matches('[data-r=ask-q]') && e.target.value.trim()) { e.preventDefault(); upgrades.ask(e.target.value.trim()); }
       });
-      // locked (bot / plan / side task running): tapping a dimmed control explains why instead of failing silently
-      root.addEventListener('click', (e) => {
+      const invalidateMetaImportPreview = (e) => {
+        if (!e.target.matches || !e.target.matches('[data-r=meta-import-json], [data-r=meta-import-authorization]')) return;
+        this.pendingMetaImport = null;
+        const apply = this.q('[data-a=meta-import-apply]');
+        const result = this.q('[data-r=meta-import-result]');
+        if (apply) apply.disabled = true;
+        if (result) result.textContent = 'Input changed. Preview and validate it again before importing.';
+      };
+      root.addEventListener('input', invalidateMetaImportPreview);
+      root.addEventListener('change', invalidateMetaImportPreview);
+      // locked (bot / plan / side task running): tapping a dimmed control explains why instead of failing silently.
+      // Some browsers suppress click events from disabled form controls; pointerdown still reaches this capture guard.
+      const explainLockedControl = (e) => {
         if (!root.classList.contains('locked')) return;
         const t = e.target;
         if (!t.closest || !t.closest('.body') || t.closest('[data-pane=log]') || t.closest('.ask')) return;
@@ -7220,7 +7244,9 @@
         if (!hit) return;
         e.preventDefault(); e.stopImmediatePropagation();
         this.toast(this.lockTask && !engine.running && !plan.active ? `Busy: ${this.lockTask} — tap ■ to stop it` : 'Stop the bot (■) to change this', 'alert');
-      }, true);
+      };
+      root.addEventListener('pointerdown', (e) => { if (e.button === 0) explainLockedControl(e); }, true);
+      root.addEventListener('click', explainLockedControl, true);
       root.addEventListener('click', (e) => {
         if (root.classList.contains('min') && e.target.closest('.logo')) { root.classList.remove('min'); return; }
         const btn = e.target.closest('button');
@@ -7281,6 +7307,9 @@
           case 'meta-club': return upgrades.scoreClub();
           case 'meta-futgg-open': window.open('https://www.fut.gg/tactics/', '_blank', 'noopener'); return;
           case 'meta-futgg-sync': return this.syncFutGgMeta();
+          case 'meta-import-preview': return this.previewManualMetaImport();
+          case 'meta-import-apply': return this.applyManualMetaImport();
+          case 'meta-import-clear': return this.clearMetaImport();
           case 'meta-futdb-enrich': return this.enrichMetaClubFromFutDb();
           case 'meta-value-clear': store.set(KEYS.metaValue, []); this.renderMetaValue(); this.log('Value tracker cleared', 'muted'); return;
           case 'autofill': this.commit(); return upgrades.autofill();
@@ -8199,6 +8228,112 @@
       }).join('')}</div>`;
     },
 
+    previewManualMetaImport() {
+      const text = String(this.q('[data-r=meta-import-json]')?.value || '').trim();
+      const acceptedBox = this.q('[data-r=meta-import-result]');
+      const applyButton = this.q('[data-a=meta-import-apply]');
+      const permission = !!this.q('[data-r=meta-import-authorization]')?.checked;
+      this.pendingMetaImport = null;
+      if (applyButton) applyButton.disabled = true;
+      const show = (message) => { if (acceptedBox) acceptedBox.textContent = message; };
+      if (!text) { show('Paste a Darkroom schema v1 JSON snapshot first.'); return null; }
+      if (text.length > 1024 * 1024) { show('Rejected: snapshot exceeds the 1 MB import limit.'); return null; }
+      if (!permission) { show('Preview blocked: confirm you have permission or a license to use every source in this snapshot.'); return null; }
+      let raw;
+      try { raw = JSON.parse(text); } catch (error) {
+        show('Rejected: invalid JSON (' + String(error && error.message || error) + ').'); return null;
+      }
+      const providers = globalThis.DarkroomMetaProviders;
+      const feed = globalThis.DarkroomMetaLiveFeed;
+      const engineLib = globalThis.DarkroomMetaEngine;
+      if (!providers || !feed || !engineLib || typeof feed.parseSnapshot !== 'function') {
+        show('Rejected: Darkroom meta validation modules are unavailable.'); return null;
+      }
+      const snapshots = [...(Array.isArray(raw && raw.tacticsSnapshots) ? raw.tacticsSnapshots : []),
+        ...(Array.isArray(raw && raw.playerSnapshots) ? raw.playerSnapshots : [])];
+      if (!snapshots.length || snapshots.length > 100) {
+        show('Rejected: include 1–100 source snapshots in the schema v1 envelope.'); return null;
+      }
+      const sourceIds = [...new Set(snapshots.map(snapshot => String(snapshot && snapshot.sourceId || '')))].filter(Boolean);
+      if (sourceIds.length !== new Set(snapshots.map(snapshot => String(snapshot && snapshot.sourceId || ''))).size) {
+        show('Rejected: every source snapshot must declare a sourceId.'); return null;
+      }
+      const invalidSources = sourceIds.filter(sourceId => {
+        const provider = providers.getProvider(sourceId.split(':')[0]);
+        return !provider || provider.category !== 'competitive-meta';
+      });
+      if (invalidSources.length) { show('Rejected: unsupported meta source ID(s): ' + invalidSources.join(', ') + '.'); return null; }
+      const invalidUrls = snapshots.filter(snapshot => {
+        try {
+          const url = new URL(String(snapshot.sourceUrl || ''));
+          return url.protocol !== 'https:' || !!url.username || !!url.password || !!url.hash;
+        } catch (_) { return true; }
+      });
+      if (invalidUrls.length) { show('Rejected: each source snapshot needs a valid HTTPS sourceUrl without credentials or fragments.'); return null; }
+      const registry = providers.buildFeedRegistry([...new Set(sourceIds.map(sourceId => sourceId.split(':')[0]))]);
+      const result = feed.parseSnapshot(raw, { engine: engineLib, sourceRegistry: registry });
+      const accepted = result.sourceStatuses.reduce((sum, row) => sum + row.accepted, 0);
+      const rejected = result.rejected || [];
+      const reasons = [...new Set(rejected.map(row => row.reason).filter(Boolean))];
+      const context = result.context;
+      const contextText = context ? `${context.game} · patch ${context.patch} · ${context.platform}` : result.reason || 'context unavailable';
+      const sourceText = result.sourceStatuses.map(row => `${row.id} (${row.family}): ${row.accepted} accepted${row.rejected ? `, ${row.rejected} rejected` : ''}`).join('; ');
+      const sourceUrls = snapshots.map(snapshot => `${snapshot.sourceId}: ${snapshot.sourceUrl}`).join('; ');
+      const reasonsText = reasons.length ? ` Rejection reasons: ${reasons.join(', ')}.` : '';
+      show(`${result.status === 'ok' || result.status === 'partial' ? 'Validated' : 'Rejected'} · ${contextText} · generated ${result.generatedAt || 'unknown'} · ${accepted} observations accepted · ${rejected.length} rejected. ${sourceText} Source URLs: ${sourceUrls}.${reasonsText}`);
+      if (!['ok', 'partial'].includes(result.status) || !accepted) return result;
+      this.pendingMetaImport = { result, text };
+      if (applyButton) applyButton.disabled = false;
+      return result;
+    },
+
+    applyManualMetaImport() {
+      const preview = this.previewManualMetaImport();
+      if (!preview || !this.pendingMetaImport) return;
+      const result = this.pendingMetaImport.result;
+      activeMetaEvidence = result.playerEvidence || [];
+      activeMetaContext = result.context || null;
+      this.liveMetaTactics = result.tactics || null;
+      this.refreshMetaRosterScores();
+      const evidenceCount = activeMetaEvidence.length;
+      const tacticsCount = result.tactics ? result.tactics.formations.length + result.tactics.roles.length +
+        result.tactics.buildUpStyles.length + result.tactics.defensiveStyles.length : 0;
+      const status = this.q('[data-r=meta-futgg-status]');
+      if (status) status.textContent = `Imported authorized user-provided snapshot · ${evidenceCount} player observations · ${tacticsCount} tactics observations · ${result.context.game}, patch ${result.context.patch}, ${result.context.platform}.`;
+      this.log(`Imported ${evidenceCount} player and ${tacticsCount} tactics observations from a user-provided snapshot.`, 'ok');
+      const applyButton = this.q('[data-a=meta-import-apply]');
+      if (applyButton) applyButton.disabled = true;
+      return result;
+    },
+
+    clearMetaImport() {
+      activeMetaEvidence = [];
+      activeMetaContext = null;
+      this.liveMetaTactics = null;
+      this.pendingMetaImport = null;
+      const applyButton = this.q('[data-a=meta-import-apply]');
+      const resultBox = this.q('[data-r=meta-import-result]');
+      if (applyButton) applyButton.disabled = true;
+      if (resultBox) resultBox.textContent = 'Imported evidence cleared for this page session.';
+      const status = this.q('[data-r=meta-futgg-status]');
+      if (status) status.textContent = 'No meta snapshot imported. Automatic import remains available when an authorized feed is configured.';
+      this.refreshMetaRosterScores();
+      this.log('Imported meta evidence cleared for this page session.', 'muted');
+    },
+
+    refreshMetaRosterScores() {
+      if (Array.isArray(upgrades.metaRoster)) {
+        for (const row of upgrades.metaRoster) {
+          const positions = row.player && Array.isArray(row.player.positions) ? row.player.positions : [];
+          const candidates = positions.map(position => ({ position, quality: metaEngineQuality(row.player, position) }))
+            .filter(candidate => candidate.quality && candidate.quality.score != null);
+          candidates.sort((a, b) => b.quality.score - a.quality.score);
+          row.best = candidates[0] || null;
+        }
+      }
+      this.renderMetaClub();
+    },
+
     async syncFutGgMeta() {
       const statusBox = this.q('[data-r=meta-futgg-status]');
       const setStatus = (message) => { if (statusBox) statusBox.textContent = message; };
@@ -8230,13 +8365,14 @@
           return;
         }
         activeMetaEvidence = result.playerEvidence || [];
+        activeMetaContext = result.context || null;
         this.liveMetaTactics = result.tactics || null;
         this.liveMetaContext = result.context || null;
-        this.renderMetaClub();
-        setStatus('Imported authorized FUT.GG evidence · ' + activeMetaEvidence.length +
+        this.refreshMetaRosterScores();
+        setStatus('Imported authorized meta evidence · ' + activeMetaEvidence.length +
           ' player observations · ' + (result.tactics ? result.tactics.formations.length + result.tactics.roles.length + result.tactics.buildUpStyles.length + result.tactics.defensiveStyles.length : 0) +
           ' tactics observations · patch ' + (result.context && result.context.patch || 'unknown') + '.');
-        this.log('Imported authorized FUT.GG meta snapshot. Re-score your club to refresh player grades.', 'ok');
+        this.log('Imported authorized meta snapshot. Player scores were refreshed where evidence matched their card IDs.', 'ok');
       } catch (error) {
         setStatus('Mac bridge unavailable · manual fallback required. Start the Mac bridge and retry.');
         this.log('Mac bridge unavailable; manual fallback required (' + errText(error) + ').', 'warn');
@@ -8287,13 +8423,14 @@
       if (!box) return;
       const rows = upgrades.metaRoster;
       if (!rows) {
-        box.innerHTML = '<p class="empty">Read your owned cards to score position-specific quality. This is not live competitive meta yet.</p>';
+        box.innerHTML = '<p class="empty">Read your owned cards to score position-specific quality. Permitted player evidence can refine that estimate.</p>';
         return;
       }
       const shown = rows.slice(0, 30);
-      box.innerHTML = `<p class="note">${rows.length} cards · updated ${Math.max(0, Math.round((Date.now() - upgrades.metaRosterAt) / 60000))} min ago · quality fit only, not live meta</p>
+      const contextText = activeMetaContext ? ` · ${esc(activeMetaContext.game)} · patch ${esc(activeMetaContext.patch)} · ${esc(activeMetaContext.platform)}` : '';
+      box.innerHTML = `<p class="note">${rows.length} cards · updated ${Math.max(0, Math.round((Date.now() - upgrades.metaRosterAt) / 60000))} min ago${activeMetaEvidence.length ? ` · permitted user-provided evidence${contextText}` : ' · quality-fit estimates only'}</p>
         <div class="list">${shown.map(({ player, best }) => `<div class="li"><span class="t"><b>${esc(player.name)} ${player.rating || ''}</b>
-          <small>${best ? `${esc(best.position)} · ${Math.round(best.quality.playerQualityScore)}/100 quality · ${best.quality.confidence}% confidence` : 'Not enough position data to score'} · ${player.positions.map(esc).join('/') || 'position unknown'}${player.futdb ? ` · FUT-DB data ${esc(player.futdb.retrievedAt)}` : ''}</small></span></div>`).join('')}</div>
+          <small>${best ? `${esc(best.position)} · ${best.quality.proMetaScore != null || best.quality.communityMetaScore != null ? `score ${Math.round(best.quality.score)}/100 · ` : ''}${best.quality.playerQualityScore == null ? 'quality estimate unavailable' : `${Math.round(best.quality.playerQualityScore)}/100 quality estimate`} · ${best.quality.confidence}% confidence${best.quality.proMetaScore != null ? ` · pro ${Math.round(best.quality.proMetaScore)}` : ''}${best.quality.communityMetaScore != null ? ` · community ${Math.round(best.quality.communityMetaScore)}` : ''}` : 'Not enough position data to score'} · ${(player.positions || []).map(esc).join('/') || 'position unknown'}${player.futdb ? ` · FUT-DB data ${esc(player.futdb.retrievedAt)}` : ''}</small></span></div>`).join('')}</div>
         ${rows.length > shown.length ? `<p class="note">Showing top ${shown.length} of ${rows.length} cards.</p>` : ''}`;
     },
 
