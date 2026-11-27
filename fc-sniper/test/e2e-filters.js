@@ -107,12 +107,18 @@ function installMock() {
   const tg0 = await tgState();
   // Click the toggle label itself so the delegated capture handler receives the row as its target.
   await p.click('#fcs [data-pane=snipe] label.row.tg', { force: true });
+  // Wait for any explanation toast, then assert its exact reason. Keeping the wait independent
+  // of the message makes a wrong "Busy" reason visible instead of hiding it as a timeout.
   await p.waitForFunction(() => {
     const toast = document.getElementById('fcs-toast');
-    return toast && toast.classList.contains('show') && toast.textContent.includes('Stop the bot');
-  }, null, { timeout: 3000 });
-  const toastTxt = await p.textContent('#fcs-toast');
-  check('tapping a locked toggle shows the why-toast', /Stop the bot \\(■\\) to change this/.test(toastTxt), toastTxt);
+    return toast && toast.classList.contains('show');
+  }, null, { timeout: 3000 }).catch(() => {});
+  const toastState = await p.evaluate(() => {
+    const toast = document.getElementById('fcs-toast');
+    return { visible: !!toast && toast.classList.contains('show'), text: toast?.textContent || '', locked: document.getElementById('fcs')?.classList.contains('locked') };
+  });
+  const toastTxt = toastState.text;
+  check('tapping a locked toggle shows the why-toast', toastState.visible && /Stop the bot \\(■\\) to change this/.test(toastTxt), JSON.stringify(toastState));
   check('locked toggle left the setting unchanged', (await tgState()) === tg0);
   await p.click('#fcs [data-a=toggle]');
   await p.waitForFunction(() => !document.getElementById('fcs').classList.contains('locked'), null, { timeout: 10000 });
