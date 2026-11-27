@@ -84,7 +84,7 @@ A tactics observation uses `dimension` (`formation`, `role`, `buildUp`, or `defe
 - The userscript loads the engine through a commit-pinned Tampermonkey `@require` dependency.
 - Existing EA player objects are adapted from Darkroom's normalized face stats and PlayStyles.
 - The market overlay scores distinct players in each hand-viewed search result and displays their position-specific quality estimate and confidence beside the legacy price summary. It also flags cheaper, similar-fit cards within those results; these are provisional quality comparisons, not live-meta recommendations.
-- The Squad tab has an explicit, read-only action to score every club card by its best available position. It reads club/storage only and makes no market searches. A persistent Value Tracker records cheaper similar-fit alternatives found while browsing the market, including owned cards when a fresh price already exists in the local cache.
+- The Squad tab has an explicit, read-only action to score every owned card by its best available position, including club, SBC storage, transfer list, and unassigned. It makes no market searches. A persistent Value Tracker records cheaper similar-fit alternatives found while browsing the market, including owned cards when a fresh price already exists in the local cache.
 - This is intentionally read-only. It does not change searches, purchases, bids, listings, club state, or existing ranking decisions.
 - The existing legacy score remains active until the new engine has validated live evidence and passes side-by-side comparison.
 - Detailed attributes are extracted only when the EA object exposes explicit attribute names; undocumented numeric array positions are not guessed.
