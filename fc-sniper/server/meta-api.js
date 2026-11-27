@@ -162,7 +162,7 @@ function createServer(options = {}) {
           { ok: false, error: error.code === 'ENOENT' ? 'meta-snapshot-not-found' : 'meta-snapshot-unavailable' }, origin);
       }
     }
-    const futdbMatch = url.pathname.match(/^\/api\/meta\/futdb\/players\/resource\/(\\d{1,12})$/);
+    const futdbMatch = url.pathname.match(/^\/api\/meta\/futdb\/players\/resource\/(\d{1,12})$/);
     if (futdbMatch) {
       if (!futdbKeyConfigured) return send(res, 503, { ok: false, error: 'futdb-key-not-configured' }, origin);
       try {
