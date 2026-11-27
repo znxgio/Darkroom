@@ -83,16 +83,18 @@
     {
       id: 'ea-community-api',
       name: 'EA SPORTS FC Community API',
-      url: 'https://www.ea.com/games/ea-sports-fc/news/pitch-notes-fc26-community-api-update',
+      url: 'https://help.ea.com/en/articles/ea-sports-fc/community-api/',
       category: 'official-account-data',
       kind: 'community',
       capabilities: ['authorized-club-data', 'formations', 'tactics'],
       evidenceMetrics: [],
       access: 'partner-approval-and-user-consent',
       automatedIngestion: false,
+      publicApiSpec: false,
+      partnerRetentionDays: 28,
       status: 'not-available-to-darkroom',
       reliability: 1,
-      notes: 'EA says access is limited to approved partner sites and user-authorized requests. Darkroom must not imitate partner authentication or reuse a user session.'
+      notes: 'EA documents approved partner access but does not publish a general client API contract. Only FUT.GG, FUTBIN, and FUTWIZ are approved; account-data access is partner-owned and user-authorized. EA states partner retention is limited to 28 days.'
     }
   ]);
 
