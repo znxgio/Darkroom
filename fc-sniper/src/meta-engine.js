@@ -9,7 +9,7 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   'use strict';
 
-  const VERSION = '0.3.3';
+  const VERSION = '0.3.4';
   const DEFAULTS = Object.freeze({
     proWeight: 0.70,
     communityWeight: 0.30,
@@ -288,7 +288,7 @@
     const evidence = [];
     for (const item of Array.isArray(raw.evidence) ? raw.evidence : []) {
       const metric = String(item?.metric || '');
-      const observedAt = Date.parse(item?.observedAt || '');
+      const observedAt = typeof item?.observedAt === 'number' ? item.observedAt : Date.parse(item?.observedAt || '');
       const key = [item?.playerId, item?.position, metric, item?.context || '', observedAt].join('|');
       if (!item || item.kind !== registry.kind || !['pro', 'community'].includes(item.kind)) { reject('source-kind-mismatch', item); continue; }
       if (!item.playerId || !item.position || !roleGroup(item.position) || !metric || (allowedMetrics && !allowedMetrics.includes(metric))) { reject('invalid-or-disallowed-metric-or-position', item); continue; }
