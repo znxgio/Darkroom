@@ -124,6 +124,10 @@ function installMock() {
   const toastTxt = toastState.text;
   check('tapping a locked toggle shows the why-toast', toastState.visible && /Stop the bot \(■\) to change this/.test(toastTxt), JSON.stringify(toastState));
   check('locked toggle left the setting unchanged', (await tgState()) === tg0);
+  check('locked toggle reports aria-disabled', await p.getAttribute('#fcs [data-pane=snipe] label.row.tg input', 'aria-disabled') === 'true');
+  await p.evaluate(() => { const toast = document.getElementById('fcs-toast'); if (toast) { toast.className = ''; toast.textContent = ''; } });
+  await p.evaluate(() => { const input = document.querySelector('#fcs [data-pane=snipe] label.row.tg input'); input.checked = !input.checked; input.dispatchEvent(new Event('change', { bubbles: true })); });
+  check('locked toggle change is explained and reverted', (await tgState()) === tg0 && /Stop the bot \(■\) to change this/.test(await p.textContent('#fcs-toast')));
   await p.click('#fcs [data-a=toggle]');
   await p.waitForFunction(() => !document.getElementById('fcs').classList.contains('locked'), null, { timeout: 10000 });
 
