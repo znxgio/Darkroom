@@ -5,7 +5,7 @@ Repository: https://github.com/znxgio/Darkroom
 Working branch: `meta-engine/foundation`  
 Draft PR: https://github.com/znxgio/Darkroom/pull/3  
 PR base/original branch: `claude/ea-fc-sniping-bot-jdz6vq`  
-Last inspected PR head before this continuation: `111ecb4d266269e61bbd999d0071c05f4b6e103c` (the earlier implementation checkpoint was `33cb74ea58ff06b3bba2e36d94a7d13aff217a14`). See branch history and the latest Actions run for subsequent continuation commits.
+Current working head: `b656cc68587d0172896d24f7fc483b4e25ed890b`; see the latest Actions run and branch history for subsequent commits.
 
 ## Read this first — instructions for the next ChatGPT session
 
@@ -17,7 +17,7 @@ Continue the existing Darkroom project from the working branch. Do not restart t
 3. Do not change EA buying, bidding, selling, SBC submission, or account automation while working on the meta feature.
 4. The owner reports FUT.GG support chat approved automated access for the owner's personal use. Keep collection local and private; no resale, public reuse, or redistribution. Do not use private endpoints, reuse cookies/tokens, or bypass access restrictions.
 5. The collector reads normal rendered public FUT.GG pages only. Do not claim private club synchronization or broader provider authorization.
-6. Never claim tests pass unless the latest workflow result confirms it. The last verified CI run below has an E2E failure.
+6. Never claim CI passes unless the latest workflow result confirms it. Local tests pass, but GitHub Actions run `46043312868` failed on the locked-toggle toast assertion; a CSS event-hit fix is prepared and needs a new Actions run.
 7. Do not ask the owner to repeat decisions already recorded here. Make reasonable implementation decisions and report completed work, limitations, and blockers plainly.
 8. Do not request or store account passwords, EA credentials, session cookies, or recovery information.
 9. The owner approved committing and pushing implementation updates to `meta-engine/foundation`. Do not merge PR #3 or change the original branch.
@@ -130,14 +130,14 @@ npm run e2e
 - Working branch: `meta-engine/foundation`.
 - Draft PR #3: https://github.com/znxgio/Darkroom/pull/3
 - PR is open, draft, and unmerged.
-- Last inspected head: `111ecb4d266269e61bbd999d0071c05f4b6e103c`.
+- Last inspected head: `b656cc68587d0172896d24f7fc483b4e25ed890b`.
 - Workflow run `45934553567` failed in the mocked E2E step after unit tests passed. Its failure was `test/e2e-filters.js`: tapping a locked toggle showed no why-toast.
 - Workflow run `46023266440` on head `111ecb4d266269e61bbd999d0071c05f4b6e103c` also failed on the same locked-toggle why-toast assertion. Logs were retrieved; unit tests passed, E2E failed.
-- A local continuation patch reports the lock explanation on pointer-down as well as click, because some browsers suppress click events from disabled form inputs. The full local browser suite verifies this behavior; CI verification is pending for the pushed commit.
-- Local `npm test` passes all 193 tests after adding manual snapshot parser/provenance tests. The Chromium launch issue was resolved by reinstalling Playwright's browser in the configured browser cache. The complete local `npm run e2e` suite passed: `test/e2e.js`, `test/e2e-list.js`, `test/e2e-filters.js`, `test/e2e-tasks.js`, `test/e2e-trade.js`, `test/e2e-war.js`, `test/e2e-plan.js`, and `test/e2e-dry.js`. This includes the formerly failing locked-toggle explanation. After updating `test/e2e.js` to exercise manual import preview, authorization, import, and clear, that updated script passed independently. `node --check` on changed JavaScript files and `git diff --check` pass.
+- Run `46043312868` on `b656cc6` passed unit tests but failed `test/e2e-filters.js`: CSS `pointer-events:none` on locked disabled buttons prevented the parent capture-phase pointer-down explanation handler from receiving the event. The CSS now allows pointer events while the controls remain natively disabled; focused local `test/e2e-filters.js` passes after this fix.
+- Local `npm test` passes all 197 tests. The complete local `npm run e2e` suite passed before the final CSS-only follow-up. The updated `test/e2e.js` also passed independently, and the focused filter suite passes after the CSS fix. `node --check` on changed JavaScript files and `git diff --check` pass.
 - The bridge was checked on isolated port 18765 because port 8765 was occupied by an unrelated Uvicorn service returning 404. The bridge's EA-origin `OPTIONS` preflight returned 204 with the expected allow-origin, methods, and Private Network Access headers; the same EA origin received `/health` 200, and an unlisted origin was denied with 403. This verifies local CORS/PNA response behavior only; it does not verify an end-to-end browser request from the EA Web App on the user's Mac.
-- Check the new workflow run before claiming CI status. If it fails, retrieve logs and continue fixing it.
-- Current continuation adds the FUT.GG local collector, unknown-sample handling, tactics panel, fixtures, and documentation. Full `npm test` passes 197 tests. Full `npm run e2e` passes all eight suites: `test/e2e.js`, `test/e2e-list.js`, `test/e2e-filters.js`, `test/e2e-tasks.js`, `test/e2e-trade.js`, `test/e2e-war.js`, `test/e2e-plan.js`, and `test/e2e-dry.js`. A real rendered-page collection passed through the snapshot parser (14 formations, 68 roles, 144 pro and 144 community player observations, zero rejects). Local bridge returned 200 for EA-origin health/snapshot requests and 403 for an unlisted origin. Syntax and `git diff --check` pass. GitHub Actions for this continuation has not run yet.
+- Latest workflow `46043312868` failed only on the locked-toggle why-toast assertion after the unit step succeeded. Retrieve the exact follow-up run after pushing the CSS event-hit fix.
+- The FUT.GG continuation commit `b656cc6` passed local `npm test` (197 tests) and full `npm run e2e` (all eight suites). A real rendered-page collection passed through the snapshot parser (14 formations, 68 roles, 144 pro and 144 community player observations, zero rejects). Local bridge returned 200 for EA-origin health/snapshot requests and 403 for an unlisted origin. The focused filter suite passes after the final CSS event-hit fix.
 - The userscript's development @downloadURL/@updateURL may point to the dev branch. Before any release/merge, restore approved release URLs and verify all @require commit pins point to the intended immutable commits.
 
 ## Research conclusions already reached
@@ -152,8 +152,8 @@ npm run e2e
 
 ## Suggested next actions (in order)
 
-1. Push the current manual-import and locked-toggle fix to `meta-engine/foundation`, then inspect that exact GitHub Actions run. Do not merge PR #3.
-2. If the CI E2E still fails, retrieve its log, fix the assertion/behavior, rerun unit tests, and push a follow-up to the same branch.
+1. Push the CSS fix for locked-toggle pointer events to `meta-engine/foundation`, then inspect that exact GitHub Actions run. Do not merge PR #3.
+2. If the CI E2E still fails, retrieve its log, fix the assertion/behavior, rerun tests, and push a follow-up to the same branch.
 3. Inspect `futgg-bridge.js` and the userscript bridge check together for browser private-network/CORS behavior. Test from the actual EA Web App origin on the user's Mac. Do not report local bridge success merely because the Node process starts.
 4. Run full tests and a local bridge/EA-origin check; fix any failures.
 5. Commit and push the implementation to `meta-engine/foundation`, then inspect the exact CI run and update the draft PR description.
