@@ -1515,5 +1515,5 @@ test('readStats: extracts explicitly named detailed attributes without guessing 
   const labelledArray = readStats({ attributes: [{ name: 'Sprint Speed', value: 93 }, { label: 'Stamina', rating: 88 }] });
   assert.equal(labelledArray.attributes.sprintSpeed, 93);
   assert.equal(labelledArray.attributes.stamina, 88);
-  assert.equal(readStats({ attributes: [90, 91, 80, 88, 45, 82] }).attributes, null);
+  assert.equal(readStats({ attributes: [90, 91, 80, 88, 45, 82] }).attributes, undefined);
 });
