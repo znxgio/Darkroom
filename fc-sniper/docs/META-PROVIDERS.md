@@ -91,6 +91,8 @@ A documented alternative is DataFluxor's FUT Data REST API. Its published contra
 - `src/meta-market-provider.js` normalizes quotes, preserves exact card identity and source timestamps, and excludes stale/zero prices from value comparisons.
 - `test/meta-market-provider.test.js` and `test/meta-api.test.js` cover normalization, stale data, route validation, and key isolation.
 - Configure `DATAFLUXOR_API_KEY` on the server and `DARKROOM_ALLOWED_ORIGIN` to the exact Darkroom UI origin before exposing it. Do not place the key in userscript settings, local storage, or browser requests.
+- Start with `npm run start:meta-api` from `fc-sniper/`; the service listens on `PORT` (default 8787). Set the environment variables in the hosting platform's secret manager. `.env.example` documents the required names without containing secrets.
+- The server exposes `GET /health`, `GET /api/meta/cards/search?q=...`, and `GET /api/meta/prices?ea_ids=...&platform=ps`. It is deliberately read-only.
 
 ### Competitive-meta source decision
 
