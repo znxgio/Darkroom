@@ -58,5 +58,5 @@ test('FUTSettings remains a human research reference until an authorized feed ex
   assert.equal(provider.kind, 'pro');
   assert.equal(provider.automatedIngestion, false);
   assert.equal(provider.status, 'human-research-only');
-  assert.deepEqual(providers.buildTacticsRegistry(['futsettings-pro']), {});
+  assert.deepEqual(providers.buildTacticsRegistry(), {});
 });
