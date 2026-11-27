@@ -171,3 +171,8 @@ npm run e2e     # Chromium runs against a mocked Web App: sniper, then packs/SBC
 `fc-sniper.user.js` has pure, unit-tested logic first, then the runtime: Web App adapter,
 engine, notifications and UI. The Web App's internal API isn't documented and EA changes it
 between editions, so the adapter (`fut`) is the part most likely to need updates.
+
+
+## Meta engine development handoff
+
+The current meta-engine and FUT.GG/Mac bridge work is on the separate `meta-engine/foundation` development branch and is not part of the stable install link above. For the exact implementation status, setup, constraints, and continuation checklist, see the repository [account-transfer handoff](../HANDOFF-CHATGPT-ACCOUNT-TRANSFER.md) and [FUT.GG Mac bridge guide](docs/FUTGG-MAC-BRIDGE.md).
