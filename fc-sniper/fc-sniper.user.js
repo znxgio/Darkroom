@@ -3653,7 +3653,7 @@
               { score: target.quality.playerQualityScore, price: target.player.price }
             );
             if (comparison.comparable && comparison.similarPerformance && comparison.scoreGap >= -3) {
-              alternatives.push({ candidate: { player: entry.player, position: target.position, quality: q, source: 'club' }, target, comparison });
+              alternatives.push({ candidate: { player: entry.player, position: target.position, quality: q, source: 'club', price: latest[1] }, target, comparison });
             }
           }
           alternatives.sort((a, b) => b.comparison.savings - a.comparison.savings);
@@ -3673,7 +3673,7 @@
             score: Math.round(x.target.quality.playerQualityScore), price: x.target.player.price },
           alternative: { id: x.candidate.player.id, name: x.candidate.player.name, rating: x.candidate.player.rating,
             score: Math.round(x.candidate.quality.playerQualityScore),
-            price: x.candidate.source === 'club' ? (prices.data[String(x.candidate.player.id)]?.s || []).slice(-1)[0]?.[1] || 0 : x.candidate.player.price,
+            price: x.candidate.price || x.candidate.player.price || 0,
             source: x.candidate.source || 'market' },
           position: x.target.position, savings: x.comparison.savings, scoreGap: x.comparison.scoreGap,
           confidence: x.candidate.quality.confidence, updatedAt: Date.now()
