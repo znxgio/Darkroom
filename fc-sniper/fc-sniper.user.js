@@ -7096,8 +7096,8 @@
               <div class="two"><button class="btn blue" data-a="team-update">↻ Update my team</button><button class="btn" data-a="analyse">Find upgrades</button></div>
               <button class="btn" data-a="refresh-squad">Clear squad data</button>
               <p class="note">“Update my team” reads your squad in seconds. “Find upgrades” is the slower part: it checks the market and SBCs for your 3 weakest spots.</p></div>
-            <div class="card"><h4>🧠 Club player scores</h4>
-              <div data-r="meta-club"><p class="empty">Read your club to score each card's position-specific quality. This is not live competitive meta yet.</p></div>
+            <div class="card"><h4>🧠 My player scores</h4>
+              <div data-r="meta-club"><p class="empty">Read your owned cards to score each card's position-specific quality. This is not live competitive meta yet.</p></div>
               <button class="btn blue" data-a="meta-club">Score my club</button>
               <p class="note">Read-only. Covers club, SBC storage, transfer list and unassigned cards. Uses exposed attributes and PlayStyles; no market searches or transactions. Live pro/community evidence is not connected yet.</p></div>
             <div class="card"><h4>💰 Value tracker</h4>
