@@ -72,12 +72,12 @@ A tactics observation uses `dimension` (`formation`, `role`, `buildUp`, or `defe
 
 ### Next milestones
 
-1. Verify and select authorized sources (including API availability, licensing/terms, freshness, costs, platform coverage).
-2. Build provider adapters and a source registry; keep raw evidence and source timestamps.
-3. Add contract fixtures from real permitted source responses.
-4. Add price adapter and value ranking separately from meta score.
-5. Integrate the engine read-only into the userscript, then compare against existing outputs before replacing anything.
-6. Build a calibration/evaluation set from dated competitive squads/events and holdout observations.
+1. Obtain a documented feed or written permission for the selected external provider(s); EA's Community API is partner-gated and is not directly available to this userscript.
+2. Build provider adapters and a source registry; keep raw evidence, metric definitions, timestamps, patch, platform, and sample size.
+3. Add contract fixtures from real permitted source responses and verify freshness/outage handling.
+4. Calibrate player and tactics rankings against dated competitive squads/events and held-out observations.
+5. Add a permitted price source or strengthen the existing in-app price cache, keeping market value separate from meta score.
+6. Compare the new engine side-by-side with legacy outputs before considering any replacement.
 
 ## Current userscript integration
 
