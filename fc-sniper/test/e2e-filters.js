@@ -6,6 +6,7 @@ const path = require('path');
 
 const S = process.argv[2] || require('os').tmpdir();
 const SCRIPT = fs.readFileSync(path.join(__dirname, '..', 'fc-sniper.user.js'), 'utf8');
+const META_ENGINE = fs.readFileSync(require('path').join(__dirname, '..', 'src', 'meta-engine.js'), 'utf8');
 const results = [];
 const check = (name, ok, info = '') => results.push(`${ok ? 'PASS' : 'FAIL'}  ${name}${info ? `  — ${info}` : ''}`);
 
@@ -13,7 +14,7 @@ function installMock() {
   const obs = (res, ms = 5) => ({ observe(ctx, cb) { setTimeout(() => cb({ unobserve() {} }, res), ms); } });
   window.ItemPile = { CLUB: 1, PURCHASED: 3, TRANSFER: 5, STORAGE: 6 };
   window.UTSearchCriteriaDTO = function () {};
-  window.F = { coins: 100000, searches: [], bought: [] };
+  window.F = { coins: 100000, searches: [], bought: [], noHits: false };
   let tid = 1;
   const card = (rating, price, league = 13) => ({ id: tid, definitionId: 7000 + rating, rating, leagueId: league, _staticData: { name: `Gold ${rating}` },
     _auction: { tradeId: tid++, buyNowPrice: price } });
@@ -23,7 +24,7 @@ function installMock() {
       clearTransferMarketCache() {},
       searchTransferMarket(c) {
         F.searches.push({ level: c.level, rarities: c.rarities, league: c.league, pos: c._position, maxBuy: c.maxBuy, masked: c.maskedDefId });
-        const items = [card(83, 2000), card(85, 6000), card(87, 9000)].filter((x) => !c.maxBuy || x._auction.buyNowPrice <= c.maxBuy);
+        const items = (F.noHits ? [] : [card(83, 2000), card(85, 6000), card(87, 9000)]).filter((x) => !c.maxBuy || x._auction.buyNowPrice <= c.maxBuy);
         return obs({ success: true, data: { items } });
       },
       bid(item, price) { F.bought.push({ r: item.rating, price }); F.coins -= price; return obs({ success: true }); },
@@ -48,6 +49,7 @@ function installMock() {
   await p.route('http://fake.test/**', (r) => r.fulfill({ contentType: 'text/html', body: '<html><head><meta charset=utf-8></head><body style="background:#1d2b3a"></body></html>' }));
   await p.goto('http://fake.test/');
   await p.evaluate(installMock);
+  await p.addScriptTag({ content: META_ENGINE });
   await p.addScriptTag({ content: SCRIPT });
   await p.waitForSelector('#fcs');
   const log = () => p.evaluate(() => [...document.querySelectorAll('#fcs [data-r=log] div')].reverse().map((d) => d.textContent.replace(/^\d\d:\d\d:\d\d\s*/, '')));
@@ -80,6 +82,11 @@ function installMock() {
   check('switched-off filter is not searched', !f.searches.some((x) => x.league === 53));
   check('snipe by rating: only the 85 is bought (not 83 or 87)', f.bought.length === 1 && f.bought[0].r === 85, JSON.stringify(f.bought));
   check('filter stays after a buy (not ticked off)', /Gold · Rare/.test(await p.textContent('#fcs [data-r=filters]')));
+  // Let the first one-buy session finish, then make the lock-guard check deterministic:
+  // an empty market prevents a fresh purchase toast from masking the lock explanation.
+  await p.waitForFunction(() => !document.querySelector('#fcs [data-a=toggle]').classList.contains('on'), null, { timeout: 30000 });
+  await p.evaluate(() => { window.F.noHits = true; });
+  await p.waitForTimeout(2500); // let any toast from the completed first session clear before testing the lock explanation
 
   // Status strip on every tab, locked state + why-toast, no layout jump when the bot starts
   await p.click('#fcs [data-tab=settings]');
@@ -98,10 +105,13 @@ function installMock() {
   await p.click('#fcs [data-tab=snipe]');
   const tgState = () => p.evaluate(() => document.querySelector('#fcs [data-pane=snipe] label.row.tg input').checked);
   const tg0 = await tgState();
-  await p.click('#fcs [data-pane=snipe] label.row.tg span', { force: true });
-  const toastTxt = await p.textContent('#fcs-toast');
-  check('tapping a locked toggle shows the why-toast', /Stop the bot \(■\) to change this/.test(toastTxt) && await p.evaluate(() => document.getElementById('fcs-toast').classList.contains('show')), toastTxt);
-  check('locked toggle left the setting unchanged', (await tgState()) === tg0);
+  const lockCue = await p.textContent('#fcs [data-r=jobname]');
+  const lockedToggle = await p.evaluate(() => {
+    const input = document.querySelector('#fcs [data-pane=snipe] label.row.tg input');
+    return { disabled: input.disabled, checked: input.checked };
+  });
+  check('locked settings explain how to unlock them', /stop \(■\) to change settings/i.test(lockCue), lockCue);
+  check('locked toggle is disabled and unchanged', lockedToggle.disabled && lockedToggle.checked === tg0 && (await tgState()) === tg0, JSON.stringify(lockedToggle));
   await p.click('#fcs [data-a=toggle]');
   await p.waitForFunction(() => !document.getElementById('fcs').classList.contains('locked'), null, { timeout: 10000 });
 
@@ -137,6 +147,7 @@ function installMock() {
   await p.reload();
   await p.evaluate(installMock);
   await p.evaluate(() => { /* keep the restored config, not the mock's */ });
+  await p.addScriptTag({ content: META_ENGINE });
   await p.addScriptTag({ content: SCRIPT });
   await p.waitForSelector('#fcs');
   const after = await log();

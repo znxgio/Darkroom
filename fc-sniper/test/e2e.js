@@ -4,6 +4,9 @@ const { chromium, devices } = require('playwright');
 const fs = require('fs');
 const S = process.argv[2] || require('os').tmpdir();
 const SCRIPT = fs.readFileSync(require('path').join(__dirname, '..', 'fc-sniper.user.js'), 'utf8');
+const META_ENGINE = fs.readFileSync(require('path').join(__dirname, '..', 'src', 'meta-engine.js'), 'utf8');
+const META_PROVIDERS = fs.readFileSync(require('path').join(__dirname, '..', 'src', 'meta-providers.js'), 'utf8');
+const META_FEED = fs.readFileSync(require('path').join(__dirname, '..', 'src', 'meta-live-feed.js'), 'utf8');
 const DB = { Players: [
   { id: 231747, f: 'Kylian', l: 'Mbappé Lottin', c: 'Mbappé', r: 91 },
   { id: 239085, f: 'Erling', l: 'Haaland', r: 91 } ] };
@@ -48,6 +51,9 @@ async function page(b, mobile) {
       relistExpiredAuctions() { T.tidy++; return obs({ success: true }); },
       clearSoldItems() { T.tidy++; return obs({ success: true }); } } };
   });
+  await p.addScriptTag({ content: META_ENGINE });
+  await p.addScriptTag({ content: META_PROVIDERS });
+  await p.addScriptTag({ content: META_FEED });
   await p.addScriptTag({ content: SCRIPT });
   await p.waitForSelector('#fcs');
   return p;
@@ -84,6 +90,39 @@ const idle = (p) => p.waitForFunction(() => !document.querySelector('#fcs [data-
   await p.waitForSelector('#fcs-ovl.show', { timeout: 3000 }).catch(() => {});
   const ovl = await p.evaluate(() => (document.getElementById('fcs-ovl') || {}).textContent || '');
   check('overlay on a user search', /cheapest Buy Now/.test(ovl) && /Mbapp/.test(ovl), ovl);
+  check('club player scores card is present and manual-only', await p.locator('#fcs [data-a=meta-club]').count() === 1 && (await p.textContent('#fcs [data-r=meta-club]')).includes('Read your owned cards'), '');
+  await p.click('#fcs [data-tab=squad]');
+  await p.locator('#fcs [data-r=meta-import-json]').evaluate((el) => { el.closest('details').open = true; });
+  const stamp = new Date().toISOString();
+  const manualSnapshot = { schemaVersion: 1, game: 'FC 27', patch: '1.3', platform: 'PS5', generatedAt: stamp,
+    tacticsSnapshots: [
+      { sourceId: 'futgg-pro', game: 'FC 27', patch: '1.3', platform: 'PS5', generatedAt: stamp, sourceUrl: 'https://source.example.test/tactics',
+        tactics: [{ dimension: 'formation', key: '4-3-1-2', usageShare: 33, sampleSize: null, sampleSizeKnown: false,
+          buildUpStyle: 'Balanced', defensiveLineStyle: 'Balanced', observedAt: stamp }] },
+      { sourceId: 'futgg-community', game: 'FC 27', patch: '1.3', platform: 'PS5', generatedAt: stamp, sourceUrl: 'https://source.example.test/tactics',
+        tactics: [{ dimension: 'formation', key: '4-3-1-2', usageShare: 26, sampleSize: null, sampleSizeKnown: false,
+          buildUpStyle: 'Balanced', defensiveLineStyle: 'Balanced', observedAt: stamp }] }
+    ], playerSnapshots: [{ sourceId: 'futgg-pro:pro-player-usage', game: 'FC 27', patch: '1.3', platform: 'PS5',
+      generatedAt: stamp, sourceUrl: 'https://source.example.test/research', evidence: [{ playerId: '231747', position: 'ST',
+        kind: 'pro', metric: 'pro-player-usage', value: 21, sampleSize: null, sampleSizeKnown: false, observedAt: stamp }] }] };
+  await p.fill('#fcs [data-r=meta-import-json]', JSON.stringify(manualSnapshot));
+  await p.locator('#fcs [data-r=meta-import-authorization]').evaluate((el) => { el.checked = true; el.dispatchEvent(new Event('change', { bubbles: true })); });
+  check('manual import cannot be applied before preview', await p.locator('#fcs [data-a=meta-import-apply]').isDisabled());
+  await p.click('#fcs [data-a=meta-import-preview]');
+  const manualPreview = await p.textContent('#fcs [data-r=meta-import-result]');
+  check('manual meta import previews validated context and provenance', /Validated/.test(manualPreview) && /FC 27/.test(manualPreview) && /3 observations accepted/.test(manualPreview) && manualPreview.includes('https://source.example.test/research'), manualPreview);
+  check('validated manual snapshot enables import', await p.locator('#fcs [data-a=meta-import-apply]').isEnabled());
+  await p.click('#fcs [data-a=meta-import-apply]');
+  check('manual meta snapshot imports through the authorized evidence registry', (await p.textContent('#fcs [data-r=meta-futgg-status]')).includes('Imported authorized user-provided snapshot'));
+  const tacticsPanel = await p.textContent('#fcs [data-r=meta-tactics]');
+  check('pro and community FUT.GG formations render separately with source limits', tacticsPanel.includes('4-3-1-2') && tacticsPanel.includes('Pros 33% · community 26%') && tacticsPanel.includes('sample denominators are not published'), tacticsPanel);
+  await p.click('#fcs [data-a=meta-import-clear]');
+  check('manual meta import can be cleared', (await p.textContent('#fcs [data-r=meta-import-result]')).includes('cleared for this page session'));
+  const valueTrackerUi = { box: await p.locator('#fcs [data-r=meta-value]').count(), clear: await p.locator('#fcs [data-a=meta-value-clear]').count() };
+  const storedValuePairs = await p.evaluate(() => JSON.parse(localStorage.getItem('fc-sniper:meta-value') || '[]'));
+  check('persistent value tracker UI and saved comparisons', valueTrackerUi.box === 1 && valueTrackerUi.clear === 1 && Array.isArray(storedValuePairs) && storedValuePairs.length > 0, JSON.stringify({ valueTrackerUi, stored: storedValuePairs }));
+  check('Meta Engine quality estimate is visible and caveated', ovl.includes('engine quality estimate') && ovl.includes('live evidence not connected'), ovl);
+  check('per-player market quality list is visible', ovl.includes('Players in these results') && ovl.includes('quality estimate only'), ovl);
   check('overlay colours under green (✅), over red (❌)', await p.evaluate(() => { const g = document.querySelector('#fcs-ovl b.g'); return !!g && /✅/.test(g.textContent) && getComputedStyle(g).color === 'rgb(61, 220, 132)'; }), '');
   await p.click('#fcs-ovl [data-x]');
   check('overlay dismiss', await p.evaluate(() => !document.getElementById('fcs-ovl').classList.contains('show')));

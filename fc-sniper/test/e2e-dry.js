@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 
 const SCRIPT = fs.readFileSync(path.join(__dirname, '..', 'fc-sniper.user.js'), 'utf8');
+const META_ENGINE = fs.readFileSync(require('path').join(__dirname, '..', 'src', 'meta-engine.js'), 'utf8');
 const results = [];
 const check = (name, ok, info = '') => results.push(`${ok ? 'PASS' : 'FAIL'}  ${name}${info ? `  — ${info}` : ''}`);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -89,6 +90,7 @@ async function run(b, opts) {
   opts.players.forEach((x) => { lowest[x.id] = x.lowest; });
   const { during, ...mockOpts } = opts; void during; // functions can't be sent into the page
   await p.evaluate(installDryMock, { ...mockOpts, lowest });
+  await p.addScriptTag({ content: META_ENGINE });
   await p.addScriptTag({ content: SCRIPT });
   await p.waitForSelector('#fcs');
   await p.click('#fcs [data-a=toggle]');

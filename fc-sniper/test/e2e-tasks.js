@@ -6,6 +6,7 @@ const path = require('path');
 
 const S = process.argv[2] || require('os').tmpdir();
 const SCRIPT = fs.readFileSync(path.join(__dirname, '..', 'fc-sniper.user.js'), 'utf8');
+const META_ENGINE = fs.readFileSync(require('path').join(__dirname, '..', 'src', 'meta-engine.js'), 'utf8');
 const results = [];
 const check = (name, ok, info = '') => results.push(`${ok ? 'PASS' : 'FAIL'}  ${name}${info ? `  — ${info}` : ''}`);
 
@@ -20,6 +21,7 @@ async function page(b, mobile) {
   await p.route('http://fake.test/**', (r) => r.fulfill({ contentType: 'text/html', body: '<html><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"></head><body style="margin:0;background:#1d2b3a;color:#fff;font-family:system-ui"><div style="padding:20px">Web App (mock)</div></body></html>' }));
   await p.goto('http://fake.test/');
   await p.evaluate(installMock);
+  await p.addScriptTag({ content: META_ENGINE });
   await p.addScriptTag({ content: SCRIPT });
   await p.waitForSelector('#fcs');
   lastPage = p;

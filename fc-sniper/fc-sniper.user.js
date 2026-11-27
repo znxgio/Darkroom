@@ -1,14 +1,19 @@
 // ==UserScript==
 // @name         FC Sniper
 // @namespace    https://github.com/znxgio/darkroom
-// @version      2.5.4
+// @version      2.6.7
+// @require      https://raw.githubusercontent.com/znxgio/Darkroom/f2778ec3cee149a1bf0f2816bb48d6a0d7ddcaee/fc-sniper/src/meta-engine.js
+// @require      https://raw.githubusercontent.com/znxgio/Darkroom/199fb8a7a3b70d501697e74edef622d1b4d3363d/fc-sniper/src/meta-providers.js
+// @require      https://raw.githubusercontent.com/znxgio/Darkroom/199fb8a7a3b70d501697e74edef622d1b4d3363d/fc-sniper/src/meta-live-feed.js
+// @require      https://raw.githubusercontent.com/znxgio/Darkroom/c3164f6475ff018a5a8fca422981627ff9cf6e7d/fc-sniper/src/meta-market-provider.js
+// @require      https://raw.githubusercontent.com/znxgio/Darkroom/4d4049e228d22624128842b13ffecaf87574af49/fc-sniper/src/meta-futdb.js
 // @description  Sniper, pack opener, SBC solver and team upgrade advisor for the EA SPORTS FC Ultimate Team Web App, with built-in safety limits.
 // @match        https://www.ea.com/*ultimate-team/web-app*
 // @match        https://www.ea.com/ea-sports-fc/ultimate-team/web-app*
 // @run-at       document-idle
 // @grant        none
-// @downloadURL  https://raw.githubusercontent.com/znxgio/Darkroom/claude/ea-fc-sniping-bot-jdz6vq/fc-sniper/fc-sniper.user.js
-// @updateURL    https://raw.githubusercontent.com/znxgio/Darkroom/claude/ea-fc-sniping-bot-jdz6vq/fc-sniper/fc-sniper.user.js
+// @downloadURL  https://raw.githubusercontent.com/znxgio/Darkroom/meta-engine/foundation/fc-sniper/fc-sniper.user.js
+// @updateURL    https://raw.githubusercontent.com/znxgio/Darkroom/meta-engine/foundation/fc-sniper/fc-sniper.user.js
 // ==/UserScript==
 
 /*
@@ -1693,6 +1698,26 @@
   }
 
   /**
+   * Scores a player from matching, permitted evidence when available; without it,
+   * the result remains a quality/role-fit estimate rather than a live-meta score.
+   */
+  let activeMetaEvidence = [];
+  let activeMetaContext = null;
+  function metaEngineQuality(p, pos) {
+    try {
+      const lib = typeof globalThis !== 'undefined' ? globalThis.DarkroomMetaEngine : null;
+      if (!lib || typeof lib.evaluate !== 'function' || typeof lib.adaptPlayer !== 'function') return null;
+      const playerIds = new Set([p && p.id, p && p.defId, p && p.resourceId].filter(x => x != null).map(String));
+      const evidence = activeMetaEvidence.filter(item => playerIds.has(String(item.playerId)) &&
+        (!item.position || String(item.position).toUpperCase() === String(pos).toUpperCase()));
+      return lib.evaluate(lib.adaptPlayer(p), pos, evidence, { now: Date.now(), ...(activeMetaContext || {}) });
+    } catch (e) {
+      debugLog.push('Meta Engine adapter: ' + String(e && e.message || e).slice(0, 160));
+      return null;
+    }
+  }
+
+  /**
    * The bot's view of a Transfer Market result the user searched by hand (read-only).
    * players: toPlayer()-like cards with `price` (Buy Now, 0 = auction only); samples: stored price samples
    * [[time, lowest, listed]…] for the most common card; listPrice: the priority-list average/floor if any.
@@ -1725,6 +1750,40 @@
     };
   }
 
+  // Extract only explicitly named numeric attributes. We intentionally do not guess
+  // the meaning of undocumented numeric array positions beyond the six face stats.
+  function readDetailedAttributes(raw) {
+    const aliases = {
+      pac: 'pace', pace: 'pace', acceleration: 'acceleration', 'sprint speed': 'sprintSpeed',
+      sho: 'shooting', shooting: 'shooting', finishing: 'finishing', 'shot power': 'shotPower',
+      'long shots': 'longShots', volleys: 'volleys', penalties: 'penalties',
+      pas: 'passing', passing: 'passing', vision: 'vision', crossing: 'crossing',
+      'free kick accuracy': 'freeKickAccuracy', 'short passing': 'shortPassing',
+      'long passing': 'longPassing', curve: 'curve',
+      dri: 'dribbling', dribbling: 'dribbling', agility: 'agility', balance: 'balance',
+      reactions: 'reactions', 'ball control': 'ballControl', composure: 'composure',
+      def: 'defending', defending: 'defending', interceptions: 'interceptions',
+      'heading accuracy': 'headingAccuracy', 'defensive awareness': 'defensiveAwareness',
+      'standing tackle': 'standingTackle', 'sliding tackle': 'slidingTackle',
+      phy: 'physical', physical: 'physical', jumping: 'jumping', stamina: 'stamina',
+      strength: 'strength', aggression: 'aggression'
+    };
+    const out = {};
+    const put = (name, value) => {
+      const key = aliases[String(name || '').replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/[_-]/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase()];
+      const n = Number(value && typeof value === 'object' ? (value.value ?? value.val ?? value.rating) : value);
+      if (key && Number.isFinite(n) && n >= 1 && n <= 99) out[key] = n;
+    };
+    if (Array.isArray(raw)) {
+      for (const entry of raw) if (entry && typeof entry === 'object') {
+        put(entry.name ?? entry.label ?? entry.attributeName ?? entry.typeName ?? entry.key, entry);
+      }
+    } else if (raw && typeof raw === 'object') {
+      for (const [key, value] of Object.entries(raw)) put(key, value);
+    }
+    return Object.keys(out).length ? out : null;
+  }
+
   /**
    * Face stats, skill moves and weak foot from a Web App item, whatever the
    * field names are in this version. Returns { stats|null, skillMoves, weakFoot }.
@@ -1732,19 +1791,22 @@
   function readStats(item) {
     const raw = item.attributes ?? item._attributes ?? item.attributeArray ?? (item._staticData && item._staticData.attributes);
     let stats = null;
-    if (Array.isArray(raw) && raw.length >= 6) {
+    const attributes = readDetailedAttributes(raw);
+    if (Array.isArray(raw) && raw.length >= 6 && raw.slice(0, 6).every((a) => typeof a === 'number' || (a && typeof a === 'object' && !a.name && !a.label && !a.attributeName && !a.typeName))) {
       const v = raw.slice(0, 6).map((a) => (typeof a === 'number' ? a : Number(a && (a.value ?? a.val ?? a.rating)) || 0));
       if (v.some((x) => x > 0)) stats = { pac: v[0], sho: v[1], pas: v[2], dri: v[3], def: v[4], phy: v[5] };
     }
     const num = (...xs) => { for (const x of xs) if (x !== undefined && x !== null && !Number.isNaN(Number(x))) return Number(x); return 0; };
     const ps = readPlayStyles(item);
-    return {
+    const out = {
       stats,
       skillMoves: num(item.skillMoves, item._skillMoves, item.skillmoves),
       weakFoot: num(item.weakFoot, item._weakFoot, item.weakFootAbilityTypeCode, item.weakfoot),
-      playStyles: ps.styles, // [{ id, name, plus }] — best guess at EA's field names until the probe confirms them
+      playStyles: ps.styles,
       accelerate: ps.accelerate,
     };
+    if (attributes) out.attributes = attributes;
+    return out;
   }
 
   /**
@@ -2680,13 +2742,13 @@
 
   const w = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '2.5.4';
+  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '2.6.7';
   const errText = (e) => (e && e.message ? e.message : String(e));
   const fmt = (n) => Number(n || 0).toLocaleString();
 
   // ---- Storage ----------------------------------------------------------------
 
-  const KEYS = { cfg: 'fc-sniper:config', safety: 'fc-sniper:safety', history: 'fc-sniper:history', ui: 'fc-sniper:ui', log: 'fc-sniper:log', learn: 'fc-sniper:learn', debug: 'fc-sniper:debug', prices: 'fc-sniper:prices', bids: 'fc-sniper:bids', plan: 'fc-sniper:plan', team: 'fc-sniper:team' };
+  const KEYS = { cfg: 'fc-sniper:config', safety: 'fc-sniper:safety', history: 'fc-sniper:history', ui: 'fc-sniper:ui', log: 'fc-sniper:log', learn: 'fc-sniper:learn', debug: 'fc-sniper:debug', prices: 'fc-sniper:prices', bids: 'fc-sniper:bids', plan: 'fc-sniper:plan', team: 'fc-sniper:team', metaValue: 'fc-sniper:meta-value' };
   const store = {
     get(key, fallback) {
       try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : fallback; } catch { return fallback; }
@@ -3543,6 +3605,95 @@
       const listed = top != null ? mine(top) : null;
       const v = overlayView(players, top != null && prices.data[String(top)] ? prices.data[String(top)].s : [], listed ? (listed.avg || listed.lowest || 0) : 0);
       if (!v) return;
+      const samplePlayer = players.find((p) => p.id === v.id) || players[0];
+      const engineQuality = v.bestPos ? metaEngineQuality(samplePlayer, v.bestPos) : null;
+      const qualityText = engineQuality && engineQuality.playerQualityScore != null
+        ? ` · engine quality estimate ${Math.round(engineQuality.playerQualityScore)}/100 · ${engineQuality.confidence}% confidence · live evidence not connected`
+        : '';
+      const seenMeta = new Set();
+      const marketQualityRows = [];
+      for (const p of players) {
+        const id = String(p.id || '');
+        if (!id || seenMeta.has(id)) continue;
+        seenMeta.add(id);
+        let best = null;
+        for (const pos of p.positions || []) {
+          const q = metaEngineQuality(p, pos);
+          if (q && q.score != null && (!best || q.score > best.quality.score)) best = { position: pos, quality: q };
+        }
+        if (best) marketQualityRows.push({ player: p, ...best });
+      }
+      marketQualityRows.sort((a, b) => b.quality.score - a.quality.score);
+      const hasPlayerEvidence = x => x.quality.proMetaScore != null || x.quality.communityMetaScore != null;
+      const marketQualityHtml = marketQualityRows.length
+        ? `<div><b>Players in these results · ${activeMetaEvidence.length ? 'permitted evidence used when card IDs match' : 'quality estimate only'}</b><small>${marketQualityRows.slice(0, 5).map(x =>
+          `${esc(x.player.name)} ${x.player.rating || ''} · ${esc(x.position)} ${hasPlayerEvidence(x) ? `score ${Math.round(x.quality.score)}/100 · ` : ''}${x.quality.playerQualityScore == null ? 'quality estimate unavailable' : `quality ${Math.round(x.quality.playerQualityScore)}/100`}${x.quality.proMetaScore != null ? ` · pro ${Math.round(x.quality.proMetaScore)}` : ''}${x.quality.communityMetaScore != null ? ` · community ${Math.round(x.quality.communityMetaScore)}` : ''} · ${x.quality.confidence}% · ${x.player.price ? fmt(x.player.price) + ' coins' : 'auction'}`).join('<br>')}</small></div>`
+        : '';
+      const valuePairs = [];
+      const valueLib = typeof globalThis !== 'undefined' ? globalThis.DarkroomMetaEngine : null;
+      if (valueLib && typeof valueLib.compareValue === 'function') {
+        const priced = marketQualityRows.filter(x => x.player.price > 0);
+        for (const target of priced.slice().sort((a, b) => b.player.price - a.player.price).slice(0, 5)) {
+          const alternatives = priced.filter(x => x.position === target.position && x.player.id !== target.player.id && x.player.price < target.player.price)
+            .map(candidate => ({ candidate, comparison: valueLib.compareValue(
+              { score: candidate.quality.score, price: candidate.player.price },
+              { score: target.quality.score, price: target.player.price }
+            ) }))
+            .filter(x => x.comparison.comparable && x.comparison.similarPerformance && x.comparison.scoreGap >= -3)
+            .sort((a, b) => b.comparison.savings - a.comparison.savings);
+          if (alternatives.length) {
+            const bestAlt = alternatives[0];
+            valuePairs.push({ target, ...bestAlt });
+          }
+          if (valuePairs.length >= 3) break;
+        }
+      }
+      // If the club has been scored, compare it too using only fresh prices already in our local cache.
+      if (valueLib && typeof valueLib.compareValue === 'function' && valuePairs.length < 3 && upgrades.metaRoster) {
+        for (const target of marketQualityRows.filter(x => x.player.price > 0).sort((a, b) => b.player.price - a.player.price)) {
+          const alternatives = [];
+          for (const entry of upgrades.metaRoster) {
+            if (!entry.player || String(entry.player.id) === String(target.player.id)) continue;
+            const q = metaEngineQuality(entry.player, target.position);
+            if (!q || q.score == null) continue;
+            const samples = (prices.data[String(entry.player.id)]?.s || []).filter(x => x && x[1] > 0 && Date.now() - x[0] <= 24 * 3600e3);
+            const latest = samples[samples.length - 1];
+            if (!latest) continue;
+            const comparison = valueLib.compareValue(
+              { score: q.score, price: latest[1] },
+              { score: target.quality.score, price: target.player.price }
+            );
+            if (comparison.comparable && comparison.similarPerformance && comparison.scoreGap >= -3) {
+              alternatives.push({ candidate: { player: entry.player, position: target.position, quality: q, source: 'club', price: latest[1] }, target, comparison });
+            }
+          }
+          alternatives.sort((a, b) => b.comparison.savings - a.comparison.savings);
+          if (alternatives.length) valuePairs.push(alternatives[0]);
+          if (valuePairs.length >= 3) break;
+        }
+      }
+      const valueHtml = valuePairs.length
+        ? `<div><b>Cheaper similar-fit options · provisional</b><small>${valuePairs.map(x =>
+          `${esc(x.candidate.player.name)} ${Math.round(x.candidate.quality.score)} ${x.candidate.source === 'club' ? '(owned)' : '(market)'} vs ${esc(x.target.player.name)} ${Math.round(x.target.quality.score)} · save ${fmt(x.comparison.savings)} coins · ${x.comparison.scoreGap > 0 ? '+' : ''}${x.comparison.scoreGap} score`).join('<br>')}</small></div>`
+        : '';
+      if (valuePairs.length) {
+        const savedTracker = store.get(KEYS.metaValue, []);
+        const old = Array.isArray(savedTracker) ? savedTracker : [];
+        const additions = valuePairs.map(x => ({
+          key: [x.target.player.id, x.candidate.player.id, x.target.position].join('|'),
+          target: { id: x.target.player.id, name: x.target.player.name, rating: x.target.player.rating,
+            score: Math.round(x.target.quality.playerQualityScore), price: x.target.player.price },
+          alternative: { id: x.candidate.player.id, name: x.candidate.player.name, rating: x.candidate.player.rating,
+            score: Math.round(x.candidate.quality.playerQualityScore),
+            price: x.candidate.price || x.candidate.player.price || 0,
+            source: x.candidate.source || 'market' },
+          position: x.target.position, savings: x.comparison.savings, scoreGap: x.comparison.scoreGap,
+          confidence: x.candidate.quality.confidence, updatedAt: Date.now()
+        }));
+        const keys = new Set(additions.map(x => x.key));
+        store.set(KEYS.metaValue, [...additions, ...old.filter(x => !keys.has(x.key))].slice(0, 50));
+        if (ui && typeof ui.renderMetaValue === 'function') ui.renderMetaValue();
+      }
       let el = document.getElementById('fcs-ovl');
       if (!el) {
         el = document.createElement('div'); el.id = 'fcs-ovl'; el.setAttribute('role', 'status');
@@ -3556,7 +3707,8 @@
       const hist = tr.n ? esc(trendText(tr)) : 'no history yet';
       el.innerHTML = `<button data-x aria-label="Dismiss">×</button><b>🔎 ${esc(v.name)}${v.rating ? ` ${v.rating}` : ''}</b>`
         + `<div>${v.cheapest ? `cheapest Buy Now <b>${fmt(v.cheapest)}</b>` : 'cheapest Buy Now: none'} · ${verdict}</div>`
-        + `<small>${hist}${v.bestPos ? ` · meta ${v.meta} as ${esc(v.bestPos)}` : ''}</small>`;
+        + `<small>${hist}${v.bestPos ? ` · existing meta estimate ${v.meta} as ${esc(v.bestPos)}` : ''}${qualityText}</small>`
+        + marketQualityHtml + valueHtml;
       el.classList.add('show');
       clearTimeout(this.timer);
       this.timer = setTimeout(() => el.classList.remove('show'), 12000);
@@ -5555,6 +5707,33 @@
     squad: null, // [{ position, player }]
     summary: null,
     results: [], // [{ slotIndex, position, current, options: [...] }]
+    metaRoster: null,
+    metaRosterAt: 0,
+
+    /** Read-only player quality estimates for every card in the club; no market searches. */
+    async scoreClub() {
+      if (engine.running || engine.busy || jobs.current) { ui.log('Stop the running task first (■)', 'warn'); return; }
+      await jobs.run('Scoring your club', async () => {
+        this.metaRoster = [];
+        ui.renderMetaClub();
+        const { ownedAll } = await this.ownedCards(this.squad || []);
+        const byId = new Map();
+        for (const p of ownedAll || []) {
+          if (!p.player || byId.has(String(p.id))) continue;
+          let best = null;
+          for (const pos of p.positions || []) {
+            const q = metaEngineQuality(p, pos);
+            if (q && q.score != null && (!best || q.score > best.quality.score)) best = { position: pos, quality: q };
+          }
+          byId.set(String(p.id), { player: p, best });
+        }
+        this.metaRoster = [...byId.values()].sort((a, b) =>
+          (b.best?.quality.playerQualityScore ?? -1) - (a.best?.quality.playerQualityScore ?? -1));
+        this.metaRosterAt = Date.now();
+        ui.renderMetaClub();
+        ui.log(`🧠 Scored ${this.metaRoster.length} owned cards by position fit. These are quality estimates until live meta feeds are connected.`, 'ok');
+      });
+    },
 
     /** Reads the active squad: 11 slots, chemistry, main leagues/nations. */
     async readSquad() {
@@ -5604,7 +5783,7 @@
       const squad = slots.map((x) => x.player).filter(Boolean);
       const ownedBase = new Set([...all, ...transfer, ...unassigned, ...squad].map((p) => baseId(p.id)));
       ui.log(`Owned: ${ownedBase.size} players (club ${club.length}, SBC storage ${storage.length}, transfer list ${transfer.length}, unassigned ${unassigned.length})`, 'muted');
-      return { club, ownedBase };
+      return { club, ownedBase, ownedAll: [...all, ...transfer, ...unassigned, ...squad] };
     },
 
     /**
@@ -6601,6 +6780,7 @@
   #fcs input,#fcs select{font:inherit;color:var(--text);background:var(--card2);border:1px solid var(--line);border-radius:9px;padding:7px 9px;width:100%;min-width:0;outline:0}
   #fcs input:focus,#fcs select:focus{border-color:var(--green)}
   #fcs input:disabled,#fcs select:disabled{opacity:.55}
+  #fcs textarea{font:11px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--text);background:var(--card2);border:1px solid var(--line);border-radius:9px;padding:8px;width:100%;min-height:140px;resize:vertical}
 
   #fcs .hd{display:flex;align-items:center;gap:10px;padding:12px 12px 10px 14px;cursor:move;touch-action:none;user-select:none}
   #fcs .brand{display:flex;align-items:center;gap:8px;flex:1;min-width:0}
@@ -6927,6 +7107,25 @@
               <div class="two"><button class="btn blue" data-a="team-update">↻ Update my team</button><button class="btn" data-a="analyse">Find upgrades</button></div>
               <button class="btn" data-a="refresh-squad">Clear squad data</button>
               <p class="note">“Update my team” reads your squad in seconds. “Find upgrades” is the slower part: it checks the market and SBCs for your 3 weakest spots.</p></div>
+            <div class="card"><h4>🧠 My player scores</h4>
+              <div data-r="meta-club"><p class="empty">Read your owned cards to score each card's position-specific quality. This is not live competitive meta yet.</p></div>
+              <div data-r="meta-tactics"><p class="empty">Your private FUT.GG snapshot will show pro and community formation and role usage here.</p></div>
+              <div class="row" style="gap:6px;align-items:center"><button class="btn" data-a="meta-futgg-open">Open FUT.GG</button><button class="btn" data-a="meta-futgg-sync">Check Mac auto-import</button></div>
+              <p class="note" data-r="meta-futgg-status">Mac bridge not checked. Automatic import is attempted first; manual fallback is used when no authorized feed is available.</p>
+              <details class="hint"><summary>Import a permitted snapshot manually</summary>
+                <p class="note">Paste a Darkroom schema v1 JSON snapshot you are allowed to use. Each source snapshot needs an HTTPS sourceUrl. Darkroom validates it with the same source registry, freshness rules, and scoring pipeline as the feed. Import is local to this page session.</p>
+                <textarea data-r="meta-import-json" aria-label="Darkroom meta snapshot JSON" placeholder="Paste a documented Darkroom schema v1 snapshot"></textarea>
+                <label class="row tg"><span>I have permission or a license to use every source in this snapshot.</span><input type="checkbox" data-r="meta-import-authorization"><i></i></label>
+                <div class="row" style="gap:6px;align-items:center"><button class="btn" data-a="meta-import-preview">Preview and validate</button><button class="btn blue" data-a="meta-import-apply" disabled>Import snapshot</button><button class="btn" data-a="meta-import-clear">Clear imported evidence</button></div>
+                <p class="note" data-r="meta-import-result" aria-live="polite">No manual snapshot previewed.</p>
+              </details>
+              <div class="row" style="gap:6px;align-items:center"><input class="input" data-i="meta-api-url" placeholder="Darkroom Meta API URL (deployed server)" aria-label="Darkroom Meta API URL"><button class="btn" data-a="meta-futdb-enrich">Enrich top 15 via FUT-DB</button></div>
+              <button class="btn blue" data-a="meta-club">Score my club</button>
+              <p class="note">Read-only. FUT.GG account sync does not automatically grant Darkroom access. The Mac bridge imports only a licensed/authorized snapshot; otherwise use manual research and keep scores marked provisional.</p></div>
+            <div class="card"><h4>💰 Value tracker</h4>
+              <div data-r="meta-value"><p class="empty">Cheaper similar-fit comparisons from cards you view in the market will appear here.</p></div>
+              <button class="btn" data-a="meta-value-clear">Clear tracker</button>
+              <p class="note">Uses cached prices from the last 24 hours. Quality-fit estimates are provisional until live meta evidence is connected.</p></div>
             <div class="card ask"><h4>🧠 Ask the analyst</h4>
               <div class="two"><input type="text" data-r="ask-q" placeholder="e.g. what should replace Saka?" enterkeyhint="send"><button class="btn blue" data-a="ask">Ask</button></div>
               <div data-r="ask"><p class="empty">Answers from your own squad, club and the bot’s price checks — no guessing. Try “how’s my team?”, “compare Rice vs Bellingham”, “best CB I own”.</p></div></div>
@@ -7026,8 +7225,19 @@
       root.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' && e.target.matches && e.target.matches('[data-r=ask-q]') && e.target.value.trim()) { e.preventDefault(); upgrades.ask(e.target.value.trim()); }
       });
-      // locked (bot / plan / side task running): tapping a dimmed control explains why instead of failing silently
-      root.addEventListener('click', (e) => {
+      const invalidateMetaImportPreview = (e) => {
+        if (!e.target.matches || !e.target.matches('[data-r=meta-import-json], [data-r=meta-import-authorization]')) return;
+        this.pendingMetaImport = null;
+        const apply = this.q('[data-a=meta-import-apply]');
+        const result = this.q('[data-r=meta-import-result]');
+        if (apply) apply.disabled = true;
+        if (result) result.textContent = 'Input changed. Preview and validate it again before importing.';
+      };
+      root.addEventListener('input', invalidateMetaImportPreview);
+      root.addEventListener('change', invalidateMetaImportPreview);
+      // locked (bot / plan / side task running): tapping a dimmed control explains why instead of failing silently.
+      // Some browsers suppress click events from disabled form controls; pointerdown still reaches this capture guard.
+      const explainLockedControl = (e) => {
         if (!root.classList.contains('locked')) return;
         const t = e.target;
         if (!t.closest || !t.closest('.body') || t.closest('[data-pane=log]') || t.closest('.ask')) return;
@@ -7035,7 +7245,9 @@
         if (!hit) return;
         e.preventDefault(); e.stopImmediatePropagation();
         this.toast(this.lockTask && !engine.running && !plan.active ? `Busy: ${this.lockTask} — tap ■ to stop it` : 'Stop the bot (■) to change this', 'alert');
-      }, true);
+      };
+      root.addEventListener('pointerdown', (e) => { if (e.button === 0) explainLockedControl(e); }, true);
+      root.addEventListener('click', explainLockedControl, true);
       root.addEventListener('click', (e) => {
         if (root.classList.contains('min') && e.target.closest('.logo')) { root.classList.remove('min'); return; }
         const btn = e.target.closest('button');
@@ -7093,6 +7305,14 @@
           case 'team-update':
             if (engine.running || jobs.current) { this.log('Stop the running task first (■)', 'warn'); return; }
             return upgrades.updateTeam(false);
+          case 'meta-club': return upgrades.scoreClub();
+          case 'meta-futgg-open': window.open('https://www.fut.gg/tactics/', '_blank', 'noopener'); return;
+          case 'meta-futgg-sync': return this.syncFutGgMeta();
+          case 'meta-import-preview': return this.previewManualMetaImport();
+          case 'meta-import-apply': return this.applyManualMetaImport();
+          case 'meta-import-clear': return this.clearMetaImport();
+          case 'meta-futdb-enrich': return this.enrichMetaClubFromFutDb();
+          case 'meta-value-clear': store.set(KEYS.metaValue, []); this.renderMetaValue(); this.log('Value tracker cleared', 'muted'); return;
           case 'autofill': this.commit(); return upgrades.autofill();
           case 'spend-reset':
             engine.cfg.listSpent = 0; engine.save(); this.renderPlayers();
@@ -7207,7 +7427,7 @@
           case 'setup-fix': {
             const it = (this.setupItems || [])[Number(btn.dataset.i)];
             if (!it || !it.fix || engine.running || plan.active || jobs.current) { if (it && it.fix) this.log('Stop the bot / plan first, then tap the fix', 'warn'); return; }
-            if (it.fix.type === 'update') { w.open('https://raw.githubusercontent.com/znxgio/Darkroom/claude/ea-fc-sniping-bot-jdz6vq/fc-sniper/fc-sniper.user.js', '_blank'); return; }
+            if (it.fix.type === 'update') { w.open('https://raw.githubusercontent.com/znxgio/Darkroom/meta-engine/foundation/fc-sniper/fc-sniper.user.js', '_blank'); return; }
             if (it.fix.type === 'keep') engine.cfg.minCoins = it.fix.value;
             if (it.fix.type === 'bid') engine.cfg.bidSnipe = true;
             engine.save(); this.syncForm(); this.renderSetup();
@@ -7992,9 +8212,262 @@
         <p class="note">Only evolutions EA says the card qualifies for. Start them in the Web App (Evolutions).</p></div>`;
     },
 
+    renderMetaValue() {
+      const box = this.q('[data-r=meta-value]');
+      if (!box) return;
+      const saved = store.get(KEYS.metaValue, []);
+      const rows = Array.isArray(saved) ? saved.filter(x => x && x.target && x.alternative && Number.isFinite(x.updatedAt)) : [];
+      if (!rows.length) {
+        box.innerHTML = '<p class="empty">Cheaper similar-fit comparisons from cards you view in the market will appear here.</p>';
+        return;
+      }
+      box.innerHTML = `<div class="list">${rows.slice(0, 20).map(x => {
+        const age = Math.max(0, Math.round((Date.now() - x.updatedAt) / 60000));
+        const when = age < 60 ? `${age}m ago` : age < 1440 ? `${Math.round(age / 60)}h ago` : `${Math.round(age / 1440)}d ago`;
+        return `<div class="li"><span class="t"><b>${esc(x.alternative.name)} ${x.alternative.score}/100 ${x.alternative.source === 'club' ? '<span class="tag ok">owned</span>' : '<span class="tag">market</span>'}</b>
+          <small>Alternative to ${esc(x.target.name)} ${x.target.score}/100 · ${esc(x.position)} · ${fmt(x.alternative.price)} vs ${fmt(x.target.price)} · save <span class="up">${fmt(x.savings)}</span> · ${x.scoreGap > 0 ? '+' : ''}${x.scoreGap} score · ${x.confidence}% confidence · ${when}</small></span></div>`;
+      }).join('')}</div>`;
+    },
+
+    previewManualMetaImport() {
+      const text = String(this.q('[data-r=meta-import-json]')?.value || '').trim();
+      const acceptedBox = this.q('[data-r=meta-import-result]');
+      const applyButton = this.q('[data-a=meta-import-apply]');
+      const permission = !!this.q('[data-r=meta-import-authorization]')?.checked;
+      this.pendingMetaImport = null;
+      if (applyButton) applyButton.disabled = true;
+      const show = (message) => { if (acceptedBox) acceptedBox.textContent = message; };
+      if (!text) { show('Paste a Darkroom schema v1 JSON snapshot first.'); return null; }
+      if (text.length > 1024 * 1024) { show('Rejected: snapshot exceeds the 1 MB import limit.'); return null; }
+      if (!permission) { show('Preview blocked: confirm you have permission or a license to use every source in this snapshot.'); return null; }
+      let raw;
+      try { raw = JSON.parse(text); } catch (error) {
+        show('Rejected: invalid JSON (' + String(error && error.message || error) + ').'); return null;
+      }
+      const providers = globalThis.DarkroomMetaProviders;
+      const feed = globalThis.DarkroomMetaLiveFeed;
+      const engineLib = globalThis.DarkroomMetaEngine;
+      if (!providers || !feed || !engineLib || typeof feed.parseSnapshot !== 'function') {
+        show('Rejected: Darkroom meta validation modules are unavailable.'); return null;
+      }
+      const snapshots = [...(Array.isArray(raw && raw.tacticsSnapshots) ? raw.tacticsSnapshots : []),
+        ...(Array.isArray(raw && raw.playerSnapshots) ? raw.playerSnapshots : [])];
+      if (!snapshots.length || snapshots.length > 100) {
+        show('Rejected: include 1–100 source snapshots in the schema v1 envelope.'); return null;
+      }
+      const sourceIds = [...new Set(snapshots.map(snapshot => String(snapshot && snapshot.sourceId || '')))].filter(Boolean);
+      if (sourceIds.length !== new Set(snapshots.map(snapshot => String(snapshot && snapshot.sourceId || ''))).size) {
+        show('Rejected: every source snapshot must declare a sourceId.'); return null;
+      }
+      const invalidSources = sourceIds.filter(sourceId => {
+        const provider = providers.getProvider(sourceId.split(':')[0]);
+        return !provider || provider.category !== 'competitive-meta';
+      });
+      if (invalidSources.length) { show('Rejected: unsupported meta source ID(s): ' + invalidSources.join(', ') + '.'); return null; }
+      const invalidUrls = snapshots.filter(snapshot => {
+        try {
+          const url = new URL(String(snapshot.sourceUrl || ''));
+          return url.protocol !== 'https:' || !!url.username || !!url.password || !!url.hash;
+        } catch (_) { return true; }
+      });
+      if (invalidUrls.length) { show('Rejected: each source snapshot needs a valid HTTPS sourceUrl without credentials or fragments.'); return null; }
+      const registry = providers.buildFeedRegistry([...new Set(sourceIds.map(sourceId => sourceId.split(':')[0]))]);
+      const result = feed.parseSnapshot(raw, { engine: engineLib, sourceRegistry: registry });
+      const accepted = result.sourceStatuses.reduce((sum, row) => sum + row.accepted, 0);
+      const rejected = result.rejected || [];
+      const reasons = [...new Set(rejected.map(row => row.reason).filter(Boolean))];
+      const context = result.context;
+      const contextText = context ? `${context.game} · patch ${context.patch} · ${context.platform}` : result.reason || 'context unavailable';
+      const sourceText = result.sourceStatuses.map(row => `${row.id} (${row.family}): ${row.accepted} accepted${row.rejected ? `, ${row.rejected} rejected` : ''}`).join('; ');
+      const sourceUrls = snapshots.map(snapshot => `${snapshot.sourceId}: ${snapshot.sourceUrl}`).join('; ');
+      const reasonsText = reasons.length ? ` Rejection reasons: ${reasons.join(', ')}.` : '';
+      show(`${result.status === 'ok' || result.status === 'partial' ? 'Validated' : 'Rejected'} · ${contextText} · generated ${result.generatedAt || 'unknown'} · ${accepted} observations accepted · ${rejected.length} rejected. ${sourceText} Source URLs: ${sourceUrls}.${reasonsText}`);
+      if (!['ok', 'partial'].includes(result.status) || !accepted) return result;
+      this.pendingMetaImport = { result, text };
+      if (applyButton) applyButton.disabled = false;
+      return result;
+    },
+
+    applyManualMetaImport() {
+      const preview = this.previewManualMetaImport();
+      if (!preview || !this.pendingMetaImport) return;
+      const result = this.pendingMetaImport.result;
+      activeMetaEvidence = result.playerEvidence || [];
+      activeMetaContext = result.context || null;
+      this.liveMetaTactics = result.tactics || null;
+      this.refreshMetaRosterScores();
+      const evidenceCount = activeMetaEvidence.length;
+      const tacticsCount = result.tactics ? result.tactics.formations.length + result.tactics.roles.length +
+        result.tactics.buildUpStyles.length + result.tactics.defensiveStyles.length : 0;
+      const status = this.q('[data-r=meta-futgg-status]');
+      if (status) status.textContent = `Imported authorized user-provided snapshot · ${evidenceCount} player observations · ${tacticsCount} tactics observations · ${result.context.game}, patch ${result.context.patch}, ${result.context.platform}.`;
+      this.log(`Imported ${evidenceCount} player and ${tacticsCount} tactics observations from a user-provided snapshot.`, 'ok');
+      const applyButton = this.q('[data-a=meta-import-apply]');
+      if (applyButton) applyButton.disabled = true;
+      return result;
+    },
+
+    clearMetaImport() {
+      activeMetaEvidence = [];
+      activeMetaContext = null;
+      this.liveMetaTactics = null;
+      this.pendingMetaImport = null;
+      const applyButton = this.q('[data-a=meta-import-apply]');
+      const resultBox = this.q('[data-r=meta-import-result]');
+      if (applyButton) applyButton.disabled = true;
+      if (resultBox) resultBox.textContent = 'Imported evidence cleared for this page session.';
+      const status = this.q('[data-r=meta-futgg-status]');
+      if (status) status.textContent = 'No meta snapshot imported. Automatic import remains available when an authorized feed is configured.';
+      this.refreshMetaRosterScores();
+      this.log('Imported meta evidence cleared for this page session.', 'muted');
+    },
+
+    refreshMetaRosterScores() {
+      if (Array.isArray(upgrades.metaRoster)) {
+        for (const row of upgrades.metaRoster) {
+          const positions = row.player && Array.isArray(row.player.positions) ? row.player.positions : [];
+          const candidates = positions.map(position => ({ position, quality: metaEngineQuality(row.player, position) }))
+            .filter(candidate => candidate.quality && candidate.quality.score != null);
+          candidates.sort((a, b) => b.quality.score - a.quality.score);
+          row.best = candidates[0] || null;
+        }
+      }
+      this.renderMetaClub();
+    },
+
+    async syncFutGgMeta() {
+      const statusBox = this.q('[data-r=meta-futgg-status]');
+      const setStatus = (message) => { if (statusBox) statusBox.textContent = message; };
+      const base = 'http://127.0.0.1:8765';
+      try {
+        const healthResponse = await fetch(base + '/health', { method: 'GET', mode: 'cors',
+          credentials: 'omit', cache: 'no-store' });
+        if (!healthResponse.ok) throw new Error('Mac bridge returned HTTP ' + healthResponse.status);
+        const health = await healthResponse.json();
+        if (!health.ok) throw new Error('Mac bridge did not respond correctly');
+        const providers = globalThis.DarkroomMetaProviders;
+        const feed = globalThis.DarkroomMetaLiveFeed;
+        const engineLib = globalThis.DarkroomMetaEngine;
+        const sourceIds = Array.isArray(health.authorizedSources) ? health.authorizedSources : [];
+        if (!health.automaticImport || !sourceIds.length || !providers || !feed || !engineLib) {
+          setStatus('Mac bridge online · automatic import unavailable (' +
+            (health.reason || 'no authorized FUT.GG source configured') +
+            ') · manual fallback required. Open FUT.GG to review tactics.');
+          this.log('FUT.GG auto-import unavailable; using manual fallback. No authorized feed is configured.', 'warn');
+          return;
+        }
+        const registry = providers.buildFeedRegistry(sourceIds);
+        const result = await feed.load({ endpoint: base + '/api/meta/snapshot',
+          engine: engineLib, sourceRegistry: registry });
+        if (!['ok', 'partial'].includes(result.status)) {
+          setStatus('Mac bridge online · import ' + result.status + ' (' +
+            (result.reason || 'no usable authorized evidence') + ') · manual fallback required.');
+          this.log('FUT.GG import did not produce usable evidence; manual fallback required.', 'warn');
+          return;
+        }
+        activeMetaEvidence = result.playerEvidence || [];
+        activeMetaContext = result.context || null;
+        this.liveMetaTactics = result.tactics || null;
+        this.liveMetaContext = result.context || null;
+        this.refreshMetaRosterScores();
+        setStatus('Imported authorized meta evidence · ' + activeMetaEvidence.length +
+          ' player observations · ' + (result.tactics ? result.tactics.formations.length + result.tactics.roles.length + result.tactics.buildUpStyles.length + result.tactics.defensiveStyles.length : 0) +
+          ' tactics observations · patch ' + (result.context && result.context.patch || 'unknown') + '.');
+        this.log('Imported authorized meta snapshot. Player scores were refreshed where evidence matched their card IDs.', 'ok');
+      } catch (error) {
+        setStatus('Mac bridge unavailable · manual fallback required. Start the Mac bridge and retry.');
+        this.log('Mac bridge unavailable; manual fallback required (' + errText(error) + ').', 'warn');
+      }
+    },
+
+    async enrichMetaClubFromFutDb() {
+      const input = this.q('[data-i=meta-api-url]');
+      const baseUrl = String(input && input.value || '').trim();
+      const lib = typeof globalThis !== 'undefined' ? globalThis.DarkroomFutDb : null;
+      const client = lib && typeof lib.createClient === 'function' ? lib.createClient({ baseUrl }) : null;
+      if (!client) { this.log('Enter your deployed HTTPS Darkroom Meta API URL first', 'alert'); return; }
+      const rows = Array.isArray(upgrades.metaRoster) ? upgrades.metaRoster : [];
+      if (!rows.length) { this.log('Score your club before enriching card data', 'alert'); return; }
+      let enriched = 0; let missing = 0;
+      for (const row of rows.slice(0, 15)) {
+        const player = row && row.player;
+        const resourceId = player && (player.resourceId || player.definitionId || player.defId);
+        if (!/^\d{1,12}$/.test(String(resourceId || ''))) { missing++; continue; }
+        const result = await client.getPlayerByResourceId(resourceId);
+        if (!result.ok) { missing++; continue; }
+        const data = result.player;
+        player.attributes = { ...(player.attributes || {}), ...data.attributes };
+        player.stats = { ...(player.stats || {}), pac: data.summary.pace ?? player.stats?.pac,
+          sho: data.summary.shooting ?? player.stats?.sho, pas: data.summary.passing ?? player.stats?.pas,
+          dri: data.summary.dribbling ?? player.stats?.dri, def: data.summary.defending ?? player.stats?.def,
+          phy: data.summary.physical ?? player.stats?.phy };
+        player.playStyles = data.playStyles;
+        player.playStylesPlus = data.playStylesPlus;
+        player.skillMoves = data.skillMoves ?? player.skillMoves;
+        player.weakFoot = data.weakFoot ?? player.weakFoot;
+        player.resourceId = data.resourceId;
+        const positions = Array.isArray(player.positions) && player.positions.length ? player.positions :
+          [data.position || player.position].filter(Boolean);
+        const candidates = positions.map(position => ({ position, quality: metaEngineQuality(player, position) }))
+          .filter(x => x.quality && Number.isFinite(x.quality.playerQualityScore));
+        candidates.sort((a, b) => b.quality.playerQualityScore - a.quality.playerQualityScore);
+        if (candidates.length) row.best = candidates[0];
+        row.futdb = { source: 'FUT-DB', retrievedAt: data.retrievedAt };
+        enriched++;
+      }
+      this.renderMetaClub();
+      this.log('FUT-DB card enrichment: ' + enriched + ' updated, ' + missing + ' unavailable. Card attributes only; not pro-meta evidence.', enriched ? 'ok' : 'alert');
+    },
+
+    renderMetaClub() {
+      this.renderMetaTactics();
+      const box = this.q('[data-r=meta-club]');
+      if (!box) return;
+      const rows = upgrades.metaRoster;
+      if (!rows) {
+        box.innerHTML = '<p class="empty">Read your owned cards to score position-specific quality. Permitted player evidence can refine that estimate.</p>';
+        return;
+      }
+      const shown = rows.slice(0, 30);
+      const contextText = activeMetaContext ? ` · ${esc(activeMetaContext.game)} · patch ${esc(activeMetaContext.patch)} · ${esc(activeMetaContext.platform)}` : '';
+      box.innerHTML = `<p class="note">${rows.length} cards · updated ${Math.max(0, Math.round((Date.now() - upgrades.metaRosterAt) / 60000))} min ago${activeMetaEvidence.length ? ` · permitted user-provided evidence${contextText}` : ' · quality-fit estimates only'}</p>
+        <div class="list">${shown.map(({ player, best }) => `<div class="li"><span class="t"><b>${esc(player.name)} ${player.rating || ''}</b>
+          <small>${best ? `${esc(best.position)} · ${best.quality.proMetaScore != null || best.quality.communityMetaScore != null ? `score ${Math.round(best.quality.score)}/100 · ` : ''}${best.quality.playerQualityScore == null ? 'quality estimate unavailable' : `${Math.round(best.quality.playerQualityScore)}/100 quality estimate`} · ${best.quality.confidence}% confidence${best.quality.proMetaScore != null ? ` · pro ${Math.round(best.quality.proMetaScore)}` : ''}${best.quality.communityMetaScore != null ? ` · community ${Math.round(best.quality.communityMetaScore)}` : ''}` : 'Not enough position data to score'} · ${(player.positions || []).map(esc).join('/') || 'position unknown'}${player.futdb ? ` · FUT-DB data ${esc(player.futdb.retrievedAt)}` : ''}</small></span></div>`).join('')}</div>
+        ${rows.length > shown.length ? `<p class="note">Showing top ${shown.length} of ${rows.length} cards.</p>` : ''}`;
+    },
+
+    renderMetaTactics() {
+      const box = this.q('[data-r=meta-tactics]');
+      if (!box) return;
+      const tactics = this.liveMetaTactics;
+      if (!tactics || tactics.status !== 'ok') {
+        box.innerHTML = '<p class="empty">Your private FUT.GG snapshot will show pro and community formation and role usage here.</p>';
+        return;
+      }
+      const formations = [...(tactics.formations || [])]
+        .sort((a, b) => (b.proUsageShare ?? -1) - (a.proUsageShare ?? -1)).slice(0, 6);
+      const roleByPosition = new Map();
+      for (const row of tactics.roles || []) {
+        if (!row.position) continue;
+        const current = roleByPosition.get(row.position);
+        if (!current || (row.proUsageShare ?? -1) > (current.proUsageShare ?? -1)) roleByPosition.set(row.position, row);
+      }
+      const roles = [...roleByPosition.values()].sort((a, b) => a.position.localeCompare(b.position));
+      const percent = value => Number.isFinite(Number(value)) ? `${Number(value).toFixed(1).replace(/\.0$/, '')}%` : '—';
+      const context = tactics.context || {};
+      box.innerHTML = `<p class="note">${esc(context.game || 'FC 27')} · patch ${esc(context.patch || 'not reported')} · platform ${esc(context.platform || 'not reported')} · sample denominators are not published</p>
+        <h5 class="subtitle">Formations used by pros</h5>
+        ${formations.length ? `<div class="list">${formations.map(row => `<div class="li"><span class="t"><b>${esc(row.key)}</b><small>Pros ${percent(row.proUsageShare)} · community ${percent(row.communityUsageShare)}${row.proBuildUpStyle || row.proDefensiveLineStyle ? ` · pro setup: ${esc([row.proBuildUpStyle && `${row.proBuildUpStyle} build-up`, row.proDefensiveLineStyle && `${row.proDefensiveLineStyle} line`].filter(Boolean).join(' · '))}` : ''}</small></span></div>`).join('')}</div>` : '<p class="empty">No formation observations in this snapshot.</p>'}
+        <h5 class="subtitle">Most-used role by position</h5>
+        ${roles.length ? `<div class="list">${roles.map(row => `<div class="li"><span class="t"><b>${esc(row.position)} · ${esc(row.key)}</b><small>Pros ${percent(row.proUsageShare)} · community ${percent(row.communityUsageShare)}</small></span></div>`).join('')}</div>` : '<p class="empty">No role observations in this snapshot.</p>'}
+        <p class="note">Imported for your local personal use only. FUT.GG does not publish patch, platform, or sample-size details on these pages.</p>`;
+    },
+
     renderUpgrades() {
       const saved = upgrades.savedTeam();
       const s = upgrades.summary || (saved && saved.summary);
+      this.renderMetaClub();
+      this.renderMetaValue();
       if (s) {
         const age = saved && saved.at ? Math.round((Date.now() - saved.at) / 60e3) : null;
         const when = upgrades.summary && age !== null && age < 2 ? 'just now' : age !== null ? (age < 60 ? `${age} min ago` : age < 1440 ? `${Math.round(age / 60)} h ago` : `${Math.round(age / 1440)} d ago`) : '';
@@ -8020,7 +8493,7 @@
       const cfg = engine.cfg;
       if (this.latest === undefined && !this.latestAsked) {
         this.latestAsked = true;
-        fetch(`https://raw.githubusercontent.com/znxgio/Darkroom/claude/ea-fc-sniping-bot-jdz6vq/fc-sniper/fc-sniper.user.js?t=${Date.now()}`, { cache: 'no-store', credentials: 'omit' })
+        fetch(`https://raw.githubusercontent.com/znxgio/Darkroom/meta-engine/foundation/fc-sniper/fc-sniper.user.js?t=${Date.now()}`, { cache: 'no-store', credentials: 'omit' })
           .then((r) => (r.ok ? r.text() : '')).then((t) => { const m = t.match(/@version\s+([\d.]+)/); this.latest = m ? m[1] : null; this.renderSetup(); })
           .catch(() => { this.latest = null; this.renderSetup(); });
       }
