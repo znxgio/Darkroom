@@ -69,3 +69,13 @@ test('PaceFC is the primary pro-meta candidate but automated ingestion stays per
   assert.equal(pace.status, 'permission-required');
   assert.deepEqual(providers.buildTacticsRegistry(), {});
 });
+
+test('FUT-DB is registered as player-card data, never as competitive meta evidence', () => {
+  const provider = providers.getProvider('futdb-card-data');
+  assert.equal(provider.category, 'player-card-data');
+  assert.equal(provider.kind, 'data');
+  assert.equal(provider.automatedIngestion, true);
+  assert.deepEqual(provider.evidenceMetrics, []);
+  assert.deepEqual(providers.buildEvidenceRegistry(['futdb-card-data']), {});
+  assert.deepEqual(providers.buildTacticsRegistry(['futdb-card-data']), {});
+});
