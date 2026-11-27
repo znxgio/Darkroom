@@ -35,6 +35,9 @@ test('tactics registry keeps pro and community separate and stays disabled by de
   assert.equal(registry['futgg-community'].kind, 'community');
   assert.ok(registry['futgg-pro'].allowedDimensions.includes('formation'));
   assert.equal(registry['futbin-market'], undefined);
+  const combined = providers.buildFeedRegistry(['futgg-pro', 'futgg-community']);
+  assert.equal(combined['futgg-pro'].kind, 'pro');
+  assert.equal(combined['futgg-pro:pro-formation-usage'].kind, 'pro');
 });
 
 test('unknown providers return null', () => {
