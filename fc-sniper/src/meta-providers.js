@@ -109,7 +109,7 @@
       evidenceMetrics: [...provider.evidenceMetrics] } : null;
   }
 
-  // Produces the engine's source registry only for sources the caller has
+  // Produces the player-evidence registry only for sources the caller has
   // explicitly marked as authorized. Candidate status alone never enables ingest.
   function buildEvidenceRegistry(authorizedSourceIds = []) {
     const authorized = new Set(authorizedSourceIds.map(String));
@@ -128,5 +128,28 @@
     return registry;
   }
 
-  return Object.freeze({ listProviders, getProvider, buildEvidenceRegistry });
+  // Tactics snapshots use one source ID per provider and a separate dimension allowlist.
+  // Only enable these after written permission or a documented licensed feed is recorded.
+  function buildTacticsRegistry(authorizedSourceIds = []) {
+    const authorized = new Set(authorizedSourceIds.map(String));
+    const registry = {};
+    const dimensions = {
+      'futgg-pro': ['formation', 'role', 'buildUp', 'defensiveLine'],
+      'futgg-community': ['formation', 'role', 'buildUp', 'defensiveLine'],
+      'pacefc-pro': ['formation']
+    };
+    for (const provider of PROVIDERS) {
+      const allowedDimensions = dimensions[provider.id];
+      if (!authorized.has(provider.id) || !allowedDimensions) continue;
+      registry[provider.id] = {
+        kind: provider.kind,
+        reliability: provider.reliability,
+        allowedDimensions: [...allowedDimensions],
+        maxAgeDays: 45
+      };
+    }
+    return registry;
+  }
+
+  return Object.freeze({ listProviders, getProvider, buildEvidenceRegistry, buildTacticsRegistry });
 });
