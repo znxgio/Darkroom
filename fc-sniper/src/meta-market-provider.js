@@ -48,6 +48,47 @@
       quotes, unresolved: Array.isArray(payload.data.unresolved) ? payload.data.unresolved : [], rejected };
   }
 
+  function parseBaseUrl(value) {
+    let url;
+    try { url = new URL(String(value || '')); } catch (_) { return null; }
+    if (url.protocol !== 'https:' || url.username || url.password || url.hash) return null;
+    return url;
+  }
+
+  function createClient(options = {}) {
+    const base = parseBaseUrl(options.baseUrl);
+    const fetchImpl = options.fetchImpl || (typeof fetch === 'function' ? fetch : null);
+    if (!base || typeof fetchImpl !== 'function') return null;
+    const request = async (path, params) => {
+      const url = new URL(path, base.toString().replace(/\\/$/, '') + '/');
+      for (const [key, value] of Object.entries(params || {})) url.searchParams.set(key, String(value));
+      let response;
+      try {
+        response = await fetchImpl(url.toString(), { method: 'GET', credentials: 'omit',
+          cache: 'no-store', redirect: 'error', headers: { Accept: 'application/json' } });
+      } catch (_) { return { ok: false, error: 'request-failed' }; }
+      if (!response || !response.ok) return { ok: false, error: 'http-error',
+        status: Number(response && response.status) || null };
+      try { return await response.json(); } catch (_) { return { ok: false, error: 'invalid-json' }; }
+    };
+    return Object.freeze({
+      async searchCards(query, limit = 10) {
+        const q = String(query || '').trim();
+        if (!q || q.length > 80) return { ok: false, error: 'invalid-search-query' };
+        return request('/api/meta/cards/search', { q, limit: Math.max(1, Math.min(20, Number(limit) || 10)) });
+      },
+      async getPrices(eaIds, platform = 'ps', now = Date.now()) {
+        const ids = Array.from(new Set((Array.isArray(eaIds) ? eaIds : []).map(String)));
+        if (!ids.length || ids.length > 500 || ids.some(id => !/^\\d{1,12}$/.test(id)))
+          return { status: 'unavailable', reason: 'invalid-ea-ids', quotes: [], unresolved: [] };
+        if (!['ps', 'xbox', 'pc'].includes(platform))
+          return { status: 'unavailable', reason: 'invalid-platform', quotes: [], unresolved: [] };
+        const payload = await request('/api/meta/prices', { ea_ids: ids.join(','), platform });
+        return normalizePriceResponse(payload, { now });
+      }
+    });
+  }
+
   function buildValueQuoteIndex(normalized) {
     const index = {};
     for (const quote of (normalized && normalized.quotes) || []) {
@@ -56,5 +97,5 @@
     return index;
   }
 
-  return Object.freeze({ DEFAULT_MAX_AGE_SECONDS, normalizePriceItem, normalizePriceResponse, buildValueQuoteIndex });
+  return Object.freeze({ DEFAULT_MAX_AGE_SECONDS, normalizePriceItem, normalizePriceResponse, parseBaseUrl, createClient, buildValueQuoteIndex });
 });
