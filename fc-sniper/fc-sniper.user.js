@@ -8205,14 +8205,16 @@
       let enriched = 0; let missing = 0;
       for (const row of rows.slice(0, 15)) {
         const player = row && row.player;
-        const resourceId = player && (player.resourceId || player.definitionId || player.defId || player.id);
+        const resourceId = player && (player.resourceId || player.definitionId || player.defId);
         if (!/^\d{1,12}$/.test(String(resourceId || ''))) { missing++; continue; }
         const result = await client.getPlayerByResourceId(resourceId);
         if (!result.ok) { missing++; continue; }
         const data = result.player;
         player.attributes = { ...(player.attributes || {}), ...data.attributes };
-        player.stats = { ...(player.stats || {}), pac: data.summary.pace, sho: data.summary.shooting,
-          pas: data.summary.passing, dri: data.summary.dribbling, def: data.summary.defending, phy: data.summary.physical };
+        player.stats = { ...(player.stats || {}), pac: data.summary.pace ?? player.stats?.pac,
+          sho: data.summary.shooting ?? player.stats?.sho, pas: data.summary.passing ?? player.stats?.pas,
+          dri: data.summary.dribbling ?? player.stats?.dri, def: data.summary.defending ?? player.stats?.def,
+          phy: data.summary.physical ?? player.stats?.phy };
         player.playStyles = data.playStyles;
         player.playStylesPlus = data.playStylesPlus;
         player.skillMoves = data.skillMoves ?? player.skillMoves;
