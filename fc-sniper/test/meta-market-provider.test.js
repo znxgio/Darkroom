@@ -43,3 +43,27 @@ test('does not expose stale or zero prices to the value comparison index', () =>
 test('invalid provider envelope fails closed', () => {
   assert.equal(market.normalizePriceResponse({ success: true, data: { items: [] } }).status, 'unavailable');
 });
+
+test('client refuses unsafe base URLs and uses only the Darkroom proxy', async () => {
+  assert.equal(market.createClient({ baseUrl: 'http://localhost:8787' }), null);
+  let requested;
+  const client = market.createClient({ baseUrl: 'https://meta.darkroom.example/',
+    fetchImpl: async (url, init) => {
+      requested = { url, init };
+      return { ok: true, json: async () => ({ ok: true, retrievedAt: new Date(NOW).toISOString(),
+        data: { items: [{ ea_id: 123, price: 900, observed_at: new Date(NOW).toISOString() }] } }) };
+    } });
+  const result = await client.getPrices(['123'], 'ps', NOW);
+  assert.equal(requested.url, 'https://meta.darkroom.example/api/meta/prices?ea_ids=123&platform=ps');
+  assert.equal(requested.init.credentials, 'omit');
+  assert.equal(result.quotes[0].eaId, '123');
+});
+
+test('client validates card searches and batches no more than 500 price ids', async () => {
+  let calls = 0;
+  const client = market.createClient({ baseUrl: 'https://meta.darkroom.example',
+    fetchImpl: async () => { calls += 1; return { ok: true, json: async () => ({ ok: true, data: { items: [] } }) }; } });
+  assert.equal((await client.searchCards('')).error, 'invalid-search-query');
+  assert.equal((await client.getPrices([], 'ps')).reason, 'invalid-ea-ids');
+  assert.equal(calls, 0);
+});
