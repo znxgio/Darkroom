@@ -164,7 +164,8 @@
     const dimensions = {
       'futgg-pro': ['formation', 'role', 'buildUp', 'defensiveLine'],
       'futgg-community': ['formation', 'role', 'buildUp', 'defensiveLine'],
-      'pacefc-pro': ['formation'],\n      'futsettings-pro': ['formation']
+      'pacefc-pro': ['formation'],
+      'futsettings-pro': ['formation']
     };
     for (const provider of PROVIDERS) {
       const allowedDimensions = dimensions[provider.id];
