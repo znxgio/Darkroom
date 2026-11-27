@@ -163,6 +163,8 @@ function createServer(options = {}) {
       }
     }
     const futdbMatch = url.pathname.match(/^\/api\/meta\/futdb\/players\/resource\/(\d{1,12})$/);
+    if (url.pathname.startsWith('/api/meta/futdb/players/resource/') && !futdbMatch)
+      return send(res, 400, { ok: false, error: 'invalid-futdb-resource-id' }, origin);
     if (futdbMatch) {
       if (!futdbKeyConfigured) return send(res, 503, { ok: false, error: 'futdb-key-not-configured' }, origin);
       try {
