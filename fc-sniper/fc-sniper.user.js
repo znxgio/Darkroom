@@ -2738,7 +2738,7 @@
 
   // ---- Storage ----------------------------------------------------------------
 
-  const KEYS = { cfg: 'fc-sniper:config', safety: 'fc-sniper:safety', history: 'fc-sniper:history', ui: 'fc-sniper:ui', log: 'fc-sniper:log', learn: 'fc-sniper:learn', debug: 'fc-sniper:debug', prices: 'fc-sniper:prices', bids: 'fc-sniper:bids', plan: 'fc-sniper:plan', team: 'fc-sniper:team' };
+  const KEYS = { cfg: 'fc-sniper:config', safety: 'fc-sniper:safety', history: 'fc-sniper:history', ui: 'fc-sniper:ui', log: 'fc-sniper:log', learn: 'fc-sniper:learn', debug: 'fc-sniper:debug', prices: 'fc-sniper:prices', bids: 'fc-sniper:bids', plan: 'fc-sniper:plan', team: 'fc-sniper:team', metaValue: 'fc-sniper:meta-value' };
   const store = {
     get(key, fallback) {
       try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : fallback; } catch { return fallback; }
@@ -3637,10 +3637,51 @@
           if (valuePairs.length >= 3) break;
         }
       }
+      // If the club has been scored, compare it too using only fresh prices already in our local cache.
+      if (valueLib && typeof valueLib.compareValue === 'function' && valuePairs.length < 3 && upgrades.metaRoster) {
+        for (const target of marketQualityRows.filter(x => x.player.price > 0).sort((a, b) => b.player.price - a.player.price)) {
+          const alternatives = [];
+          for (const entry of upgrades.metaRoster) {
+            if (!entry.player || String(entry.player.id) === String(target.player.id)) continue;
+            const q = metaEngineQuality(entry.player, target.position);
+            if (!q || q.playerQualityScore == null) continue;
+            const samples = (prices.data[String(entry.player.id)]?.s || []).filter(x => x && x[1] > 0 && Date.now() - x[0] <= 24 * 3600e3);
+            const latest = samples[samples.length - 1];
+            if (!latest) continue;
+            const comparison = valueLib.compareValue(
+              { score: q.playerQualityScore, price: latest[1] },
+              { score: target.quality.playerQualityScore, price: target.player.price }
+            );
+            if (comparison.comparable && comparison.similarPerformance && comparison.scoreGap >= -3) {
+              alternatives.push({ candidate: { player: entry.player, position: target.position, quality: q, source: 'club' }, target, comparison });
+            }
+          }
+          alternatives.sort((a, b) => b.comparison.savings - a.comparison.savings);
+          if (alternatives.length) valuePairs.push(alternatives[0]);
+          if (valuePairs.length >= 3) break;
+        }
+      }
       const valueHtml = valuePairs.length
         ? `<div><b>Cheaper similar-fit options · provisional</b><small>${valuePairs.map(x =>
-          `${esc(x.candidate.player.name)} ${Math.round(x.candidate.quality.playerQualityScore)} vs ${esc(x.target.player.name)} ${Math.round(x.target.quality.playerQualityScore)} · save ${fmt(x.comparison.savings)} coins · ${x.comparison.scoreGap > 0 ? '+' : ''}${x.comparison.scoreGap} score`).join('<br>')}</small></div>`
+          `${esc(x.candidate.player.name)} ${Math.round(x.candidate.quality.playerQualityScore)} ${x.candidate.source === 'club' ? '(owned)' : '(market)'} vs ${esc(x.target.player.name)} ${Math.round(x.target.quality.playerQualityScore)} · save ${fmt(x.comparison.savings)} coins · ${x.comparison.scoreGap > 0 ? '+' : ''}${x.comparison.scoreGap} score`).join('<br>')}</small></div>`
         : '';
+      if (valuePairs.length) {
+        const old = store.get(KEYS.metaValue, []);
+        const additions = valuePairs.map(x => ({
+          key: [x.target.player.id, x.candidate.player.id, x.target.position].join('|'),
+          target: { id: x.target.player.id, name: x.target.player.name, rating: x.target.player.rating,
+            score: Math.round(x.target.quality.playerQualityScore), price: x.target.player.price },
+          alternative: { id: x.candidate.player.id, name: x.candidate.player.name, rating: x.candidate.player.rating,
+            score: Math.round(x.candidate.quality.playerQualityScore),
+            price: x.candidate.source === 'club' ? (prices.data[String(x.candidate.player.id)]?.s || []).slice(-1)[0]?.[1] || 0 : x.candidate.player.price,
+            source: x.candidate.source || 'market' },
+          position: x.target.position, savings: x.comparison.savings, scoreGap: x.comparison.scoreGap,
+          confidence: x.candidate.quality.confidence, updatedAt: Date.now()
+        }));
+        const keys = new Set(additions.map(x => x.key));
+        store.set(KEYS.metaValue, [...additions, ...old.filter(x => !keys.has(x.key))].slice(0, 50));
+        if (ui && typeof ui.renderMetaValue === 'function') ui.renderMetaValue();
+      }
       let el = document.getElementById('fcs-ovl');
       if (!el) {
         el = document.createElement('div'); el.id = 'fcs-ovl'; el.setAttribute('role', 'status');
@@ -7059,6 +7100,10 @@
               <div data-r="meta-club"><p class="empty">Read your club to score each card's position-specific quality. This is not live competitive meta yet.</p></div>
               <button class="btn blue" data-a="meta-club">Score my club</button>
               <p class="note">Read-only. Uses the attributes and PlayStyles the Web App exposes; no market searches or transactions. Live pro/community evidence is not connected yet.</p></div>
+            <div class="card"><h4>💰 Value tracker</h4>
+              <div data-r="meta-value"><p class="empty">Cheaper similar-fit comparisons from cards you view in the market will appear here.</p></div>
+              <button class="btn" data-a="meta-value-clear">Clear tracker</button>
+              <p class="note">Uses cached prices from the last 24 hours. Quality-fit estimates are provisional until live meta evidence is connected.</p></div>
             <div class="card ask"><h4>🧠 Ask the analyst</h4>
               <div class="two"><input type="text" data-r="ask-q" placeholder="e.g. what should replace Saka?" enterkeyhint="send"><button class="btn blue" data-a="ask">Ask</button></div>
               <div data-r="ask"><p class="empty">Answers from your own squad, club and the bot’s price checks — no guessing. Try “how’s my team?”, “compare Rice vs Bellingham”, “best CB I own”.</p></div></div>
@@ -7226,6 +7271,7 @@
             if (engine.running || jobs.current) { this.log('Stop the running task first (■)', 'warn'); return; }
             return upgrades.updateTeam(false);
           case 'meta-club': return upgrades.scoreClub();
+          case 'meta-value-clear': store.set(KEYS.metaValue, []); this.renderMetaValue(); this.log('Value tracker cleared', 'muted'); return;
           case 'autofill': this.commit(); return upgrades.autofill();
           case 'spend-reset':
             engine.cfg.listSpent = 0; engine.save(); this.renderPlayers();
@@ -8125,6 +8171,22 @@
         <p class="note">Only evolutions EA says the card qualifies for. Start them in the Web App (Evolutions).</p></div>`;
     },
 
+    renderMetaValue() {
+      const box = this.q('[data-r=meta-value]');
+      if (!box) return;
+      const rows = store.get(KEYS.metaValue, []);
+      if (!rows.length) {
+        box.innerHTML = '<p class="empty">Cheaper similar-fit comparisons from cards you view in the market will appear here.</p>';
+        return;
+      }
+      box.innerHTML = `<div class="list">${rows.slice(0, 20).map(x => {
+        const age = Math.max(0, Math.round((Date.now() - x.updatedAt) / 60000));
+        const when = age < 60 ? `${age}m ago` : age < 1440 ? `${Math.round(age / 60)}h ago` : `${Math.round(age / 1440)}d ago`;
+        return `<div class="li"><span class="t"><b>${esc(x.alternative.name)} ${x.alternative.score}/100 ${x.alternative.source === 'club' ? '<span class="tag ok">owned</span>' : '<span class="tag">market</span>'}</b>
+          <small>Alternative to ${esc(x.target.name)} ${x.target.score}/100 · ${esc(x.position)} · ${fmt(x.alternative.price)} vs ${fmt(x.target.price)} · save <span class="up">${fmt(x.savings)}</span> · ${x.scoreGap > 0 ? '+' : ''}${x.scoreGap} score · ${x.confidence}% confidence · ${when}</small></span></div>`;
+      }).join('')}</div>`;
+    },
+
     renderMetaClub() {
       const box = this.q('[data-r=meta-club]');
       if (!box) return;
@@ -8144,6 +8206,7 @@
       const saved = upgrades.savedTeam();
       const s = upgrades.summary || (saved && saved.summary);
       this.renderMetaClub();
+      this.renderMetaValue();
       if (s) {
         const age = saved && saved.at ? Math.round((Date.now() - saved.at) / 60e3) : null;
         const when = upgrades.summary && age !== null && age < 2 ? 'just now' : age !== null ? (age < 60 ? `${age} min ago` : age < 1440 ? `${Math.round(age / 60)} h ago` : `${Math.round(age / 1440)} d ago`) : '';
