@@ -51,7 +51,7 @@ test('FUT-DB server route proxies exact EA resource IDs without exposing its tok
     futdbUpstream: async path => { requested = path; return { player: { resourceId: 231747, name: 'Example' } }; }
   }, async base => {
     const bad = await fetch(base + '/api/meta/futdb/players/resource/abc');
-    assert.equal(bad.status, 404);
+    assert.equal(bad.status, 400);
     const response = await fetch(base + '/api/meta/futdb/players/resource/231747');
     const body = await response.json();
     assert.equal(response.status, 200);
