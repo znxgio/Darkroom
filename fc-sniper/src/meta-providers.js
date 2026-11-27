@@ -18,11 +18,11 @@
       kind: 'pro',
       capabilities: ['formation-usage', 'role-usage', 'build-up-usage', 'defensive-line-usage', 'tactic-codes', 'player-role-fit'],
       evidenceMetrics: ['pro-formation-usage', 'pro-role-usage', 'pro-build-up-usage', 'pro-defensive-line-usage'],
-      access: 'public-reference',
+      access: 'public-reference-restricted',
       automatedIngestion: false,
-      status: 'candidate',
+      status: 'permission-required',
       reliability: 0.82,
-      notes: 'Public FC 27 tactics pages visibly separate pro and community usage. Public visibility is not permission to scrape or call undocumented endpoints.'
+      notes: 'Public FC 27 tactics pages visibly separate pro and community usage, but published content terms restrict automated access and competing use. Human research reference only until written permission or a suitable license is obtained.'
     },
     {
       id: 'futgg-community',
@@ -32,11 +32,11 @@
       kind: 'community',
       capabilities: ['formation-usage', 'role-usage', 'build-up-usage', 'defensive-line-usage', 'player-role-fit'],
       evidenceMetrics: ['community-formation-usage', 'community-role-usage', 'community-build-up-usage', 'community-defensive-line-usage'],
-      access: 'public-reference',
+      access: 'public-reference-restricted',
       automatedIngestion: false,
-      status: 'candidate',
+      status: 'permission-required',
       reliability: 0.72,
-      notes: 'Keep community squad trends separate from pro tactics observations.'
+      notes: 'Keep community squad trends separate from pro tactics observations. Automated ingestion requires written permission or a suitable license.'
     },
     {
       id: 'pacefc-pro',
