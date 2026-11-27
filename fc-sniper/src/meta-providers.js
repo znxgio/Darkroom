@@ -151,5 +151,9 @@
     return registry;
   }
 
-  return Object.freeze({ listProviders, getProvider, buildEvidenceRegistry, buildTacticsRegistry });
+  function buildFeedRegistry(authorizedSourceIds = []) {
+    return { ...buildTacticsRegistry(authorizedSourceIds), ...buildEvidenceRegistry(authorizedSourceIds) };
+  }
+
+  return Object.freeze({ listProviders, getProvider, buildEvidenceRegistry, buildTacticsRegistry, buildFeedRegistry });
 });
