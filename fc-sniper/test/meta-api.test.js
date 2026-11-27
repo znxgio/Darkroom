@@ -65,3 +65,41 @@ test('unknown routes and non-GET methods are rejected', async () => {
     assert.equal((await fetch(base + '/health', { method: 'POST' })).status, 405);
   });
 });
+
+const fs = require('node:fs/promises');
+const os = require('node:os');
+const path = require('node:path');
+
+test('authorized meta snapshot endpoint serves a versioned feed without requiring a market key', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'darkroom-meta-'));
+  const snapshotFile = path.join(dir, 'snapshot.json');
+  const snapshot = { schemaVersion: 1, game: 'FC 27', patch: '1.2', platform: 'PS5',
+    generatedAt: new Date().toISOString(), tacticsSnapshots: [], playerSnapshots: [] };
+  await fs.writeFile(snapshotFile, JSON.stringify(snapshot));
+  try {
+    await withServer({ keyConfigured: false, snapshotFile }, async base => {
+      const response = await fetch(base + '/api/meta/snapshot');
+      assert.equal(response.status, 200);
+      const body = await response.json();
+      assert.equal(body.schemaVersion, 1);
+      assert.equal(body.game, 'FC 27');
+    });
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('meta snapshot endpoint rejects invalid snapshot files', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'darkroom-meta-'));
+  const snapshotFile = path.join(dir, 'bad.json');
+  await fs.writeFile(snapshotFile, JSON.stringify({ schemaVersion: 2 }));
+  try {
+    await withServer({ keyConfigured: false, snapshotFile }, async base => {
+      const response = await fetch(base + '/api/meta/snapshot');
+      assert.equal(response.status, 502);
+      assert.equal((await response.json()).error, 'meta-snapshot-invalid');
+    });
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
