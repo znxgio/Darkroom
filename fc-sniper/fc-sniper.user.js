@@ -7102,6 +7102,7 @@
               <p class="note">“Update my team” reads your squad in seconds. “Find upgrades” is the slower part: it checks the market and SBCs for your 3 weakest spots.</p></div>
             <div class="card"><h4>🧠 My player scores</h4>
               <div data-r="meta-club"><p class="empty">Read your owned cards to score each card's position-specific quality. This is not live competitive meta yet.</p></div>
+              <div class="row" style="gap:6px;align-items:center"><input class="input" data-i="meta-api-url" placeholder="Darkroom Meta API URL (deployed server)" aria-label="Darkroom Meta API URL"><button class="btn" data-a="meta-futdb-enrich">Enrich top 15 via FUT-DB</button></div>
               <button class="btn blue" data-a="meta-club">Score my club</button>
               <p class="note">Read-only. Covers club, SBC storage, transfer list and unassigned cards. Uses exposed attributes and PlayStyles; no market searches or transactions. Live pro/community evidence is not connected yet.</p></div>
             <div class="card"><h4>💰 Value tracker</h4>
@@ -7275,6 +7276,7 @@
             if (engine.running || jobs.current) { this.log('Stop the running task first (■)', 'warn'); return; }
             return upgrades.updateTeam(false);
           case 'meta-club': return upgrades.scoreClub();
+          case 'meta-futdb-enrich': return this.enrichMetaClubFromFutDb();
           case 'meta-value-clear': store.set(KEYS.metaValue, []); this.renderMetaValue(); this.log('Value tracker cleared', 'muted'); return;
           case 'autofill': this.commit(); return upgrades.autofill();
           case 'spend-reset':
@@ -8190,6 +8192,43 @@
         return `<div class="li"><span class="t"><b>${esc(x.alternative.name)} ${x.alternative.score}/100 ${x.alternative.source === 'club' ? '<span class="tag ok">owned</span>' : '<span class="tag">market</span>'}</b>
           <small>Alternative to ${esc(x.target.name)} ${x.target.score}/100 · ${esc(x.position)} · ${fmt(x.alternative.price)} vs ${fmt(x.target.price)} · save <span class="up">${fmt(x.savings)}</span> · ${x.scoreGap > 0 ? '+' : ''}${x.scoreGap} score · ${x.confidence}% confidence · ${when}</small></span></div>`;
       }).join('')}</div>`;
+    },
+
+    async enrichMetaClubFromFutDb() {
+      const input = this.q('[data-i=meta-api-url]');
+      const baseUrl = String(input && input.value || '').trim();
+      const lib = typeof globalThis !== 'undefined' ? globalThis.DarkroomFutDb : null;
+      const client = lib && typeof lib.createClient === 'function' ? lib.createClient({ baseUrl }) : null;
+      if (!client) { this.log('Enter your deployed HTTPS Darkroom Meta API URL first', 'alert'); return; }
+      const rows = Array.isArray(upgrades.metaRoster) ? upgrades.metaRoster : [];
+      if (!rows.length) { this.log('Score your club before enriching card data', 'alert'); return; }
+      let enriched = 0; let missing = 0;
+      for (const row of rows.slice(0, 15)) {
+        const player = row && row.player;
+        const resourceId = player && (player.resourceId || player.definitionId || player.defId || player.id);
+        if (!/^\\d{1,12}$/.test(String(resourceId || ''))) { missing++; continue; }
+        const result = await client.getPlayerByResourceId(resourceId);
+        if (!result.ok) { missing++; continue; }
+        const data = result.player;
+        player.attributes = { ...(player.attributes || {}), ...data.attributes };
+        player.stats = { ...(player.stats || {}), pac: data.summary.pace, sho: data.summary.shooting,
+          pas: data.summary.passing, dri: data.summary.dribbling, def: data.summary.defending, phy: data.summary.physical };
+        player.playStyles = data.playStyles;
+        player.playStylesPlus = data.playStylesPlus;
+        player.skillMoves = data.skillMoves ?? player.skillMoves;
+        player.weakFoot = data.weakFoot ?? player.weakFoot;
+        player.resourceId = data.resourceId;
+        const positions = Array.isArray(player.positions) && player.positions.length ? player.positions :
+          [data.position || player.position].filter(Boolean);
+        const candidates = positions.map(position => ({ position, quality: metaEngineQuality(player, position) }))
+          .filter(x => x.quality && Number.isFinite(x.quality.playerQualityScore));
+        candidates.sort((a, b) => b.quality.playerQualityScore - a.quality.playerQualityScore);
+        if (candidates.length) row.best = candidates[0];
+        row.futdb = { source: 'FUT-DB', retrievedAt: data.retrievedAt };
+        enriched++;
+      }
+      this.renderMetaClub();
+      this.log('FUT-DB card enrichment: ' + enriched + ' updated, ' + missing + ' unavailable. Card attributes only; not pro-meta evidence.', enriched ? 'ok' : 'alert');
     },
 
     renderMetaClub() {
