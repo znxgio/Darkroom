@@ -72,7 +72,7 @@
       name: p.name || null,
       overall: Number(p.rating ?? p.overall) || 0,
       attributes,
-      playStyles: (p.playStyles || []).map(x => typeof x === 'string' ? x : ({
+      playStyles: (Array.isArray(p.playStyles) ? p.playStyles : []).map(x => typeof x === 'string' ? x : ({
         name: x && (x.name || x.label || x.id) || '',
         plus: !!(x && (x.plus || x.isPlus))
       }))
@@ -273,11 +273,13 @@
       ? sourceRegistry.find(x => x && x.id === sourceId)
       : sourceRegistry?.[sourceId];
     if (!registry || registry.enabled === false) return { status: 'rejected', evidence: [], rejected: [{ reason: 'unregistered-source', playerId: null }] };
+    if (!['pro', 'community'].includes(registry.kind) || !Number.isFinite(Number(registry.reliability)) || Number(registry.reliability) < 0 || Number(registry.reliability) > 1) return { status: 'rejected', evidence: [], rejected: [{ reason: 'invalid-source-registry', playerId: null }] };
     const generatedAt = Date.parse(raw.generatedAt || '');
     if (!raw.game || !raw.patch || !raw.platform || !Number.isFinite(generatedAt)) {
       return { status: 'rejected', evidence: [], rejected: [{ reason: 'missing-snapshot-context', playerId: null }] };
     }
     const maxSnapshotAgeDays = Number(options.maxSnapshotAgeDays ?? registry.maxAgeDays ?? 45);
+    if (!Number.isFinite(maxSnapshotAgeDays) || maxSnapshotAgeDays <= 0) return { status: 'rejected', evidence: [], rejected: [{ reason: 'invalid-source-freshness-policy', playerId: null }] };
     const ageDays = (now - generatedAt) / dayMs;
     if (ageDays < -5 / 1440) return { status: 'rejected', evidence: [], rejected: [{ reason: 'future-snapshot', playerId: null }] };
     if (ageDays > maxSnapshotAgeDays) return { status: 'stale', evidence: [], rejected: [{ reason: 'stale-snapshot', playerId: null }] };
@@ -327,6 +329,7 @@
       return { status: 'rejected', observations: [], rejected: [{ reason: 'missing-snapshot-context', key: null }] };
     }
     const maxAgeDays = Number(options.maxSnapshotAgeDays ?? registry.maxAgeDays ?? 45);
+    if (!Number.isFinite(maxAgeDays) || maxAgeDays <= 0) return { status: 'rejected', observations: [], rejected: [{ reason: 'invalid-source-freshness-policy', key: null }] };
     const snapshotAge = (now - generatedAt) / dayMs;
     if (snapshotAge < -5 / 1440) return { status: 'rejected', observations: [], rejected: [{ reason: 'future-snapshot', key: null }] };
     if (snapshotAge > maxAgeDays) return { status: 'stale', observations: [], rejected: [{ reason: 'stale-snapshot', key: null }] };
@@ -434,7 +437,7 @@
         (pro.usageShare * wp + community.usageShare * wc) / total;
       const weight = pro.evidenceWeight + community.evidenceWeight;
       const sourceCount = new Set([...g.pro, ...g.community].map(x => x.source)).size;
-      const confidence = Math.round(100 * clamp(.7 * (1 - Math.exp(-weight / DEFAULTS.minConfidenceEvidence)) +
+      const confidence = Math.round(100 * clamp(.7 * (1 - Math.exp(-weight / opts.minConfidenceEvidence)) +
         .3 * clamp(sourceCount / 4, 0, 1), 0, 1));
       const proTacticCode = g.pro.find(x => x.tacticCode)?.tacticCode || null;
       const communityTacticCode = g.community.find(x => x.tacticCode)?.tacticCode || null;
