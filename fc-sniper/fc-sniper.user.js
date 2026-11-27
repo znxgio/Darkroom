@@ -8242,7 +8242,7 @@
       const shown = rows.slice(0, 30);
       box.innerHTML = `<p class="note">${rows.length} cards · updated ${Math.max(0, Math.round((Date.now() - upgrades.metaRosterAt) / 60000))} min ago · quality fit only, not live meta</p>
         <div class="list">${shown.map(({ player, best }) => `<div class="li"><span class="t"><b>${esc(player.name)} ${player.rating || ''}</b>
-          <small>${best ? `${esc(best.position)} · ${Math.round(best.quality.playerQualityScore)}/100 quality · ${best.quality.confidence}% confidence` : 'Not enough position data to score'} · ${player.positions.map(esc).join('/') || 'position unknown'}</small></span></div>`).join('')}</div>
+          <small>${best ? `${esc(best.position)} · ${Math.round(best.quality.playerQualityScore)}/100 quality · ${best.quality.confidence}% confidence` : 'Not enough position data to score'} · ${player.positions.map(esc).join('/') || 'position unknown'}${player.futdb ? ` · FUT-DB data ${esc(player.futdb.retrievedAt)}` : ''}</small></span></div>`).join('')}</div>
         ${rows.length > shown.length ? `<p class="note">Showing top ${shown.length} of ${rows.length} cards.</p>` : ''}`;
     },
 
