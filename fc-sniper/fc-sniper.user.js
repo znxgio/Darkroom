@@ -5706,11 +5706,9 @@
       await jobs.run('Scoring your club', async () => {
         this.metaRoster = [];
         ui.renderMetaClub();
-        const r = await fut.clubPlayers((n) => engine.setStatus('pricing', `Reading club for meta estimates… ${n}`));
-        jobs.check(r, 'reading your club');
+        const { ownedAll } = await this.ownedCards(this.squad || []);
         const byId = new Map();
-        for (const item of r.items || []) {
-          const p = fut.toPlayer(item);
+        for (const p of ownedAll || []) {
           if (!p.player || byId.has(String(p.id))) continue;
           let best = null;
           for (const pos of p.positions || []) {
@@ -5775,7 +5773,7 @@
       const squad = slots.map((x) => x.player).filter(Boolean);
       const ownedBase = new Set([...all, ...transfer, ...unassigned, ...squad].map((p) => baseId(p.id)));
       ui.log(`Owned: ${ownedBase.size} players (club ${club.length}, SBC storage ${storage.length}, transfer list ${transfer.length}, unassigned ${unassigned.length})`, 'muted');
-      return { club, ownedBase };
+      return { club, ownedBase, ownedAll: [...all, ...transfer, ...unassigned, ...squad] };
     },
 
     /**
@@ -7101,7 +7099,7 @@
             <div class="card"><h4>🧠 Club player scores</h4>
               <div data-r="meta-club"><p class="empty">Read your club to score each card's position-specific quality. This is not live competitive meta yet.</p></div>
               <button class="btn blue" data-a="meta-club">Score my club</button>
-              <p class="note">Read-only. Uses the attributes and PlayStyles the Web App exposes; no market searches or transactions. Live pro/community evidence is not connected yet.</p></div>
+              <p class="note">Read-only. Covers club, SBC storage, transfer list and unassigned cards. Uses exposed attributes and PlayStyles; no market searches or transactions. Live pro/community evidence is not connected yet.</p></div>
             <div class="card"><h4>💰 Value tracker</h4>
               <div data-r="meta-value"><p class="empty">Cheaper similar-fit comparisons from cards you view in the market will appear here.</p></div>
               <button class="btn" data-a="meta-value-clear">Clear tracker</button>
