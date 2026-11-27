@@ -9,7 +9,7 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   'use strict';
 
-  const PROVIDERS = Object.freeze([
+  const PROVIDERS = Object.freeze([\n    {\n      id: 'futdb-card-data',\n      name: 'FUT-DB — Ultimate Team Card Database',\n      url: 'https://fut-db.com/',\n      category: 'player-card-data',\n      kind: 'data',\n      capabilities: ['player-card-lookup-by-ea-resource-id', 'detailed-attributes', 'playstyles', 'roles', 'player-prices-premium'],\n      evidenceMetrics: [],\n      access: 'documented-api-key',\n      automatedIngestion: true,\n      status: 'api-key-required',\n      reliability: 0.80,\n      notes: 'Documented FC 27 REST API. Free account provides card lookup by EA resource id; full stats, player search and prices require premium. Card attributes are not competitive pro-usage evidence.'\n    },
     {
       id: 'futgg-pro',
       name: 'FUT.GG — Pro Tactics',
